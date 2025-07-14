@@ -1,0 +1,48 @@
+ - Cross Compiler
+A 'Cross Compiler' is just a compiler that lives on machine A that outputs binaries that can be run on machine B. In our case, machine A is 'x86_64-linux-gnu' and machine B is 'i686-elf' for 32bit mode or 'x86_64-elf' for 64bit mode. We'll probably use 'x86_64-elf'.
+
+The bootloader should be written in assembly by hand. 
+
+
+Summary by ChatGPT teehee
+
+✅ 1. Write the Bootloader (in Assembly)
+    Must conform to BIOS or UEFI expectations.
+    For BIOS: starts at memory address 0x7C00, fits in 512 bytes, ends with the magic number 0xAA55.
+    Its job is to:
+        Set up minimal runtime state (like stack)
+        Load the kernel from disk
+        Jump to the kernel's entry point
+
+✅ 2. Write the Kernel (in Jank)
+    Written in your custom language.
+    The compiler should output x86_64 AT&T assembly for bare metal (no Linux syscalls or runtime).
+    Avoid dependencies on C++ runtime or syscalls — your kernel is the whole OS.
+
+✅ 3. Compile Kernel Assembly → Binary
+    Use your Jank compiler to turn .jank into .s (assembly).
+    Then use as (or gcc -c) to compile .s to .o (object).
+    Eventually, you'll link the .o into a flat binary or ELF for your kernel.
+
+✅ 4. Link Bootloader + Kernel
+    Use a cross linker targeting bare metal x86_64, such as:
+    x86_64-elf-ld
+    This avoids injecting Linux/glibc startup code.
+    Use a custom linker script to precisely control memory layout (e.g., kernel starts at 0x100000).
+    Output format:
+        For BIOS: flat binary or multiboot-compatible ELF
+        For UEFI: PE/COFF format
+
+✅ 5. Test in QEMU
+    You can bundle the bootloader + kernel into a disk image:
+    qemu-system-x86_64 -drive format=raw,file=os.img
+    Or load ELF directly via multiboot if you use GRUB.
+
+✅ Recap of Tools You'll Need
+Tool	Purpose
+nasm or gas	Assemble your bootloader
+Your Jank compiler	Compile .jank into .s
+x86_64-elf-as / gcc -c	Compile .s into .o
+x86_64-elf-ld	Link kernel into bare-metal binary
+QEMU	Run & test OS
+GRUB (optional)	Bootloader for multiboot-compliant kernels
