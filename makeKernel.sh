@@ -1,3 +1,7 @@
 jjc kernel.jank -S -o kernel.s
 x86_64-elf-gcc -ffreestanding -mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -c kernel.s -o kernel.o
-x86_64-elf-gcc -ffreestanding -T link.ld kernel.o -o kernel.out -nostdlib -lgcc
+x86_64-elf-gcc -ffreestanding -T link.ld kernel.o -o boot/kernel.out -nostdlib
+
+./mkbootimg config.json myos.img
+# qemu-system-x86_64 myos.img -serial stdio
+qemu-system-x86_64 -d int,cpu_reset -no-reboot -serial stdio myos.img

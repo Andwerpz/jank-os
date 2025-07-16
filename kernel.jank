@@ -1,4 +1,6 @@
 i32 main() {
-  i32 a = $i32 4;
-  return a;
+    while(1) {
+
+    }
+    return 0;
 }
