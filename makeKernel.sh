@@ -7,4 +7,5 @@ x86_64-elf-gcc -ffreestanding -T link.ld kernel.o font.o -o boot/kernel.out -nos
 
 ./mkbootimg config.json myos.img
 # qemu-system-x86_64 myos.img -serial stdio
-qemu-system-x86_64 -d int,cpu_reset -no-reboot -serial stdio myos.img
+# qemu-system-x86_64 -d int,cpu_reset -no-reboot -serial stdio myos.img
+qemu-system-x86_64 -no-reboot -serial stdio myos.img
