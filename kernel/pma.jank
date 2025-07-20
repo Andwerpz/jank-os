@@ -5,8 +5,8 @@
 // uses a free list to keep track of userspace memory
 
 //TODO use BOOTBOOT struct to find where kernel stuff is mapped in physical memory
-[0] u64 PHYS_BOTTOM = 0x0000000008000000;   //128 MB
-[0] u64 PHYS_TOP    = 0x0000000100000000;   //4 GB
+[0] u64 PHYS_BOTTOM = 0x0000000040000000;   // 1 GB
+[0] u64 PHYS_TOP    = 0x0000000080000000;   // 2 GB
 
 struct phys_page_node {
     phys_page_node* prev;

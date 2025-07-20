@@ -10,7 +10,20 @@ void check_paging_enabled() {
     else serial_print("paging disabled\n");
 }   
 
+void mem_touch(u64 low, u64 high) {
+    serial_print("TOUCHING \n");
+    u8* mem = $u8* $u64 0;
+    for(u64 i = low; i < high; i++){
+        mem[i];
+    }
+    serial_print("done touching\n");
+}
+
 i32 main() {
+    u64 tlow  = 0x0000000000000000;
+    u64 thigh = 0x0000000100000000;
+    mem_touch(tlow, thigh);
+
     check_paging_enabled();
 
     init_pma();

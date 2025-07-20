@@ -52,6 +52,24 @@ void serial_print(u8* str) {
     }
 }
 
+template<T>
+void serial_print_ptr(T* ptr) {
+    u64 val = $u64 ptr;
+    u64 mask = 0b1111;
+    for(i32 i = 15; i >= 0; i--){
+        u64 dig = (val & (mask << ($u64 i * $u64 4))) >> ($u64 i * $u64 4);
+        u8 c;
+        if(dig < $u64 10) {
+            c = '0' + $u8 dig;
+        }
+        else {
+            c = 'a' + $u8 dig - $u8 10;
+        }
+        write_serial(c);
+    }
+    write_serial('\n');
+}
+
 u8 serial_received() {
    return inb(COM1 + $u16 5) & $u8 1;
 }
