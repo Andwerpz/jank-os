@@ -1,7 +1,19 @@
 #include "serial.jank";
 #include "vga.jank";
+#include "pma.jank";
+
+void check_paging_enabled() {
+    u64 cr0;
+    asm!("mov %cr0, %rax");
+    asm!("mov %rax, -8(%rbp)");
+    if(cr0 & ($u64 1 << $u64 31)) serial_print("paging enabled\n");
+    else serial_print("paging disabled\n");
+}   
 
 i32 main() {
+    check_paging_enabled();
+
+    init_pma();
     init_serial();
 
     for(i32 i = 0; i < 100; i++){

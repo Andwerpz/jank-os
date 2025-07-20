@@ -1,0 +1,20 @@
+okokokokokokok
+can't believe steven trolled me up, now I have to do this D:
+
+From the bootboot README:
+When the kernel gains control, the memory mapping looks like this:
+  -128M         "mmio" area           (0xFFFFFFFFF8000000)
+   -64M         "fb" framebuffer      (0xFFFFFFFFFC000000)
+    -2M         "bootboot" structure  (0xFFFFFFFFFFE00000)
+    -2M+1page   "environment" string  (0xFFFFFFFFFFE01000)
+    -2M+2page.. code segment   v      (0xFFFFFFFFFFE02000)
+     ..0        stack          ^      (0x0000000000000000)
+    0-16G       RAM identity mapped   (0x0000000400000000)
+
+reading the bootboot documentation (huh, really should do that more often), we see that the kernel addresses should be interpreted as negative memory addresses, and the stack starts at 0x0 and grows downwards. Then, 16GB RAM starting at 0x0 and ending at 0x400000000 are identity mapped. 
+
+Note that we only have 2MB for the kernel code, and the stack grows into the kernel. (also, only 1KB is actually allocated to the kernel stack, will have to see if we can move the stack to somewhere else. )
+
+so this means that I can implement the PMA on the identity mapped RAM? When the kernel requests memory, the PMA will control the identity mapped portion and map to the kernel in its pagetable, some memory. Note that the physical addresses will be 'double mapped', but that's fine. 
+
+to actually initialize the physical memory allocator, we need to figure out which parts of physical memory are already taken by the kernel, and not free those parts. Apparently the BOOTBOOT struct should have that information?

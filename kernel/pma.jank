@@ -1,0 +1,47 @@
+#include "panic.jank";
+#include "memlayout.jank";
+
+// Physical Memory Allocator
+// uses a free list to keep track of userspace memory
+
+//TODO use BOOTBOOT struct to find where kernel stuff is mapped in physical memory
+[0] u64 PHYS_BOTTOM = 0x0000000008000000;   //128 MB
+[0] u64 PHYS_TOP    = 0x0000000100000000;   //4 GB
+
+struct phys_page_node {
+    phys_page_node* prev;
+}
+
+[0] phys_page_node* pma_head = $phys_page_node* nullptr;
+
+void init_pma() {
+    serial_print("init_pma\n");
+    for(u64 i = PHYS_BOTTOM; i < PHYS_TOP; i += PAGE_SZ) {
+        pfree($void* i);
+    }
+    serial_print("done init pma\n");
+}
+
+//remove the top of the free list and return it
+//if we're out of memory, panic
+void* palloc() {
+    if($u64 pma_head == $u64 nullptr){
+        panic("palloc() : PMA out of memory");
+    }
+
+    void* ret = $void* pma_head;
+    pma_head = pma_head->prev;
+    return ret;
+}
+
+//just take the page and add it onto the top of the free list
+//if the supplied address is not page aligned, panic
+void pfree(void* page) {
+    if(($u64 page % PAGE_SZ) != $u64 0) {
+        panic("pfree() : address not page aligned");
+    }
+
+    phys_page_node* nhead = $phys_page_node* page;
+    nhead->prev = pma_head;
+    pma_head = nhead;
+}

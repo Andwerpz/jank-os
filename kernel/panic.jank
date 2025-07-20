@@ -1,0 +1,8 @@
+#include "serial.jank";
+
+void panic(u8* msg) {
+    serial_print("panic : ");
+    serial_print(msg);
+    serial_print("\n");
+    while(1) {}
+}
