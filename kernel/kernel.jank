@@ -20,16 +20,14 @@ void mem_touch(u64 low, u64 high) {
 }
 
 i32 main() {
-    // u64 tlow  = 0x0000000000000000;
-    // u64 thigh = 0x0000000100000000;
+    u64 tlow  = 0x0000000100000000;
+    u64 thigh = 0x0000000100001000;
     // mem_touch(tlow, thigh);
 
     check_paging_enabled();
 
     init_pma();
     init_serial();
-
-    get_mmap();
 
     for(i32 i = 0; i < 100; i++){
         for(i32 j = 0; j < 100; j++){

@@ -64,42 +64,33 @@ struct BOOTBOOT {
     // * until you reach bootboot->size, while(mmap_ent < bootboot + bootboot->size)
 }
 
-void get_mmap() {
+void init_pma() {
+    serial_print("init_pma\n");
+    // get all MMAP_FREE
     BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
-    // serial_print_ptr($void* $u64 bootboot->fb_width);
-    // serial_print_ptr($void* $u64 bootboot->fb_height);
     MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
     u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
     while($u64 mmap < $u64 end) {
-        // serial_print_ptr($void* mmap);
         u64 type = mmap->size & $u64 0xf;
-        u64 addr = mmap->ptr;                            // physical address
-        u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
-        serial_print("Found: \n");
-        serial_print("Type: ");
-        serial_print('0' + $u8 type);
-        serial_print('\n');
-        serial_print("Addr: ");
-        serial_print_ptr($void* addr);
-        serial_print("Size: ");
-        serial_print_ptr($void* size);
-        // if(type == $u64 1) {                                 // MMAP_FREE is defined as 1
-        //     u64 addr = mmap->ptr;                            // physical address
-        //     u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
-        //     serial_print("Found: \n");
-        //     serial_print("Addr: ");
-        //     serial_print_ptr($void* addr);
-        //     serial_print("Size: ");
-        //     serial_print_ptr($void* size);
-        // }
-        mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
-    }
-}
+        if(type == $u64 1) {                                 // MMAP_FREE is defined as 1
+            u64 addr = mmap->ptr;                            // physical address
+            u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
 
-void init_pma() {
-    serial_print("init_pma\n");
-    for(u64 i = PHYS_BOTTOM; i < PHYS_TOP; i += PAGE_SZ) {
-        pfree($void* i);
+            serial_print("Found: \n");
+            serial_print("Addr: ");
+            serial_print_ptr($void* addr);
+            serial_print("Size: ");
+            serial_print_ptr($void* size);
+
+            u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
+            // serial_print_ptr($void* base);
+            while(base + PAGE_SIZE <= addr + size) {
+                // serial_print_ptr($void* base);
+                pfree($void* base);
+                base += PAGE_SIZE;
+            }
+        }
+        mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
     }
     serial_print("done init pma\n");
 }
@@ -119,7 +110,7 @@ void* palloc() {
 //just take the page and add it onto the top of the free list
 //if the supplied address is not page aligned, panic
 void pfree(void* page) {
-    if(($u64 page % PAGE_SZ) != $u64 0) {
+    if(($u64 page % PAGE_SIZE) != $u64 0) {
         panic("pfree() : address not page aligned");
     }
 
