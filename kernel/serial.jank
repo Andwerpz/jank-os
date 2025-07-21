@@ -45,6 +45,10 @@ void write_serial(u8 a) {
    outb(COM1, a);
 }
 
+void serial_print(u8 c) {
+    write_serial(c);
+} 
+
 void serial_print(u8* str) {
     while(*str != $u8 0) {
         write_serial(*str);

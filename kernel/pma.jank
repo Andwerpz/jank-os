@@ -5,14 +5,96 @@
 // uses a free list to keep track of userspace memory
 
 //TODO use BOOTBOOT struct to find where kernel stuff is mapped in physical memory
+[0] u64 BOOTBOOT_MMIO   = 0xfffffffff8000000;  // memory mapped IO virtual address
+[0] u64 BOOTBOOT_FB     = 0xfffffffffc000000;  // frame buffer virtual address
+[0] u64 BOOTBOOT_INFO   = 0xffffffffffe00000;  // bootboot struct virtual address
+[0] u64 BOOTBOOT_ENV    = 0xffffffffffe01000;  // environment string virtual address
+[0] u64 BOOTBOOT_CORE   = 0xffffffffffe02000;  // core loadable segment start
+
 [0] u64 PHYS_BOTTOM = 0x0000000040000000;   // 1 GB
 [0] u64 PHYS_TOP    = 0x0000000080000000;   // 2 GB
+
+[0] phys_page_node* pma_head = $phys_page_node* nullptr;
 
 struct phys_page_node {
     phys_page_node* prev;
 }
 
-[0] phys_page_node* pma_head = $phys_page_node* nullptr;
+struct MMapEnt {
+    u64 ptr;
+    u64 size;
+}
+
+struct x86_64 {
+    u64 acpi_ptr;
+    u64 smbi_ptr;
+    u64 efi_ptr;
+    u64 mp_ptr;
+    u64 unused0;
+    u64 unused1;
+    u64 unused2;
+    u64 unused3;
+}
+
+struct BOOTBOOT {
+    // first 64 bytes is platform independent
+    u8[4] magic;       // 'BOOT' magic
+    u32   size;        // length of bootboot structure, minimum 128
+    u8    protocol;    // 1, static addresses, see PROTOCOL_* and LOADER_* above
+    u8    fb_type;     // framebuffer type, see FB_* above
+    u16   numcores;    // number of processor cores
+    u16   bspid;       // Bootsrap processor ID (Local APIC Id on x86_64)
+    i16   timezone;    // in minutes -1440..1440
+    u8[8] datetime;    // in BCD yyyymmddhhiiss UTC (independent to timezone)
+    u64   initrd_ptr;  // ramdisk image position and size
+    u64   initrd_size;
+    u64   fb_ptr;      // framebuffer pointer and dimensions
+    u32   fb_size;
+    u32   fb_width;
+    u32   fb_height;
+    u32   fb_scanline;
+
+    // the rest (64 bytes) is platform specific
+    x86_64 x86_64_arch;
+
+    // from 128th byte, MMapEnt[], more records may follow
+    MMapEnt    mmap;
+    // use like this:
+    // * MMapEnt *mmap_ent = &bootboot.mmap; mmap_ent++;
+    // * until you reach bootboot->size, while(mmap_ent < bootboot + bootboot->size)
+}
+
+void get_mmap() {
+    BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
+    // serial_print_ptr($void* $u64 bootboot->fb_width);
+    // serial_print_ptr($void* $u64 bootboot->fb_height);
+    MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
+    u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
+    while($u64 mmap < $u64 end) {
+        // serial_print_ptr($void* mmap);
+        u64 type = mmap->size & $u64 0xf;
+        u64 addr = mmap->ptr;                            // physical address
+        u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
+        serial_print("Found: \n");
+        serial_print("Type: ");
+        serial_print('0' + $u8 type);
+        serial_print('\n');
+        serial_print("Addr: ");
+        serial_print_ptr($void* addr);
+        serial_print("Size: ");
+        serial_print_ptr($void* size);
+        // if(type == $u64 1) {                                 // MMAP_FREE is defined as 1
+        //     u64 addr = mmap->ptr;                            // physical address
+        //     u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
+        //     serial_print("Found: \n");
+        //     serial_print("Addr: ");
+        //     serial_print_ptr($void* addr);
+        //     serial_print("Size: ");
+        //     serial_print_ptr($void* size);
+        // }
+        mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
+    }
+}
 
 void init_pma() {
     serial_print("init_pma\n");
