@@ -11,9 +11,6 @@
 [0] u64 BOOTBOOT_ENV    = 0xffffffffffe01000;  // environment string virtual address
 [0] u64 BOOTBOOT_CORE   = 0xffffffffffe02000;  // core loadable segment start
 
-[0] u64 PHYS_BOTTOM = 0x0000000040000000;   // 1 GB
-[0] u64 PHYS_TOP    = 0x0000000080000000;   // 2 GB
-
 [0] phys_page_node* pma_head = $phys_page_node* nullptr;
 
 struct phys_page_node {
