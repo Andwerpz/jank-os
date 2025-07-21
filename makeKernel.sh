@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -e
+
 # create fonts
 ld -r -b binary -o font.o font.psf
 
