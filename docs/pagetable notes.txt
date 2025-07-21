@@ -1,0 +1,62 @@
+4 level page table, details of each level from highest (closest to %cr3) to lowest. 
+
+~ PGD Entry ~                                                   Present ──────┐
+                                                            Read/Write ──────┐|
+                                                      User/Supervisor ──────┐||
+                                                  Page Write Through ──────┐|||
+                                               Page Cache Disabled ──────┐ ||||
+                                                         Accessed ──────┐| ||||
+                                                         Ignored ──────┐|| ||||
+                                                       Reserved ──────┐||| ||||
+┌─ NX          ┌─ Reserved                             Ignored ──┬──┐ |||| ||||
+|┌───────────┐ |┌──────────────────────────────────────────────┐ |  | |||| ||||
+||  Ignored  | ||               PUD Physical Address           | |  | |||| ||||
+||           | ||                                              | |  | |||| ||||
+0000 0000 0000 0000 0000 0000 0000 0001 0010 0011 1111 1100 1010 0000 0110 0111
+       56        48        40        32        24        16         8         0
+
+~ PUD Entry, Page Size unset ~                                  Present ──────┐
+                                                            Read/Write ──────┐|
+                                                      User/Supervisor ──────┐||
+                                                  Page Write Through ──────┐|||
+                                               Page Cache Disabled ──────┐ ||||
+                                                         Accessed ──────┐| ||||
+                                                         Ignored ──────┐|| ||||
+                                                      Page Size ──────┐||| ||||
+┌─ NX          ┌─ Reserved                             Ignored ──┬──┐ |||| ||||
+|┌───────────┐ |┌──────────────────────────────────────────────┐ |  | |||| ||||
+||  Ignored  | ||               PMD Physical Address           | |  | |||| ||||
+||           | ||                                              | |  | |||| ||||
+XXXX XXXX XXXX 0XXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX 0XXX XXXX
+       56        48        40        32        24        16         8         0
+
+~ PMD Entry, Page Size unset ~                                  Present ──────┐
+                                                            Read/Write ──────┐|
+                                                      User/Supervisor ──────┐||
+                                                  Page Write Through ──────┐|||
+                                               Page Cache Disabled ──────┐ ||||
+                                                         Accessed ──────┐| ||||
+                                                         Ignored ──────┐|| ||||
+                                                      Page Size ──────┐||| ||||
+┌─ NX          ┌─ Reserved                             Ignored ──┬──┐ |||| ||||
+|┌───────────┐ |┌──────────────────────────────────────────────┐ |  | |||| ||||
+||  Ignored  | ||                PT Physical Address           | |  | |||| ||||
+||           | ||                                              | |  | |||| ||||
+XXXX XXXX XXXX 0XXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX 0XXX XXXX
+       56        48        40        32        24        16         8         0
+
+~ PT Entry ~                                                    Present ──────┐
+                                                            Read/Write ──────┐|
+                                                      User/Supervisor ──────┐||
+                                                  Page Write Through ──────┐|||
+                                               Page Cache Disabled ──────┐ ||||
+                                                         Accessed ──────┐| ||||
+┌─── NX                                                    Dirty ──────┐|| ||||
+|┌───┬─ Memory Protection Key              Page Attribute Table ──────┐||| ||||
+||   |┌──────┬─── Ignored                               Global ─────┐ |||| ||||
+||   ||      | ┌─── Reserved                          Ignored ───┬─┐| |||| ||||
+||   ||      | |┌──────────────────────────────────────────────┐ | || |||| ||||
+||   ||      | ||            4KB Page Physical Address         | | || |||| ||||
+||   ||      | ||                                              | | || |||| ||||
+XXXX XXXX XXXX 0XXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX
+       56        48        40        32        24        16         8         0

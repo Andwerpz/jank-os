@@ -1,0 +1,81 @@
+#include "pma.jank";
+
+[0] PTE_PRESENT    = $u64 1 << $u64 0;
+[0] PTE_WRITEABLE  = $u64 1 << $u64 1;
+[0] PTE_USER       = $u64 1 << $u64 2;
+[0] PTE_NX         = $u64 1 << $u64 63;
+
+u64* pte_get_pt_addr(u64 pte) {
+    return $u64* (pte & 0x7fffffffff000)
+}
+
+u64 pte_create_new(u64 flags) {
+    u64* pt = $u64* palloc();
+    memset($void* pt, 0, PAGE_SIZE);
+    return ($u64 pt) | flags;
+}
+
+//walks along the provided pagetable, creating stuff wherever it's needed
+//returns the final physical address 
+void* pt_walk(u64* pt, void* vaddr, i32 create, u64 flags, u64 leaf_flags) {
+    //first 3 levels
+    for(i32 i = 3; i >= 1; i--){
+        u64 ind = (($u64 vaddr) & (0x1ff << $u64 (12 + i * 9))) >> $u64 (12 + i * 9);
+        u64 pte = pt[ind];
+        if(!(pte & PTE_PRESENT)) {
+            if(!create) panic("pt_walk() : pte not present when create unset");
+            pt[ind] = pte_create_new(flags);
+            pte = pt[ind];
+        }
+
+        u64* npt = pte_get_pt_addr(pte);
+        pt = npt;
+    }
+
+    //last level maps to physical page
+    u64 paddr = $u64 0;
+    {
+        u64 ind = (($u64 vaddr) & (0x1ff << $u64 12)) >> $u64 12;
+        u64 pte = pt[ind];
+        if(!(pte & PTE_PRESENT)) {
+            if(!create) panic("pt_walk() : leaf not present when create unset");
+            pt[ind] = pte_create_new(leaf_flags);
+            pte = pt[ind];
+        }
+
+        paddr = $u64 pte_get_pt_addr(pte) + ($u64 vaddr & 0xfff);
+    }
+    return $void* paddr;
+}
+
+void pt_map_page(u64* pt, void* vaddr, void* paddr, u64 flags) {
+
+}
+
+void pt_unmap_page(u64* pt, void* vaddr) {
+
+}
+
+void* pt_translate(u64* pt, void* vaddr) {
+    return pt_walk(pt, vaddr, 0, $u64 0, $u64 0);
+}
+
+void pt_free_pagetable(u64* pt, u64 level) {
+    for(i32 i = 0; i < 512; i++){
+        u64 pte = pt[i];
+        if(!(pte | PTE_PRESENT)) continue;
+
+        //if this is not a leaf, free subtree
+        if(level) pt_free_pagetable(pte_get_pt_addr(pte), level - $u64 1);
+
+        //if this is a leaf, free the mem directly
+        if(!level) pfree($void* pte_get_pt_addr(pte));
+    }
+
+    //free this pt
+    pfree($void* pt);
+}
+
+void pt_free_pagetable(u64* pt) {
+    pt_free_pagetable(pt, $u64 3);
+}
