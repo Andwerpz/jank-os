@@ -6,3 +6,12 @@ void panic(u8* msg) {
     serial_print("\n");
     while(1) {}
 }
+
+//'panic assert'
+void passert(i32 val, u8* msg) {
+    if(!val) panic(msg);
+}
+
+void passert(u64 val, u8* msg) {
+    if(!val) panic(msg);
+}

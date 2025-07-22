@@ -1,2 +1,8 @@
 
+[0] u64 BOOTBOOT_MMIO   = 0xfffffffff8000000;  // memory mapped IO virtual address
+[0] u64 BOOTBOOT_FB     = 0xfffffffffc000000;  // frame buffer virtual address
+[0] u64 BOOTBOOT_INFO   = 0xffffffffffe00000;  // bootboot struct virtual address
+[0] u64 BOOTBOOT_ENV    = 0xffffffffffe01000;  // environment string virtual address
+[0] u64 BOOTBOOT_CORE   = 0xffffffffffe02000;  // core loadable segment start
+
 [0] u64 PAGE_SIZE = $u64 4096;

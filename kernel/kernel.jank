@@ -1,6 +1,7 @@
 #include "serial.jank";
 #include "vga.jank";
 #include "pma.jank";
+#include "pagetable.jank";
 
 void check_paging_enabled() {
     u64 cr0;
@@ -11,33 +12,84 @@ void check_paging_enabled() {
 }   
 
 void mem_touch(u64 low, u64 high) {
-    serial_print("TOUCHING \n");
+    serial_print("TOUCHING : ");
+    serial_print($void* low);
+    serial_print(" ");
+    serial_println($void* high);
     u8* mem = $u8* $u64 0;
     for(u64 i = low; i < high; i++){
-        mem[i];
+        mem[i] = '\0';
     }
     serial_print("done touching\n");
 }
 
-i32 main() {
-    u64 tlow  = 0x0000000100000000;
-    u64 thigh = 0x0000000100001000;
-    // mem_touch(tlow, thigh);
+void print_mmap() {
+    BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
+    MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
+    u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
+    while($u64 mmap < $u64 end) {
+        u64 type = mmap->size & $u64 0xf;
+        u64 addr = mmap->ptr;                            // physical address
+        u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
 
+        serial_print("\n");
+        serial_print("Found: \n");
+        serial_print("Addr: ");
+        serial_println($void* addr);
+        serial_print("Size: ");
+        serial_println($void* size);
+        serial_print("Type: ");
+        serial_println($void* type);
+
+        mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
+    }
+}
+
+i32 main() {
     check_paging_enabled();
+
+    if(1) {
+        print_mmap();
+    }
+
+    if(0) {
+        u64* kernel_pt = pt_get_current();
+        void* fb_phys = pt_translate(kernel_pt, $void* BOOTBOOT_FB);
+        serial_print("FB PHYS : ");
+        serial_println(fb_phys);
+    }
 
     init_pma();
     init_serial();
+    
+    if(0) {
+        u64 tlow  = 0x0000000007fe0000;
+        u64 thigh = 0x0000000007fe0000;
 
-    for(i32 i = 0; i < 100; i++){
-        for(i32 j = 0; j < 100; j++){
-            draw_pixel(i + 700, j + 500, COLOR_WHITE);    //0x00FFFFFF
-        }
+        u64* kernel_pt = pt_get_current();
+        serial_print("kernel pt addr : ");
+        serial_println(kernel_pt);
+
+        passert(pt_is_mapped(kernel_pt, $void* 0x10000), "bruh");
+
+        mem_touch(tlow, thigh);
     }
 
-    u8* testString = "BELLOOOOO ANDREW LI 0123456789!@#$%^&*()[]{};:";
-    draw_string(0, 0, testString);
-    serial_print(testString);
+    if(1) {
+        BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
+        MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
+        u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
+        while($u64 mmap < $u64 end) {
+            u64 type = mmap->size & $u64 0xf;
+            u64 addr = mmap->ptr;                            // physical address
+            u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
+
+            if(type == $u64 1) {                      
+                mem_touch(addr, addr + size);
+            }
+            mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
+        }
+    }
 
     u64 charCnt = $u64 0;
     u64 lineCnt = $u64 0;

@@ -4,13 +4,6 @@
 // Physical Memory Allocator
 // uses a free list to keep track of userspace memory
 
-//TODO use BOOTBOOT struct to find where kernel stuff is mapped in physical memory
-[0] u64 BOOTBOOT_MMIO   = 0xfffffffff8000000;  // memory mapped IO virtual address
-[0] u64 BOOTBOOT_FB     = 0xfffffffffc000000;  // frame buffer virtual address
-[0] u64 BOOTBOOT_INFO   = 0xffffffffffe00000;  // bootboot struct virtual address
-[0] u64 BOOTBOOT_ENV    = 0xffffffffffe01000;  // environment string virtual address
-[0] u64 BOOTBOOT_CORE   = 0xffffffffffe02000;  // core loadable segment start
-
 [0] phys_page_node* pma_head = $phys_page_node* nullptr;
 
 struct phys_page_node {
@@ -61,34 +54,34 @@ struct BOOTBOOT {
     // * until you reach bootboot->size, while(mmap_ent < bootboot + bootboot->size)
 }
 
+//when this is done, we should have a new pagetable with no huge tables. 
 void init_pma() {
     serial_print("init_pma\n");
-    // get all MMAP_FREE
+
     BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
     MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
     u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
     while($u64 mmap < $u64 end) {
         u64 type = mmap->size & $u64 0xf;
+        u64 addr = mmap->ptr;                            // physical address
+        u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
+
         if(type == $u64 1) {                                 // MMAP_FREE is defined as 1
-            u64 addr = mmap->ptr;                            // physical address
-            u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
-
-            serial_print("Found: \n");
-            serial_print("Addr: ");
-            serial_print_ptr($void* addr);
-            serial_print("Size: ");
-            serial_print_ptr($void* size);
-
             u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
-            // serial_print_ptr($void* base);
             while(base + PAGE_SIZE <= addr + size) {
-                // serial_print_ptr($void* base);
-                pfree($void* base);
+                //serial_print("PMA INIT : ");
+                //serial_println($void* base);
+
+                //assume that any page that is multiple of 2MB is a pagetable part of the kernel pt
+                if(base % 0x200000) {
+                    pfree($void* base);
+                }
                 base += PAGE_SIZE;
             }
         }
         mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
     }
+
     serial_print("done init pma\n");
 }
 
