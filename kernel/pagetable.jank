@@ -41,63 +41,90 @@ u64* pt_get_current() {
 }
 
 //given virtual page address, walks along the provided pagetable
-//stops traversing at level 'level' and returns the physical address of the page
+//stops traversing at level 'level' and returns the PTE to the next page at that level
 // if(create), then it creates stuff wherever needed
-// else, it returns $void* -1 if it can't find anything
-void* pt_walk(u64* pt, void* vaddr, i32 level, i32 create, u64 flags, u64 leaf_flags) {
+// else, it returns the PTE where it stopped (so PTE_PRESENT should be unset)
+//updates level to indicate the actual level reached
+u64 pt_walk(u64* pt, void* vaddr, i32& level, i32 create, u64 flags, u64 leaf_flags) {
     passert($u64 vaddr % PAGE_SIZE == $u64 0, "pt_walk() : vaddr must be page aligned");
     passert(3 >= level && level >= 0, "pt_walk() : invalid level");
-    serial_print("PT WALK VADDR : ");
-    serial_println(vaddr);
-    for(i32 i = 3; i >= level; i--){
-        u64 ind = vaddr_get_pt_ind(vaddr, i);
+    //serial_print("PT WALK VADDR : ");
+    //serial_println(vaddr);
+    i32 _level = level;
+    level = 3;
+    for(; level >= _level; level--){
+        u64 ind = vaddr_get_pt_ind(vaddr, level);
         u64 pte = pt[ind];
 
-        serial_print("PT : ");
-        serial_print($void* pte);
-        serial_print(" ");
-        serial_println($void* ind);
-
-        //TODO check if this is a huge page
+        //serial_print("PT : ");
+        //serial_print($void* pte);
+        //serial_print(" ");
+        //serial_println($void* ind);
 
         //check if pte is not present
         if(!(pte & PTE_PRESENT)) {
-            if(!create) return $void* $u64 -1;
-            if(i != 0) pt[ind] = pte_create_new(flags);
+            //if create flag is not set, return non-present pte
+            if(!create) return pte;
+
+            //create new page and map it
+            serial_print("CREATE NEW PAGE : ");
+            serial_println($void* $u64 level);
+            if(level != 0) pt[ind] = pte_create_new(flags);
             else pt[ind] = pte_create_new(leaf_flags);
             pte = pt[ind];
         }
 
-        u64* npt = pte_get_addr(pte);
-        pt = npt;
+        //check if this is a huge page
+        if(level == 2 && $i32 (pte & PTE_HUGEPG)) {
+            return pte;
+        }
+        if(level == 1 && $i32 (pte & PTE_HUGEPG)) {
+            return pte;
+        }
+
+        //check if we should stop
+        if(level == _level) {
+            return pte;
+        }
+
+        //traverse down
+        pt = pte_get_addr(pte);
     }
-    serial_print("PT DONE : ");
-    serial_println($void* pt);
-    return $void* ($u64 pt + ($u64 vaddr & 0xfff));
+
+    panic("pt_walk() : should not exit for loop");
+    return $u64 0;
 }
 
 //nocreate pt_walk
-void* pt_walk(u64* pt, void* vaddr, i32 level) {
-    void* ret = pt_walk(pt, vaddr, level, 0, $u64 0, $u64 0);
-    passert($u64 ret != $u64 -1, "pt_walk() : vaddr mapping not found");
-    return ret;
+//panics if vaddr is not mapped to the specified level
+u64 pt_walk(u64* pt, void* vaddr, i32& level) {
+    u64 pte = pt_walk(pt, vaddr, level, 0, $u64 0, $u64 0);
+    passert(pte & PTE_PRESENT, "pt_walk() : vaddr mapping not found");
+    return pte;
 }
 
-i32 pt_is_mapped(u64* pt, void* vaddr) {
-    void* ret = pt_walk(pt, vaddr, 0, 0, $u64 0, $u64 0);
-    return $u64 ret != $u64 -1;
+i32 pt_is_vaddr_mapped(u64* pt, void* vaddr) {
+    i32 level = 0;
+    u64 pte = pt_walk(pt, vaddr, level, 0, $u64 0, $u64 0);
+    return $i32 (pte & PTE_PRESENT);
 }
 
 //creates a pagetable mapping from vaddr -> paddr
 //panics if vaddr is already mapped
 void pt_map_page(u64* pt, void* vaddr, void* paddr, u64 flags, u64 leaf_flags) {
-    //traverse pt to level 0
-    pt = $u64* pt_walk(pt, vaddr, 1, 1, flags, leaf_flags);
+    //check if this page is already mapped
+    passert(!pt_is_vaddr_mapped(pt, vaddr), "pt_map_page() : vaddr already mapped");
 
-    //entry corresponding to physical page must be not present
+    //traverse pt to level 1
+    i32 level = 1;
+    u64 pte = pt_walk(pt, vaddr, level, 1, flags, leaf_flags);
+    passert(level == 1, "pt_map_page() : we should get level 1 pte");
+    passert(!(pte & PTE_HUGEPG), "pt_map_page() : pte should not correspond to huge page");
+
+    //traverse down to level 0 pt
+    pt = pte_get_addr(pte);
     u64 ind = vaddr_get_pt_ind(vaddr, 0);
-    u64 pte = pt[ind];
-    passert(!(pte & PTE_PRESENT), "pt_map_page() : vaddr already mapped");
+    passert(!(pt[ind] & PTE_PRESENT), "pt_map_page() : entry corresponding to physical page should not be present");
 
     //map the page
     pt[ind] = pte_create_new(paddr, leaf_flags);
@@ -106,13 +133,19 @@ void pt_map_page(u64* pt, void* vaddr, void* paddr, u64 flags, u64 leaf_flags) {
 //removes pagetable mapping corresponding to vaddr, does not free the physical page
 //panics if vaddr is not mapped
 void pt_unmap_page(u64* pt, void* vaddr) {
-    //traverse pt to level 0
-    pt = $u64* pt_walk(pt, vaddr, 1);
+    //ensure this page is mapped
+    passert(pt_is_vaddr_mapped(pt, vaddr), "pt_unmap_page() : vaddr not mapped");
 
-    //entry corresponding to physical page must be present
+    //traverse pt to level 1
+    i32 level = 1;
+    u64 pte = pt_walk(pt, vaddr, level);
+    passert(level == 1, "pt_unmap_page() : we should get level 1 pte");
+    passert(!(pte & PTE_HUGEPG), "pte_unmap_page() : pte should not correspond to huge page");
+
+    //traverse down to level 0 pt
+    pt = pte_get_addr(pte);
     u64 ind = vaddr_get_pt_ind(vaddr, 0);
-    u64 pte = pt[ind];
-    passert((pte & PTE_PRESENT), "pt_unmap_page() : vaddr not mapped");
+    passert(pt[ind] & PTE_PRESENT, "pt_unmap_page() : entry corresponding to physical page should be present");
 
     //unmap the page
     pt[ind] = $u64 0;
@@ -120,8 +153,14 @@ void pt_unmap_page(u64* pt, void* vaddr) {
 
 //translates vaddr into paddr
 void* pt_translate(u64* pt, void* vaddr) {
-    //TODO fix
-    return pt_walk(pt, vaddr, 0);
+    i32 level = 0;
+    u64 pte = pt_walk(pt, vaddr, level);
+    passert(level < 3, "pt_translate() : resulting level should be one of 0, 1, 2");
+    if(level == 2)      return $void* (($u64 pte_get_addr(pte) << $u64 18) + ($u64 vaddr & 0x3fffffff));
+    else if(level == 1) return $void* (($u64 pte_get_addr(pte) << $u64  9) + ($u64 vaddr & 0x001fffff));
+    else if(level == 0) return $void* (($u64 pte_get_addr(pte) << $u64  0) + ($u64 vaddr & 0x00000fff));
+    panic("pt_translate() : unexpected level");
+    return nullptr;
 }
 
 //recursively frees the entire pagetable and the underlying physical pages. 
@@ -140,19 +179,6 @@ void pt_free_pagetable(u64* pt, u64 level) {
 
     //free this pt
     pfree($void* pt);
-}
-
-//unmaps all physical memory above 2MB. 
-//the actual purpose of this is to get rid of all huge pages. 
-void pt_unmap_above_2MB(u64* pt, u64 level) {
-    for(i32 i = 0; i < 512; i++){
-        u64 pte = pt[i];
-        if(!(pte & PTE_PRESENT)) continue;
-
-        u64* addr = pte_get_addr(pte);
-        if($u64 addr >= 0x200000) pt[i] = $u64 0;
-        else if(level) pt_unmap_above_2MB($u64* addr, level - $u64 1);
-    }
 }
 
 void pt_print(u64* pt, u64 level, i32 indent) {

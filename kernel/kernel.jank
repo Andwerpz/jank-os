@@ -52,11 +52,14 @@ i32 main() {
         print_mmap();
     }
 
-    if(0) {
+    if(1) {
         u64* kernel_pt = pt_get_current();
         void* fb_phys = pt_translate(kernel_pt, $void* BOOTBOOT_FB);
         serial_print("FB PHYS : ");
         serial_println(fb_phys);
+        void* info_phys = pt_translate(kernel_pt, $void* BOOTBOOT_INFO);
+        serial_print("info_phys : ");
+        serial_println(info_phys);
     }
 
     init_pma();
@@ -70,12 +73,13 @@ i32 main() {
         serial_print("kernel pt addr : ");
         serial_println(kernel_pt);
 
-        passert(pt_is_mapped(kernel_pt, $void* 0x10000), "bruh");
+        passert(pt_is_vaddr_mapped(kernel_pt, $void* 0x10000), "bruh");
 
         mem_touch(tlow, thigh);
     }
 
     if(1) {
+        u64* kernel_pt = pt_get_current();
         BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
         MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
         u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
@@ -86,8 +90,29 @@ i32 main() {
 
             if(type == $u64 1) {                      
                 mem_touch(addr, addr + size);
-            }
+
+                u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
+                while(base + PAGE_SIZE <= addr + size) {
+                    passert(pt_is_vaddr_mapped(kernel_pt, $void* base), "this should be mapped");
+                    base += PAGE_SIZE;
+                }
+            }   
             mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
+        }
+    }
+
+    if(1) {
+        u64* kernel_pt = pt_get_current();
+        u64 low  = 0x0000000100000000;
+        u64 high = 0x0000000100100000;
+        for(u64 i = low; i < high; i += PAGE_SIZE) {
+            serial_print("MAP : ");
+            serial_println($void* i);
+            pt_map_page(kernel_pt, $void* i, $void* (i - low), PTE_WRITEABLE, PTE_WRITEABLE);
+        }
+        mem_touch(low, high);
+        for(u64 i = low; i < high; i += PAGE_SIZE) {
+            pt_unmap_page(kernel_pt, $void* i);
         }
     }
 

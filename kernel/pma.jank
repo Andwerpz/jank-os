@@ -61,6 +61,7 @@ void init_pma() {
     BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
     MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
     u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
+    u64 freepg_cntr = 0x0;
     while($u64 mmap < $u64 end) {
         u64 type = mmap->size & $u64 0xf;
         u64 addr = mmap->ptr;                            // physical address
@@ -74,6 +75,7 @@ void init_pma() {
 
                 //assume that any page that is multiple of 2MB is a pagetable part of the kernel pt
                 if(base % 0x200000) {
+                    freepg_cntr ++;
                     pfree($void* base);
                 }
                 base += PAGE_SIZE;
@@ -81,6 +83,9 @@ void init_pma() {
         }
         mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
     }
+
+    serial_print("FREE PAGES : ");
+    serial_println($void* freepg_cntr);
 
     serial_print("done init pma\n");
 }
@@ -91,6 +96,9 @@ void* palloc() {
     if($u64 pma_head == $u64 nullptr){
         panic("palloc() : PMA out of memory");
     }
+
+    serial_print("NHEAD : ");
+    serial_println(pma_head->prev);
 
     void* ret = $void* pma_head;
     pma_head = pma_head->prev;
@@ -107,4 +115,7 @@ void pfree(void* page) {
     phys_page_node* nhead = $phys_page_node* page;
     nhead->prev = pma_head;
     pma_head = nhead;
+
+    serial_print("HEAD PREV : ");
+    serial_println(pma_head->prev);
 }
