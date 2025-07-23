@@ -1,4 +1,6 @@
-[0] u16 COM1 = $u16 0x3f8;
+#include <string>;
+
+[-10] u16 COM1 = $u16 0x3f8;
 
 void outb(u16 port, u8 val) {
     asm!("movw 24(%rbp), %dx");
@@ -33,6 +35,7 @@ i32 init_serial() {
     // If serial is not faulty set it in normal operation mode
     // (not-loopback with IRQs enabled and OUT#1 and OUT#2 bits enabled)
     outb(COM1 + $u16 4, $u8 0x0f);
+
     return $i32 0;
 }
 
@@ -54,6 +57,20 @@ void serial_print(u8* str) {
         write_serial(*str);
         str = $u8* ($u64 str + $u64 1);
     }
+}
+
+void serial_print(string s) {
+    for(u64 i = 0x0; i < s.size(); i++){
+        write_serial(s[i]);
+    }
+}
+
+void serial_print(u64 x) {
+    serial_print(to_string(x));
+}
+
+void serial_print(i32 x) {
+    serial_print(to_string(x));
 }
 
 template<T>

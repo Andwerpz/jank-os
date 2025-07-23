@@ -4,7 +4,7 @@
 // Physical Memory Allocator
 // uses a free list to keep track of userspace memory
 
-[0] phys_page_node* pma_head = $phys_page_node* nullptr;
+[-10] phys_page_node* pma_head = $phys_page_node* $u64 -1;
 
 struct phys_page_node {
     phys_page_node* prev;
@@ -55,7 +55,7 @@ struct BOOTBOOT {
 }
 
 //when this is done, we should have a new pagetable with no huge tables. 
-void init_pma() {
+i32 init_pma() {
     serial_print("init_pma\n");
 
     BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
@@ -67,7 +67,7 @@ void init_pma() {
         u64 addr = mmap->ptr;                            // physical address
         u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
 
-        if(type == $u64 1) {                                 // MMAP_FREE is defined as 1
+        if(type == $u64 1) {                             // MMAP_FREE is defined as 1
             u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
             while(base + PAGE_SIZE <= addr + size) {
                 //serial_print("PMA INIT : ");
@@ -88,17 +88,15 @@ void init_pma() {
     serial_println($void* freepg_cntr);
 
     serial_print("done init pma\n");
+    return 0;
 }
 
 //remove the top of the free list and return it
 //if we're out of memory, panic
 void* palloc() {
-    if($u64 pma_head == $u64 nullptr){
+    if($u64 pma_head == $u64 -1){
         panic("palloc() : PMA out of memory");
     }
-
-    serial_print("NHEAD : ");
-    serial_println(pma_head->prev);
 
     void* ret = $void* pma_head;
     pma_head = pma_head->prev;
@@ -115,7 +113,4 @@ void pfree(void* page) {
     phys_page_node* nhead = $phys_page_node* page;
     nhead->prev = pma_head;
     pma_head = nhead;
-
-    serial_print("HEAD PREV : ");
-    serial_println(pma_head->prev);
 }

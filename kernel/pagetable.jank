@@ -3,11 +3,11 @@
 
 //right now, we kind of have to handle huge pages as BOOTBOOT initializes our kernel pagetable with hugepages.
 
-[0] u64 PTE_PRESENT    = $u64 1 << $u64 0;
-[0] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;
-[0] u64 PTE_USER       = $u64 1 << $u64 2;
-[0] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
-[0] u64 PTE_NX         = $u64 1 << $u64 63;
+[-10] u64 PTE_PRESENT    = $u64 1 << $u64 0;
+[-10] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;
+[-10] u64 PTE_USER       = $u64 1 << $u64 2;
+[-10] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
+[-10] u64 PTE_NX         = $u64 1 << $u64 63;
 
 u64* pte_get_addr(u64 pte) {
     return $u64* (pte & 0x7fffffffff000);
@@ -67,8 +67,8 @@ u64 pt_walk(u64* pt, void* vaddr, i32& level, i32 create, u64 flags, u64 leaf_fl
             if(!create) return pte;
 
             //create new page and map it
-            serial_print("CREATE NEW PAGE : ");
-            serial_println($void* $u64 level);
+            //serial_print("CREATE NEW PAGE : ");
+            //serial_println($void* $u64 level);
             if(level != 0) pt[ind] = pte_create_new(flags);
             else pt[ind] = pte_create_new(leaf_flags);
             pte = pt[ind];

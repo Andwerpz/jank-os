@@ -1,0 +1,39 @@
+
+//bump allocator, hopefully virtual memory space doesn't run out lol
+
+[-10] u64 kheap_brk = 0x0000010000000000; //start at 1 TB
+[-10] u64 MEM_USED = 0x0;
+
+void* malloc(u64 sz) {
+    //round sz up to nearest page size
+    sz = (sz + PAGE_SIZE - $u64 1) / PAGE_SIZE * PAGE_SIZE;
+    MEM_USED += sz;
+
+    void* addr = $void* kheap_brk;
+    u64* kernel_pt = pt_get_current();
+    for(u64 i = $u64 0; i < sz; i += PAGE_SIZE) {
+        pt_map_page(kernel_pt, $void* (i + kheap_brk), palloc(), PTE_WRITEABLE, PTE_WRITEABLE);
+    }
+    kheap_brk += sz;
+    return addr;
+}
+
+i32 free(void* addr, u64 sz) {
+    //addr must be page aligned
+    if($u64 addr % PAGE_SIZE) {
+        panic("free() : addr must be page aligned");
+    }
+
+    //round sz up to nearest page size
+    sz = (sz + PAGE_SIZE - $u64 1) / PAGE_SIZE * PAGE_SIZE;
+    if(sz > MEM_USED) {
+        panic("free() : trying to dealloc too much memory");
+    }
+    MEM_USED -= sz;
+
+    u64* kernel_pt = pt_get_current();
+    for(u64 i = $u64 0; i < sz; i += PAGE_SIZE){
+        pt_unmap_page(kernel_pt, $void* ($u64 addr + i));
+    }
+    return 0;
+}
