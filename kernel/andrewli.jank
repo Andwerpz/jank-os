@@ -20,8 +20,7 @@ struct file {
 }
 
 void shell() {
-    // vector<file> files;
-    file f;
+    vector<file> files;
     u8[16] buf;
     i32 pt = 0;
     while(1) {
@@ -38,13 +37,13 @@ void shell() {
         }
         if(strcmp($u8* @buf, "exit")) break;
         if(strcmp($u8* @buf, "load")) {
-            // file f;
+            file f;
             load_file_from_serial(f);
-            // files.push_back(f);
+            files.push_back(f);
             serial_println("Created and added new file: ");
             describe_file(f);
         }
-        if(strcmp($u8* @buf, "test")) describe_file(f);
+        if(strcmp($u8* @buf, "test")) describe_file(files[files.size()-0x1]);
         pt = 0;
     }
 }
@@ -77,14 +76,15 @@ void load_file_from_serial(file& f) {
     }
     u64 size = $u64 stoi32(new string($u8* @size_buf));
 
+    u8 checksum;
     u8* buf = $u8* malloc(size);
     for(u64 i = $u64 0; i < size; i++) {
         u8 c = read_serial();
         buf[i] = c;
+        checksum ^= c;
         serial_print(c);
     }
     serial_print("\r\n");
-
 
     pt = 0;
     u8[16] name_buf;
@@ -103,4 +103,6 @@ void load_file_from_serial(file& f) {
     f.name = new string($u8* @name_buf);
     f.buf = buf;
     f.size = size;
+    
+    serial_println($u64 checksum);
 }
