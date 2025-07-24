@@ -93,7 +93,7 @@ void serial_print(T* ptr) {
 template<T>
 void serial_println(T x) {
     serial_print(x);
-    serial_print("\n");
+    serial_print("\r\n");
 }
 
 u8 serial_received() {

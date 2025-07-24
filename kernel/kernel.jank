@@ -3,6 +3,9 @@
 #include "pma.jank";
 #include "pagetable.jank";
 #include "kmalloc.jank";
+#include "andrewli.jank";
+#include <string>;
+#include <jstring>;
 
 //NOTE : you cannot initialize any structs before the PMA is initialized
 // this also means you can't have any global structs (or malloc in the global context)
@@ -159,11 +162,13 @@ i32 main() {
     u64 lineCnt = $u64 0;
     psf_header* font = $psf_header* @_binary_font_psf_start;
 
+    shell();
+
     while(1) {
         u8 c = read_serial();
 
-        write_serial(c);
-        write_serial('\n');
+        serial_print(c);
+        serial_print("\r\n");
 
         draw_char($i32 charCnt, $i32 lineCnt, c);
         

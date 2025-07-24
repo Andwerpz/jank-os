@@ -1,0 +1,106 @@
+#include <string>;
+#include <vector>;
+#include <jstring>;
+
+struct file {
+    string name;
+    u8* buf;
+    u64 size;
+
+    file(file& other) {
+        this.name = other.name;
+        this.buf = $u8* malloc(other.size);
+        memcpy($void* this.buf, $void* other.buf, other.size);
+        this.size = other.size;
+    }
+
+    ~file() {
+        free($void* this.buf, this.size);
+    }
+}
+
+void shell() {
+    // vector<file> files;
+    file f;
+    u8[16] buf;
+    i32 pt = 0;
+    while(1) {
+        while(1) {
+            u8 c = read_serial();
+            if(c == '\r') {
+                buf[pt] = '\0';
+                serial_print("\r\n");
+                break;
+            } else {
+                buf[pt++] = c;
+            }
+            serial_print(c);
+        }
+        if(strcmp($u8* @buf, "exit")) break;
+        if(strcmp($u8* @buf, "load")) {
+            // file f;
+            load_file_from_serial(f);
+            // files.push_back(f);
+            serial_println("Created and added new file: ");
+            describe_file(f);
+        }
+        if(strcmp($u8* @buf, "test")) describe_file(f);
+        pt = 0;
+    }
+}
+
+void describe_file(file& f) {
+    serial_print("Name: ");
+    serial_println(f.name);
+    serial_print("Size: ");
+    serial_println(f.size);
+    serial_print("Content: ");
+    for(u64 i = $u64 0; i < f.size; i++) {
+        serial_print(f.buf[i]);
+    }
+    serial_print("\r\n");
+}
+
+void load_file_from_serial(file& f) {
+    i32 pt = 0;
+    u8[20] size_buf;
+    while(1) {
+        u8 c = read_serial();
+        if(c == '\r') {
+            size_buf[pt] = '\0';
+            serial_print("\r\n");
+            break;
+        } else {
+            size_buf[pt++] = c;
+        }
+        serial_print(c);
+    }
+    u64 size = $u64 stoi32(new string($u8* @size_buf));
+
+    u8* buf = $u8* malloc(size);
+    for(u64 i = $u64 0; i < size; i++) {
+        u8 c = read_serial();
+        buf[i] = c;
+        serial_print(c);
+    }
+    serial_print("\r\n");
+
+
+    pt = 0;
+    u8[16] name_buf;
+    while(1) {
+        u8 c = read_serial();
+        if(c == '\r') {
+            name_buf[pt] = '\0';
+            serial_print("\r\n");
+            break;
+        } else {
+            name_buf[pt++] = c;
+        }
+        serial_print(c);
+    }
+
+    f.name = new string($u8* @name_buf);
+    f.buf = buf;
+    f.size = size;
+}
