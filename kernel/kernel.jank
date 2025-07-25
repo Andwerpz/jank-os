@@ -6,15 +6,10 @@
 #include "shell.jank";
 #include <string>;
 #include <jstring>;
+#include "globals.jank";
 
-//NOTE : you cannot initialize any structs before the PMA is initialized
-// this also means you can't have any global structs (or malloc in the global context)
-// perhaps we can get around this by making init_pma() return something and 
-// initializing it during globals initialization phase
-
-// [-10] to [-8] is to set up malloc / free
-[-9] i32 INIT_SERIAL_STATUS = init_serial();
-[-8] i32 INIT_PMA_STATUS = init_pma();
+[SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
+[PMA] i32 INIT_PMA_STATUS = init_pma();
 
 void check_paging_enabled() {
     u64 cr0;

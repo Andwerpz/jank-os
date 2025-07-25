@@ -3,11 +3,11 @@
 
 //right now, we kind of have to handle huge pages as BOOTBOOT initializes our kernel pagetable with hugepages.
 
-[-10] u64 PTE_PRESENT    = $u64 1 << $u64 0;
-[-10] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;
-[-10] u64 PTE_USER       = $u64 1 << $u64 2;
-[-10] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
-[-10] u64 PTE_NX         = $u64 1 << $u64 63;
+[__GLOBAL_FIRST__] u64 PTE_PRESENT    = $u64 1 << $u64 0;
+[__GLOBAL_FIRST__] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;
+[__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;
+[__GLOBAL_FIRST__] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
+[__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;
 
 u64* pte_get_addr(u64 pte) {
     return $u64* (pte & 0x7fffffffff000);

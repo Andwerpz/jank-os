@@ -1,6 +1,6 @@
 #include <string>;
 
-[-10] u16 COM1 = $u16 0x3f8;
+[__GLOBAL_FIRST__] u16 COM1 = $u16 0x3f8;
 
 void outb(u16 port, u8 val) {
     asm!("movw 24(%rbp), %dx");

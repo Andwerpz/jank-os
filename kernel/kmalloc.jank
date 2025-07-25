@@ -1,8 +1,8 @@
 
 //bump allocator, hopefully virtual memory space doesn't run out lol
 
-[-10] u64 kheap_brk = 0x0000010000000000; //start at 1 TB
-[-10] u64 MEM_USED = 0x0;
+[__GLOBAL_FIRST__] u64 kheap_brk = 0x0000010000000000; //start at 1 TB
+[__GLOBAL_FIRST__] u64 MEM_USED = 0x0;
 
 void* malloc(u64 sz) {
     //round sz up to nearest page size

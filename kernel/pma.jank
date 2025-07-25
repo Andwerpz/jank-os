@@ -4,7 +4,7 @@
 // Physical Memory Allocator
 // uses a free list to keep track of userspace memory
 
-[-10] phys_page_node* pma_head = $phys_page_node* $u64 -1;
+[__GLOBAL_FIRST__] phys_page_node* pma_head = $phys_page_node* $u64 -1;
 
 struct phys_page_node {
     phys_page_node* prev;

@@ -1,13 +1,13 @@
-[0] u32* FB_ADDR = $u32* 0xfffffffffc000000;
+[__GLOBAL_FIRST__] u32* FB_ADDR = $u32* 0xfffffffffc000000;
 
-[0] u64 FB_WIDTH = $u64 800;
-[0] u64 FB_HEIGHT = $u64 600;
+[__GLOBAL_FIRST__] u64 FB_WIDTH = $u64 800;
+[__GLOBAL_FIRST__] u64 FB_HEIGHT = $u64 600;
 
-[0] u32 COLOR_WHITE = $u32 0x00ffffff;
-[0] u32 COLOR_BLACK = $u32 0x00000000;
-[0] u32 COLOR_GRAY = $u32 0x00aaaaaa;
+[__GLOBAL_FIRST__] u32 COLOR_WHITE = $u32 0x00ffffff;
+[__GLOBAL_FIRST__] u32 COLOR_BLACK = $u32 0x00000000;
+[__GLOBAL_FIRST__] u32 COLOR_GRAY = $u32 0x00aaaaaa;
 
-[0] extern u8 _binary_font_psf_start;
+[__GLOBAL_FIRST__] extern u8 _binary_font_psf_start;
 
 struct psf_header {
     u32 magic;

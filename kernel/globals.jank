@@ -1,0 +1,4 @@
+
+#global_node SERIAL;
+#global_node PMA [SERIAL];
+#global_node MALLOC [PMA];
