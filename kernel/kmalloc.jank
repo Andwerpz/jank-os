@@ -33,7 +33,13 @@ i32 free(void* addr, u64 sz) {
 
     u64* kernel_pt = pt_get_current();
     for(u64 i = $u64 0; i < sz; i += PAGE_SIZE){
+        void* vaddr = $void* ($u64 addr + i);
+        i32 level = 0;
+        u64 pte = pt_walk(kernel_pt, vaddr, level);
+        passert(level == 0, "free() : walk should get the base pte");
+        void* paddr = $void* pte_get_addr(pte);
         pt_unmap_page(kernel_pt, $void* ($u64 addr + i));
+        pfree(paddr);
     }
     return 0;
 }

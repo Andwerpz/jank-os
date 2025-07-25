@@ -11,16 +11,17 @@ send_file() {
 
     local size
     size=$(wc -c < "$file")
+
     {
-      echo -ne "load\r"
-      sleep 0.3
-      echo -ne "${size}\r"
-      sleep 0.3
-      cat "$file"
-      sleep 0.3
-      echo -ne "$(basename "$file")\r"
-      sleep 0.3
-    } | nc -q 1 localhost "$PORT"
+        printf "load\r"
+        sleep 0.3
+        printf "%s\r" "$size"
+        sleep 0.3
+        xxd -p "$file" | tr -d '\n'
+        sleep 0.3
+        printf "%s\r" "$(basename "$file")"
+        sleep 0.3
+    } | nc -N localhost "$PORT"
 }
 
 read -e -p "Enter file path to send: " filepath

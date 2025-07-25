@@ -36,14 +36,16 @@ void shell() {
             serial_print(c);
         }
         if(strcmp($u8* @buf, "exit")) break;
-        if(strcmp($u8* @buf, "load")) {
+        else if(strcmp($u8* @buf, "load")) {
             file f;
             load_file_from_serial(f);
             files.push_back(f);
             serial_println("Created and added new file: ");
             describe_file(f);
         }
-        if(strcmp($u8* @buf, "test")) describe_file(files[files.size()-0x1]);
+        else if(strcmp($u8* @buf, "test")) {
+            describe_file(files[files.size()-0x1]);
+        } 
         pt = 0;
     }
 }
@@ -75,19 +77,27 @@ void load_file_from_serial(file& f) {
         serial_print(c);
     }
     u64 size = $u64 stoi32(new string($u8* @size_buf));
+    serial_print("file size : ");
+    serial_println(size);
 
     u8 checksum;
     u8* buf = $u8* malloc(size);
     for(u64 i = $u64 0; i < size; i++) {
-        u8 c = read_serial();
+        u8 fb = read_serial();
+        u8 sb = read_serial();
+        if('0' <= fb && fb <= '9') fb -= '0';
+        else fb = fb - 'a' + $u8 10;
+        if('0' <= sb && sb <= '9') sb -= '0';
+        else sb = sb - 'a' + $u8 10;
+
+        u8 c = (fb << $u8 4) + sb;
         buf[i] = c;
         checksum ^= c;
-        serial_print(c);
     }
     serial_print("\r\n");
 
     pt = 0;
-    u8[16] name_buf;
+    u8[128] name_buf;
     while(1) {
         u8 c = read_serial();
         if(c == '\r') {
@@ -104,5 +114,9 @@ void load_file_from_serial(file& f) {
     f.buf = buf;
     f.size = size;
     
+    serial_print("filename : ");
+    serial_println(f.name);
+
+    serial_print("checksum : ");
     serial_println($u64 checksum);
 }

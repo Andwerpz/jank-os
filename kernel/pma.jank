@@ -5,6 +5,7 @@
 // uses a free list to keep track of userspace memory
 
 [__GLOBAL_FIRST__] phys_page_node* pma_head = $phys_page_node* $u64 -1;
+[__GLOBAL_FIRST__] u64 PMA_PAGES_LEFT = 0x0;
 
 struct phys_page_node {
     phys_page_node* prev;
@@ -98,6 +99,7 @@ void* palloc() {
         panic("palloc() : PMA out of memory");
     }
 
+    PMA_PAGES_LEFT --;
     void* ret = $void* pma_head;
     pma_head = pma_head->prev;
     return ret;
@@ -110,6 +112,7 @@ void pfree(void* page) {
         panic("pfree() : address not page aligned");
     }
 
+    PMA_PAGES_LEFT ++;
     phys_page_node* nhead = $phys_page_node* page;
     nhead->prev = pma_head;
     pma_head = nhead;
