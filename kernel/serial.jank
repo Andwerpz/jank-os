@@ -2,6 +2,50 @@
 
 [__GLOBAL_FIRST__] u16 COM1 = $u16 0x3f8;
 
+struct serial_ostream {}
+[SERIAL_STREAM] serial_ostream sout = new serial_ostream();
+
+serial_ostream& operator<<(serial_ostream& stream, u8* s) {
+    serial_print(s);
+    return stream;
+}
+
+serial_ostream& operator<<(serial_ostream& stream, u8 c) {
+    serial_print(c);
+    return stream;
+}
+
+serial_ostream& operator<<(serial_ostream& stream, i32 x) {
+    serial_print(x);
+    return stream;
+}
+
+serial_ostream& operator<<(serial_ostream& stream, u64 x) {
+    serial_print(x);
+    return stream;
+}
+
+serial_ostream& operator<<(serial_ostream& stream, u32 x) {
+    serial_print(x);
+    return stream;
+}
+
+serial_ostream& operator<<(serial_ostream& stream, u16 x) {
+    serial_print(x);
+    return stream;
+}
+
+serial_ostream& operator<<(serial_ostream& stream, string& s) {
+    serial_print(s);
+    return stream;
+}
+
+template<T>
+serial_ostream& operator<<(serial_ostream& stream, T* p) {
+    serial_print(p);
+    return stream;
+}
+
 void outb(u16 port, u8 val) {
     asm!("movw 24(%rbp), %dx");
     asm!("movb 16(%rbp), %al");
@@ -66,6 +110,14 @@ void serial_print(string s) {
 }
 
 void serial_print(u64 x) {
+    serial_print(to_string(x));
+}
+
+void serial_print(u32 x){
+    serial_print(to_string(x));
+}
+
+void serial_print(u16 x) {
     serial_print(to_string(x));
 }
 
