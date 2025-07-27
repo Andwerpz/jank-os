@@ -1,5 +1,6 @@
 
 #global_node SERIAL;
 #global_node PMA [SERIAL];
-#global_node MALLOC [PMA];
+#global_node PAGING [SERIAL];
+#global_node MALLOC [PMA, PAGING];
 #global_node SERIAL_STREAM [MALLOC, SERIAL];

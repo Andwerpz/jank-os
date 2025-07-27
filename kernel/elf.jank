@@ -126,13 +126,13 @@ i32 load_elf(u8* buf, u64 size, u64* pt, u64& out_entry_off) {
         }
 
         u64 pte_flags = PTE_USER | PTE_NX;
-        if(flags & ELF_PF_X) pte_flags ^= PTE_NX;
+        if(flags & ELF_PF_X) pte_flags ^= PTE_NX;   //turn off PTE_NX if it's executable
         if(flags & ELF_PF_W) pte_flags ^= PTE_WRITEABLE;
-        passert(flags & ELF_PF_R, "segments should always be readable??\n");
+        passert(flags & ELF_PF_R, "load_elf() : segments should always be readable??");
 
-        for(u64 ptr = 0x0; ptr < memsz; ptr++) {
+        for(u64 ptr = 0x0; ptr < memsz; ptr += PAGE_SIZE) {
             void* paddr = palloc();
-            pt_map_page(pt, $void* vaddr, paddr, pte_flags);
+            pt_map_page(pt, $void* (vaddr + ptr), paddr, pte_flags);
             if(ptr < filesz) memcpy(paddr, $void* @(buf[offset + ptr]), min(PAGE_SIZE, filesz - ptr));
         }
     }

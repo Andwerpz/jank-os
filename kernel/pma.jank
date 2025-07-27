@@ -55,7 +55,8 @@ struct BOOTBOOT {
     // * until you reach bootboot->size, while(mmap_ent < bootboot + bootboot->size)
 }
 
-//when this is done, we should have a new pagetable with no huge tables. 
+//find all the memory that is marked as MMAP_FREE, and add it to the physical memory allocator. 
+//note that above 2MB, there might be a pagetable page every 2MB, so skip those pages to be safe. 
 i32 init_pma() {
     serial_print("init_pma\n");
 

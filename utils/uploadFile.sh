@@ -26,5 +26,10 @@ send_file() {
     } | nc -N localhost "$PORT"
 }
 
-read -e -p "Enter file path to send: " filepath
-send_file "$filepath"
+# Check if a file path is given
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <file-path>"
+    exit 1
+fi
+
+send_file "$1"

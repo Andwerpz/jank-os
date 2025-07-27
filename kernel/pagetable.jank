@@ -7,7 +7,27 @@
 [__GLOBAL_FIRST__] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;
 [__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;   //if set, user will be able to access
 [__GLOBAL_FIRST__] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
-[__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag
+[__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag, only valid on leaf PTEs?
+
+void enable_nx() {
+    //check if nx is supported
+    u64 x;
+    asm!("mov $0x80000001, %eax");
+    asm!("cpuid");
+    asm!("mov %edx, -8(%rbp)");
+    passert(x & $u64 (1 << 20), "enable_nx() : NX should be supported");
+
+    //enable NX bit in EFER
+    asm!("mov $0xC0000080, %ecx");   
+    asm!("rdmsr");                
+    asm!("bts $11, %eax");         
+    asm!("wrmsr");   
+}
+
+i32 init_paging() {
+    enable_nx();
+    return 0;
+}
 
 u64* pte_get_addr(u64 pte) {
     return $u64* (pte & 0x7fffffffff000);

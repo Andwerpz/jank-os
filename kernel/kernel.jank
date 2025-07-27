@@ -12,6 +12,7 @@
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
+[PAGING] i32 INIT_PAGING_STATUS = init_paging();
 
 void check_paging_enabled() {
     u64 cr0;
