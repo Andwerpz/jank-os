@@ -52,9 +52,9 @@ void shell() {
                 i32 encoding_valid = 1;
                 u8* buf = $u8* malloc(file_len);
                 u8 checksum = $u8 0;
-                for(u64 i = 0x0; i < file_len; i += 0x2) {
-                    u8 fb = encoded_file[i + 0x0];
-                    u8 sb = encoded_file[i + 0x1];
+                for(u64 i = 0x0; i < file_len; i++) {
+                    u8 fb = encoded_file[i * 0x2 + 0x0];
+                    u8 sb = encoded_file[i * 0x2 + 0x1];
                     if('0' <= fb && fb <= '9') fb -= '0';
                     else if('a' <= fb && fb <= 'f') fb = fb - 'a' + $u8 10;
                     else encoding_valid = 0;
@@ -106,7 +106,18 @@ void shell() {
                     sout << "file_ind malformed\n";
                     break;
                 }
+
+                file& f = files[ind];
+                u64 entry_off;
+                u64* user_pt = pt_alloc_new();
+                if(load_elf(f.buf, f.size, user_pt, entry_off)) {
+                    sout << "could not load elf\n";
+                    break;
+                }
+                sout << "entry offset : " << ($void* entry_off) << "\n";
                 
+                pt_free_pagetable(user_pt);
+
                 sout << "lets go\n";
                 break;
             }

@@ -13,14 +13,16 @@ send_file() {
     size=$(wc -c < "$file")
 
     {
-        printf "load\r"
+        printf "load "
         sleep 0.3
-        printf "%s\r" "$size"
+        printf "%s " "$(basename "$file")"
+        sleep 0.3
+        printf "%s " "$size"
         sleep 0.3
         xxd -p "$file" | tr -d '\n'
         sleep 0.3
-        printf "%s\r" "$(basename "$file")"
-        sleep 0.3
+        printf "\r"
+        sleep 1.0
     } | nc -N localhost "$PORT"
 }
 

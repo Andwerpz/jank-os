@@ -8,6 +8,7 @@
 #include <jstring>;
 #include "globals.jank";
 #include "elf.jank";
+#include <math>;
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -115,7 +116,7 @@ i32 main() {
         for(u64 i = low; i < high; i += PAGE_SIZE) {
             serial_print("MAP : ");
             serial_println($void* i);
-            pt_map_page(kernel_pt, $void* i, $void* (i - low), PTE_WRITEABLE, PTE_WRITEABLE);
+            pt_map_page(kernel_pt, $void* i, $void* (i - low), PTE_WRITEABLE);
         }
         mem_touch(low, high);
         for(u64 i = low; i < high; i += PAGE_SIZE) {
