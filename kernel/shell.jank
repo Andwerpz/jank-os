@@ -21,102 +21,110 @@ struct file {
 
 void shell() {
     vector<file> files;
-    u8[16] buf;
-    i32 pt = 0;
     while(1) {
-        while(1) {
-            u8 c = read_serial();
-            if(c == '\r') {
-                buf[pt] = '\0';
-                serial_print("\n");
+        sout << "jankshell> ";
+        vector<string> cmd = sin.next_line().split(' ');
+        if(cmd.size() == 0x0) continue;
+
+        if(cmd[0] == "exit") {
+            break;
+        }
+        else if(cmd[0] == "load") {
+            while(1) {
+                if(cmd.size() < 0x4) {
+                    sout << "Usage : load <file_name> <file_len_bytes> <hex_encoded_file>\n";
+                    break;
+                }
+
+                errno = 0x0;
+                u64 file_len = stou64(cmd[2]);
+                if(errno) {
+                    sout << "file_len malformed\n";
+                    break;
+                }
+
+                string encoded_file = cmd[3];
+                if(encoded_file.size() != file_len * 0x2) {
+                    sout << "encoded file length must be exactly twice file_len\n";
+                    break;
+                }
+
+                i32 encoding_valid = 1;
+                u8* buf = $u8* malloc(file_len);
+                u8 checksum = $u8 0;
+                for(u64 i = 0x0; i < file_len; i += 0x2) {
+                    u8 fb = encoded_file[i + 0x0];
+                    u8 sb = encoded_file[i + 0x1];
+                    if('0' <= fb && fb <= '9') fb -= '0';
+                    else if('a' <= fb && fb <= 'f') fb = fb - 'a' + $u8 10;
+                    else encoding_valid = 0;
+                    if('0' <= sb && sb <= '9') sb -= '0';
+                    else if('a' <= sb && sb <= 'f') sb = sb - 'a' + $u8 10;
+                    else encoding_valid = 0;
+
+                    u8 c = (fb << $u8 4) + sb;
+                    buf[i] = c;
+                    checksum ^= c;
+                }
+                if(!encoding_valid) {
+                    sout << "encoding is not valid\n";
+                    free($void* buf, file_len);
+                    break;
+                }
+
+                file f;
+                f.name = cmd[1];
+                f.buf = buf;
+                f.size = file_len;
+
+                files.push_back(f);
+                sout << "Created and added new file: \n";
+                sout << "checksum : " << $u64 checksum << "\n";
+                describe_file(f, 1);
+
                 break;
-            } else {
-                buf[pt++] = c;
             }
-            serial_print(c);
         }
-        if(strcmp($u8* @buf, "exit")) break;
-        else if(strcmp($u8* @buf, "load")) {
-            file f;
-            load_file_from_serial(f);
-            files.push_back(f);
-            serial_println("Created and added new file: ");
-            describe_file(f);
+        else if(cmd[0] == "list_files") {
+            sout << "File cnt : " << files.size() << "\n";
+            for(u64 i = 0x0; i < files.size(); i++){
+                sout << "-- " << i << " --" << "\n";
+                describe_file(files[i], 0);
+                sout << "\n";
+            }
         }
-        else if(strcmp($u8* @buf, "test")) {
-            describe_file(files[files.size()-0x1]);
-        } 
-        pt = 0;
+        else if(cmd[0] == "exec") {
+            while(1) {
+                if(cmd.size() < 0x2) {
+                    sout << "Usage : exec <file_ind>\n";
+                    break;
+                }
+
+                errno = 0x0;
+                u64 ind = stou64(cmd[1]);
+                if(errno) {
+                    sout << "file_ind malformed\n";
+                    break;
+                }
+                
+                sout << "lets go\n";
+                break;
+            }
+        }   
+        else {
+            sout << "Unknown command\n";
+        }
     }
 }
 
-void describe_file(file& f) {
-    serial_print("Name: ");
-    serial_println(f.name);
-    serial_print("Size: ");
-    serial_println(f.size);
-    serial_print("Content: ");
-    for(u64 i = $u64 0; i < f.size; i++) {
-        serial_print(f.buf[i]);
-    }
-    serial_print("\n");
-}
-
-void load_file_from_serial(file& f) {
-    i32 pt = 0;
-    u8[20] size_buf;
-    while(1) {
-        u8 c = read_serial();
-        if(c == '\r') {
-            size_buf[pt] = '\0';
-            serial_print("\n");
-            break;
-        } else {
-            size_buf[pt++] = c;
+void describe_file(file& f, i32 print_content) {
+    sout << "Name : " << f.name << "\n";
+    sout << "Size : " << f.size << "\n";
+    if(print_content) {
+        sout << "Content : \n";
+        for(u64 i = $u64 0; i < f.size; i++) {
+            sout << f.buf[i];
         }
-        serial_print(c);
+        sout << "\n";
     }
-    u64 size = $u64 stoi32(new string($u8* @size_buf));
-    serial_print("file size : ");
-    serial_println(size);
-
-    u8 checksum;
-    u8* buf = $u8* malloc(size);
-    for(u64 i = $u64 0; i < size; i++) {
-        u8 fb = read_serial();
-        u8 sb = read_serial();
-        if('0' <= fb && fb <= '9') fb -= '0';
-        else fb = fb - 'a' + $u8 10;
-        if('0' <= sb && sb <= '9') sb -= '0';
-        else sb = sb - 'a' + $u8 10;
-
-        u8 c = (fb << $u8 4) + sb;
-        buf[i] = c;
-        checksum ^= c;
-    }
-    serial_print("\n");
-
-    pt = 0;
-    u8[128] name_buf;
-    while(1) {
-        u8 c = read_serial();
-        if(c == '\r') {
-            name_buf[pt] = '\0';
-            serial_print("\n");
-            break;
-        } else {
-            name_buf[pt++] = c;
-        }
-        serial_print(c);
-    }
-
-    f.name = new string($u8* @name_buf);
-    f.buf = buf;
-    f.size = size;
-    
-    serial_print("filename : ");
-    serial_println(f.name);
-
-    serial_print("checksum : ");
-    serial_println($u64 checksum);
 }

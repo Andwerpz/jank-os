@@ -76,6 +76,26 @@ struct serial_istream {
         if(!found_tok) return new string();
         return tok;
     }
+
+    string next_line() {
+        string line = new string();
+
+        i32 found_line = 0;
+        while(1) {
+            u8 c = this.next_char();
+            if(c == '\r') {
+                if(found_line) break;
+            }
+            else {
+                found_line = 1;
+                if(c == '\n') continue;
+                line.push_back(c);
+            }
+        }
+
+        if(!found_line) return new string();
+        return line;
+    }
 }
 
 serial_istream& operator>>(serial_istream& stream, string& s) {
@@ -200,10 +220,13 @@ void serial_println(T x) {
 }
 
 u8 serial_received() {
-   return inb(COM1 + $u16 5) & $u8 1;
+    return inb(COM1 + $u16 5) & $u8 1;
 }
 
 u8 read_serial() {
-   while(serial_received() == $u8 0) {}
-   return inb(COM1);
+    while(serial_received() == $u8 0) {}
+    u8 c = inb(COM1);
+    write_serial(c);
+    if(c == '\r') write_serial('\n');
+    return c;
 }
