@@ -2,8 +2,10 @@
 
 [__GLOBAL_FIRST__] u16 COM1 = $u16 0x3f8;
 
-struct serial_ostream {}
 [SERIAL_STREAM] serial_ostream sout = new serial_ostream();
+[SERIAL_STREAM] serial_istream sin = new serial_istream();
+
+struct serial_ostream {}
 
 serial_ostream& operator<<(serial_ostream& stream, u8* s) {
     serial_print(s);
@@ -46,6 +48,51 @@ serial_ostream& operator<<(serial_ostream& stream, T* p) {
     return stream;
 }
 
+struct serial_istream {
+    u8 next_char() {
+        return read_serial();
+    }
+
+    i32 is_whitespace(u8 c) {
+        return c == ' ' || c == '\n' || c == '\t' || c == '\r';
+    }
+
+    //if we hit eof before a token, returns empty string
+    string next_token() {
+        string tok = new string();
+
+        i32 found_tok = 0;
+        while(1) {
+            u8 c = this.next_char();
+            if(this.is_whitespace(c)) {
+                if(found_tok) break;
+            }
+            else {
+                found_tok = 1;
+                tok.push_back(c);
+            }
+        }
+
+        if(!found_tok) return new string();
+        return tok;
+    }
+}
+
+serial_istream& operator>>(serial_istream& stream, string& s) {
+    s = stream.next_token();
+    return stream;
+}
+
+serial_istream& operator>>(serial_istream& stream, u64& x) {
+    x = stou64(stream.next_token());
+    return stream;
+}
+
+serial_istream& operator>>(serial_istream& stream, i32& x) {
+    x = stoi32(stream.next_token());
+    return stream;
+}
+
 void outb(u16 port, u8 val) {
     asm!("movw 24(%rbp), %dx");
     asm!("movb 16(%rbp), %al");
@@ -84,12 +131,16 @@ i32 init_serial() {
 }
 
 u8 is_transmit_empty() {
-   return inb(COM1 + $u16 5) & $u8 0x20;
+    return inb(COM1 + $u16 5) & $u8 0x20;
 }
 
 void write_serial(u8 a) {
-   while(is_transmit_empty() == $u8 0) {}
-   outb(COM1, a);
+    if(a == '\n') {
+        while(is_transmit_empty() == $u8 0) {}
+        outb(COM1, '\r');
+    }
+    while(is_transmit_empty() == $u8 0) {}
+    outb(COM1, a);
 }
 
 void serial_print(u8 c) {
@@ -145,7 +196,7 @@ void serial_print(T* ptr) {
 template<T>
 void serial_println(T x) {
     serial_print(x);
-    serial_print("\r\n");
+    serial_print("\n");
 }
 
 u8 serial_received() {

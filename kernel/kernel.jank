@@ -16,8 +16,8 @@ void check_paging_enabled() {
     u64 cr0;
     asm!("mov %cr0, %rax");
     asm!("mov %rax, -8(%rbp)");
-    if(cr0 & ($u64 1 << $u64 31)) serial_print("paging enabled\n");
-    else serial_print("paging disabled\n");
+    if(cr0 & ($u64 1 << $u64 31)) serial_println("paging enabled");
+    else serial_println("paging disabled");
 }   
 
 void mem_touch(u64 low, u64 high) {
@@ -29,7 +29,7 @@ void mem_touch(u64 low, u64 high) {
     for(u64 i = low; i < high; i++){
         mem[i];
     }
-    serial_print("done touching\n");
+    serial_println("done touching");
 }
 
 void print_mmap() {
@@ -41,8 +41,8 @@ void print_mmap() {
         u64 addr = mmap->ptr;                            // physical address
         u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
 
-        serial_print("\n");
-        serial_print("Found: \n");
+        serial_println("");
+        serial_println("Found: ");
         serial_print("Addr: ");
         serial_println($void* addr);
         serial_print("Size: ");
@@ -164,7 +164,7 @@ i32 main() {
         u8 c = read_serial();
 
         serial_print(c);
-        serial_print("\r\n");
+        serial_print("\n");
 
         draw_char($i32 charCnt, $i32 lineCnt, c);
         
