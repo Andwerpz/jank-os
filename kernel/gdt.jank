@@ -76,14 +76,19 @@ void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 flags, GDTEntry* 
 }
 
 void gdt_flush(GDTPointer* ptr) {
-    //asm!("lgdt 16(%rbp)");
-    //asm!("mov $0x10, %ax");
-    //asm!("mov %ax, %ds");
-    //asm!("mov %ax, %es");
-    //asm!("mov %ax, %fs");
-    //asm!("mov %ax, %gs");
-    //asm!("mov %ax, %ss");
+    //set new GDT
+    asm!("movq 16(%rbp), %rax");
+    asm!("lgdt (%rax)");
 
+    //reload segment registers
+    asm!("mov $0x10, %ax");
+    asm!("mov %ax, %ds");
+    asm!("mov %ax, %es");
+    asm!("mov %ax, %fs");
+    asm!("mov %ax, %gs");
+    asm!("mov %ax, %ss");
+
+    //flush changes to GDT
     asm!("pushq $0x08");    //new CS
     asm!("lea 1f(%rip), %rax");
     asm!("pushq %rax");
