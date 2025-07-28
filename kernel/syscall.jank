@@ -1,0 +1,55 @@
+//linux syscalls
+[__GLOBAL_FIRST__] u64 SYS_EXIT = $u64 60;
+
+//jank syscalls
+[__GLOBAL_FIRST__] u64 SYS_SERIAL_PRINT = $u64 1000;
+
+[__GLOBAL_FIRST__] extern u8 syscall_handler_entry;
+void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", but we shouldn't use it
+    asm!("syscall_handler_entry:");
+
+    //...
+
+    asm!("call syscall_handler");
+
+    //TODO write rest of syscall handler
+
+    asm!("sysret");
+}
+
+//this should generate label 'syscall_handler:'
+u64 syscall_handler() {
+    u64 sys_id;
+    u64 arg1;
+    u64 arg2;
+    u64 arg3;
+    u64 arg4;
+    u64 arg5;
+    u64 arg6;
+
+    asm!("movq %rax, -8(%rbp)");
+    asm!("movq %rdi, -16(%rbp)");
+    //and so on ...
+
+    if(sys_id == SYS_EXIT) return sys_exit($i32 arg1);
+    else if(sys_id == SYS_SERIAL_PRINT) return sys_serial_print()
+
+    panic("unrecognized sys_id");
+    return $u64 -1;
+}
+
+//terminates the calling process
+//this shouldn't even return, should directly jump to where the kernel left off. 
+//in the future when we do scheduling, this should instead transition to the scheduler. 
+u64 sys_exit(i32 status) {
+
+    //TODO
+
+    return 0x0;
+}
+
+u64 sys_serial_print(u8* buf, u64 amt) {
+    for(u64 i = 0x0; i < amt; i++) serial_print(buf[i]);
+    return 0x0;
+}
+

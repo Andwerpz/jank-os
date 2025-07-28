@@ -132,3 +132,54 @@ SYSCALL/SYSRET Target Address Register (STAR)
 seems like top 16 bits holds CS, next 16 holds SS
 back in 32 bit systems, the bottom 32 bits would hold the syscall handler entry point
 now, syscall handler entry point is held in LSTAR
+
+nice article:
+https://supercip971.github.io/02-wingos-syscalls.html
+
+from the article:
+first you need to turn them on with model specific register (address 0xC0000080 bit 0)
+
+then you need to setup syscall gdt segments:
+
+x86_wrmsr(STAR, ((uint64_t)SELECTOR_1 << 32) | ((uint64_t)(SELECTOR_2 | 3) << 48));
+
+it is necessary to know that the MSR STAR register must contain the segment when the syscall is executed (ring 0) and the segment when the syscall is exited (ring 3) but it is also important that the gdt entry has a precise order:
+
+    SELECTOR_1 : must be kernel code
+    SELECTOR_1 + 8 : must be kernel data
+    SELECTOR_2 + 8 : must be user data
+    SELECTOR_2 + 16 : must be user code
+
+So in wingos I changed the order of the gdt to have: 
+ - 0 null_segment 
+ - 8 kernel_code 
+ - 16 kernel_data 
+ - 24 user_data 
+ - 32 user_code
+
+I can have SELECTOR_1 = kernel code and SELECTOR_2 = kernel data | 3
+
+It’s maybe weird but it’s one of the only solution I found except if I make an empty entry between KERNEL_DATA and USER_DATA.
+
+Then you have to load the address of the syscall handler in the LSTAR register.
+
+
+will have to write syscall handler in asm, link it into the kernel binary. 
+when handling, switch from user stack to kernel stack to handle syscall. 
+
+GS register is just another thing that points to some fixed point in memory. swapgs just swaps out the value of the GS register with some other thing. 
+
+We can just have a dedicated stack for syscalls. Have the GS struct point to a dedicated syscall stack. We can just push all the original execution state onto the syscall stack. 
+
+what does swapgs do? It seems like the main reason we want to swapgs is for security, if we don't do it, the user could potentially access the gs data.
+https://wiki.osdev.org/SWAPGS
+however, if we map the gs data to kernel only pages, then the user can't do that anyways. 
+
+note that swapping the active segment via syscall/sysret doesn't swap the active pagetable root (CR3). This is how the kernel can still access user data. 
+
+so to write syscall handler, we can 
+
+
+when changing CS, it essentially 'requests' a new permission level in its first 2 bits. You can only jump to a permission level that is >= your current permission level through ljmp/lret. syscall is a predefined way to enter kernel permission level that can bypass this restriction. 
+
+When doing pagetable walk, the CPU consults the first 2 bits of CS for permissions? 
