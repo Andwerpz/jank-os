@@ -4,3 +4,4 @@
 #global_node PAGING [SERIAL];
 #global_node MALLOC [PMA, PAGING];
 #global_node SERIAL_STREAM [MALLOC, SERIAL];
+#global_node GDT;

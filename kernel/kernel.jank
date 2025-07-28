@@ -8,6 +8,7 @@
 #include <jstring>;
 #include "globals.jank";
 #include "elf.jank";
+#include "gdt.jank";
 #include <math>;
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();

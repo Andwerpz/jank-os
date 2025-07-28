@@ -1,0 +1,54 @@
+struct GDTEntry {
+    u16 limit;
+    u16 base_low;
+    u8  base_middle;
+    u8  access;
+    u8  flags;
+    u8  base_high;
+}
+
+struct GDTPointer {
+    u16 limit;
+    u64 base;
+}
+
+[GDT] GDTEntry[5] gdt;
+[GDT] GDTPointer* gdt_ptr;
+
+void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 gran) {
+    gdt[idx].base_low     = $u16 (base & $u32 0xffff);
+    gdt[idx].base_middle  = $u8 ((base >> $u32 16) & $u32 0xff);
+    gdt[idx].base_high    = $u8 ((base >> $u32 24) & $u32 0xff);
+    gdt[idx].limit        = $u16 (limit & $u32 0xffff);
+    gdt[idx].flags        = $u8 (((limit >> $u32 16) & $u32 0x0f));
+    gdt[idx].flags       |= (gran & $u8 0xf0);
+    gdt[idx].access       = access;
+}
+
+// https://wiki.osdev.org/Global_Descriptor_Table
+void init_gdt() {
+    gdt_ptr->limit = $u16 sizeof(GDTEntry) - $u16 1;
+    gdt_ptr->base  = $u64 @gdt;
+
+    gdt_set_entry(0, $u32 0, $u32 0, $u8 0, $u8 0); // NULL segment
+    gdt_set_entry(1, $u32 0, $u32 0xffffffff, $u8 0x9a, $u8 0xaf); // Kernel Code segment
+    gdt_set_entry(2, $u32 0, $u32 0xffffffff, $u8 0x92, $u8 0xaf); // Kernel Data segment
+    gdt_set_entry(3, $u32 0, $u32 0xffffffff, $u8 0xfa, $u8 0xaf); // User code segment
+    gdt_set_entry(4, $u32 0, $u32 0xffffffff, $u8 0xf2, $u8 0xaf); // user data segment
+
+    gdt_flush($u64 @gdt_ptr);
+}
+
+void gdt_flush(u64 gdt_pt) {
+    asm!("lgdt 16(%rbp)");
+    
+    asm!("mov $0x10, %ax");
+    asm!("mov %ax, %ds");
+    asm!("mov %ax, %es");
+    asm!("mov %ax, %fs");
+    asm!("mov %ax, %gs");
+    asm!("mov %ax, %ss");
+    asm!("jmp $0x08, $flush");
+    asm!("flush:");
+}
+
