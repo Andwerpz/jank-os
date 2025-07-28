@@ -124,3 +124,11 @@ when you load a descriptor from the GDT, the cpu caches it. Any subsequent memor
 hmm, seems like STAR MSR should be set once at boot. Have to pick specific GDT addresses for user and kernel 
 
 so when we do syscall, cpu loads in new CS value from STAR[47:32], goes into the GDT and verifies the permissions are correct. 
+
+AMD syscall/sysret documentation:
+https://www.ardent-tool.com/CPU/docs/AMD/21086.pdf
+
+SYSCALL/SYSRET Target Address Register (STAR)
+seems like top 16 bits holds CS, next 16 holds SS
+back in 32 bit systems, the bottom 32 bits would hold the syscall handler entry point
+now, syscall handler entry point is held in LSTAR

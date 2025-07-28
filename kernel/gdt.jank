@@ -1,3 +1,22 @@
+
+//in 64-bit mode, Base and Limit values are ignored. Every segment covers the entire linear address space
+
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_PRESENT    = $u8 0b10000000;   //must be set for any valid segment
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_DPL_KERNEL = $u8 0b00000000;
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_DPL_USER   = $u8 0b01100000;
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_TYPE       = $u8 0b00010000;   //if set, defines a code or data segment, otherwise defines a system segment
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_EXECUTABLE = $u8 0b00001000;   //if set, defines a code segment, otherwise a data segment
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_DC         = $u8 0b00000100;
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_RW         = $u8 0b00000010;   //for code segments: determines if this segment is readable
+                                                                //for data segments: determines if this segment is PTE_WRITEABLE
+[__GLOBAL_FIRST__] u8 GDT_ACCESS_ACCESSED   = $u8 0b00000001;   //accessed bit: if set to 0, cpu will trigger a page fault when setting to 1. 
+                                                                //best left set to 1. 
+
+[__GLOBAL_FIRST__] u8 GDT_FLAGS_GRANULARITY = $u8 0b10000000;   //sets the scaling of the Limit value. 
+[__GLOBAL_FIRST__] u8 GDT_FLAGS_DB          = $u8 0b01000000;   //this shouldn't matter in 64-bit mode??
+[__GLOBAL_FIRST__] u8 GDT_FLAGS_LONGMODE    = $u8 0b00100000;   //if set, this segment is a 64-bit code segment
+                                                                //for any other type of segment (other code types or any data segment), this should be 0
+
 struct GDTEntry {
     u16 limit;
     u16 base_low;
@@ -12,43 +31,63 @@ struct GDTPointer {
     u64 base;
 }
 
-[GDT] GDTEntry[5] gdt;
-[GDT] GDTPointer* gdt_ptr;
+// https://wiki.osdev.org/Global_Descriptor_Table
+i32 init_gdt() {
+    serial_println("start init gdt");
 
-void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 gran) {
+    void* page = palloc();
+    GDTPointer* gdt_ptr = $GDTPointer* page;
+    GDTEntry* gdt = $GDTEntry* @($u8* page)[16];
+
+    gdt_ptr->limit = $u16 sizeof(GDTEntry) * $u16 5 - $u16 1;
+    gdt_ptr->base = $u64 gdt;
+
+    serial_print("limit : ");
+    serial_println($void* $u64 gdt_ptr->limit);
+    serial_print("base : ");
+    serial_println($void* $u64 gdt_ptr->base);
+
+    serial_println("done setup gdt pointer");
+
+    gdt_set_entry(0, $u32 0, $u32 0, $u8 0, $u8 0, gdt); // NULL segment
+    gdt_set_entry(1, $u32 0, $u32 0xffffffff, $u8 0x9a, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt); // Kernel Code segment
+    gdt_set_entry(2, $u32 0, $u32 0xffffffff, $u8 0x92, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt); // Kernel Data segment
+    gdt_set_entry(3, $u32 0, $u32 0xffffffff, $u8 0xfa, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt); // User code segment
+    gdt_set_entry(4, $u32 0, $u32 0xffffffff, $u8 0xf2, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt); // user data segment
+
+    serial_println("done set gdt entries");
+
+    serial_print("GDT PTR : ");
+    serial_println(gdt_ptr);
+
+    gdt_flush(gdt_ptr);
+    serial_println("done init gdt");
+    return 0;
+}
+
+void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 flags, GDTEntry* gdt) {
     gdt[idx].base_low     = $u16 (base & $u32 0xffff);
     gdt[idx].base_middle  = $u8 ((base >> $u32 16) & $u32 0xff);
     gdt[idx].base_high    = $u8 ((base >> $u32 24) & $u32 0xff);
     gdt[idx].limit        = $u16 (limit & $u32 0xffff);
     gdt[idx].flags        = $u8 (((limit >> $u32 16) & $u32 0x0f));
-    gdt[idx].flags       |= (gran & $u8 0xf0);
+    gdt[idx].flags       |= flags;
     gdt[idx].access       = access;
 }
 
-// https://wiki.osdev.org/Global_Descriptor_Table
-void init_gdt() {
-    gdt_ptr->limit = $u16 sizeof(GDTEntry) - $u16 1;
-    gdt_ptr->base  = $u64 @gdt;
+void gdt_flush(GDTPointer* ptr) {
+    //asm!("lgdt 16(%rbp)");
+    //asm!("mov $0x10, %ax");
+    //asm!("mov %ax, %ds");
+    //asm!("mov %ax, %es");
+    //asm!("mov %ax, %fs");
+    //asm!("mov %ax, %gs");
+    //asm!("mov %ax, %ss");
 
-    gdt_set_entry(0, $u32 0, $u32 0, $u8 0, $u8 0); // NULL segment
-    gdt_set_entry(1, $u32 0, $u32 0xffffffff, $u8 0x9a, $u8 0xaf); // Kernel Code segment
-    gdt_set_entry(2, $u32 0, $u32 0xffffffff, $u8 0x92, $u8 0xaf); // Kernel Data segment
-    gdt_set_entry(3, $u32 0, $u32 0xffffffff, $u8 0xfa, $u8 0xaf); // User code segment
-    gdt_set_entry(4, $u32 0, $u32 0xffffffff, $u8 0xf2, $u8 0xaf); // user data segment
-
-    gdt_flush($u64 @gdt_ptr);
-}
-
-void gdt_flush(u64 gdt_pt) {
-    asm!("lgdt 16(%rbp)");
-    
-    asm!("mov $0x10, %ax");
-    asm!("mov %ax, %ds");
-    asm!("mov %ax, %es");
-    asm!("mov %ax, %fs");
-    asm!("mov %ax, %gs");
-    asm!("mov %ax, %ss");
-    asm!("jmp $0x08, $flush");
-    asm!("flush:");
+    asm!("pushq $0x08");    //new CS
+    asm!("lea 1f(%rip), %rax");
+    asm!("pushq %rax");
+    asm!("lretq");
+    asm!("1:");
 }
 
