@@ -1,0 +1,126 @@
+ty, mr deepseek
+
+Key MSRs for syscall/sysret:
+    IA32_EFER (MSR 0xC0000080)
+        Enable the SCE (System Call Extensions) bit (bit 0) to allow syscall/sysret.
+        Optionally set NXE (No-Execute Enable, bit 11) if you want to use the NX bit for page protection.
+    STAR (MSR 0xC0000081)
+        Sets the target segments (CS and SS) for privilege transitions.
+        Upper 32 bits: Kernel's CS and SS (must be a kernel code segment with DPL=0).
+            SYSRET will return to CS = STAR[63:48] + 16, SS = STAR[63:48] + 8.
+        Lower 32 bits: User's CS and SS (must be a user code segment with DPL=3).
+            SYSCALL enters kernel with CS = STAR[47:32], SS = STAR[47:32] + 8.
+    LSTAR (MSR 0xC0000082)
+        The 64-bit RIP where the CPU jumps when syscall is executed (your kernel's syscall entry point).
+    SFMASK (MSR 0xC0000084)
+        If bit N is set in SFMASK, the corresponding RFLAGS bit is cleared on syscall.
+        Typically used to mask interrupts (IF, bit 9) or other flags.
+
+Additional MSRs (Optional but Recommended):
+    IA32_FMASK (MSR 0xC0000084)
+        Same as SFMASK (some docs refer to it differently).
+    IA32_KERNEL_GS_BASE (MSR 0xC0000102)
+        Used with SWAPGS to quickly access per-CPU kernel data.
+        SWAPGS swaps GS base with this MSR (useful in syscall handlers).
+
+sysret Requirements:
+    RCX must contain the user RIP to return to.
+    R11 must contain user RFLAGS.
+    The DS, ES, FS, and GS segments may need reloading (they are not automatically changed).
+
+SWAPGS Usage:
+    If using per-CPU data, SWAPGS swaps GS base with IA32_KERNEL_GS_BASE.
+    Do this at the start/end of the syscall handler.
+
+Signal Safety:
+    Linux avoids using sysret in certain cases (e.g., when returning to a signal handler) because it can’t handle non-canonical RIPs.
+
+
+what are segment registers doing in my paged memory?
+1. CS (Code Segment)
+    Determines the current privilege level (CPL = CS.DPL).
+        CPL=0 → Kernel mode
+        CPL=3 → User mode
+    Used by syscall/sysret to switch modes (via STAR MSR).
+    Ignored for address calculation (all code accesses use flat 64-bit addressing).
+2. SS (Stack Segment)
+    Must match CS.DPL (kernel mode uses DPL=0 stack, user mode DPL=3).
+    syscall automatically loads SS from STAR + 8.
+    Also ignored for address calculation (stack is purely RSP-based).
+3. DS, ES (Data Segments)
+    Technically unused in 64-bit mode (all data accesses are flat).
+    But must still have valid descriptors (kernel DPL=0, user DPL=3).
+    Some OSes reload them to prevent privilege escalation (see below).
+4. FS, GS (Thread-Local and Per-CPU Data)
+    Still used! Their base addresses can be set via MSRs (FSBASE, GSBASE).
+    FS: Often used for thread-local storage (e.g., glibc uses it for errno).
+    GS: Typically swapped in kernel mode (via SWAPGS) for per-CPU data.
+
+
+
+the STAR MSR controls what the values of CS and SS will be set to by the CPU on transitions to kernel and transitions to user mode. 
+
+GDT describes data segments. 
+(might want to double check this chart)
+Bits (Range)	Field	Purpose
+0-15	Limit (Low)	Ignored in 64-bit mode (segments span entire address space).
+16-39	Base (Low)	Ignored in 64-bit mode (segments start at 0).
+40	Accessed	Set by CPU when segment is used (rarely checked in 64-bit mode).
+41-42	Read/Write	For data segments: 1 = readable/writable.
+43	DC	Direction/Conforming (controls segment growth/privilege escalation).
+44	Executable	1 = Code segment, 0 = Data segment.
+45-46	DPL	Descriptor Privilege Level (0=kernel, 3=user).
+47	Present	1 = Segment is valid.
+48-51	Limit (High)	Ignored in 64-bit mode.
+52	AVL	Ignored (reserved for OS use).
+53	Long Mode	1 = 64-bit code segment (must be set for CS in long mode).
+54	Default Size	0 = 16-bit, 1 = 32-bit (ignored in 64-bit mode).
+55	Granularity	1 = Limit is in 4KB pages (ignored in 64-bit mode).
+56-63	Base (High)	Ignored in 64-bit mode.
+
+key fields:
+    DPL (Bits 45-46)
+        Determines privilege level (0=kernel, 3=user).
+        Critical for syscall/sysret (kernel CS must have DPL=0).
+    Executable (Bit 44)
+        1 = Code segment (e.g., CS).
+        0 = Data segment (e.g., DS, SS, ES).
+    Present (Bit 47)
+        Must be 1 for active segments.
+    Long Mode (Bit 53)
+        Must be 1 for 64-bit code segments (CS).
+
+with paging enabled, GDT is more used for handling permissions. 
+
+CS segment register acts as an index into the GDT. 
+    CS is a 16-bit register, but only bits 3–15 are used for the GDT index.
+        Bits 0–1: Requested Privilege Level (RPL) (usually matches CPL).
+        Bit 2: Table Indicator (TI), where 0 = GDT, 1 = LDT (rarely used in 64-bit mode).
+        Bits 3–15: Index into the GDT (so up to 8,192 entries possible).
+
+usually, first entry of GDT is reserved, so 0x10 usually points to the kernel code segment, 0x18 points to the kernel data segment, and 0x23 is the user segment
+
+3. How CS Works in Practice
+Case 1: syscall (User → Kernel Transition)
+    CPU checks STAR[47:32] (e.g., 0x23) for the new CS.
+    Looks up GDT[4] (since 0x23 = 4 * 8 + 3).
+    Verifies:
+        Is it a code segment (Executable=1)?
+        Is DPL=0 (kernel mode)?
+        Is Long Mode=1 (64-bit)?
+    Loads CS with the selector (0x23) and caches the hidden values.
+
+Case 2: sysret (Kernel → User Transition)
+    CPU computes CS = STAR[63:48] + 16 (e.g., 0x10 + 16 = 0x23).
+    Looks up GDT[4].
+    Verifies:
+        Is DPL=3 (user mode)?
+        Is Long Mode=1?
+    Loads CS with 0x23 and caches hidden values.
+
+
+when you load a descriptor from the GDT, the cpu caches it. Any subsequent memory operations used that cached copy. So after modifying the GDT, we need to reload it to make sure we're using the updated descriptor if we updated the descriptor we're currently using. 
+
+hmm, seems like STAR MSR should be set once at boot. Have to pick specific GDT addresses for user and kernel 
+
+so when we do syscall, cpu loads in new CS value from STAR[47:32], goes into the GDT and verifies the permissions are correct. 
