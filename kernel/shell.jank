@@ -131,7 +131,7 @@ void shell() {
                 {   
                     void* vaddr = $void* GSDATA_PAGE;
                     void* paddr = pt_translate(kernel_pt, vaddr);
-                    pt_map_page(user_pt, vaddr, paddr, 0x0);    //should only be readable with kernel perms
+                    pt_map_page(user_pt, vaddr, paddr, PTE_WRITEABLE); 
                 }
                 sout << "done mapping kernel into user_pt\n";
 

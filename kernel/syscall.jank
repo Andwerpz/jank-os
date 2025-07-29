@@ -21,7 +21,7 @@ i32 init_syscall() {
     gs_data->syscall_stack = palloc();
     gs_data->kernel_pt = pt_get_current();
     wrmsr(KERNEL_GS_BASE_MSR, $u64 gs_data);
-    pt_map_page(pt_get_current(), $void* GSDATA_PAGE, $void* gs_data, 0x0); //it's readonly for now
+    pt_map_page(pt_get_current(), $void* GSDATA_PAGE, $void* gs_data, PTE_WRITEABLE);
 
     //setup kernel_datapage
     u64* kernel_pt = pt_get_current();
