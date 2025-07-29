@@ -118,20 +118,13 @@ void shell() {
 
                 //map kernel into user pagetable. Just copy the mappings
                 u64* kernel_pt = pt_get_current();
-                for(u64 i = BOOTBOOT_MMIO; i != 0x0; i += PAGE_SIZE) {
+                for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
                     void* vaddr = $void* i;
                     if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
                         u64 perm_flags;
                         void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
                         pt_map_page(user_pt, vaddr, paddr, perm_flags);
                     }
-                }
-
-                //map GSData page
-                {   
-                    void* vaddr = $void* GSDATA_PAGE;
-                    void* paddr = pt_translate(kernel_pt, vaddr);
-                    pt_map_page(user_pt, vaddr, paddr, PTE_WRITEABLE); 
                 }
                 sout << "done mapping kernel into user_pt\n";
 
@@ -144,11 +137,12 @@ void shell() {
                 pt_alloc_and_map_page(user_pt, $void* USER_GUARD_PAGE, PTE_NX);
 
                 //execute 
-                exec_user_program();
+                i32 status = exec_user_program(user_pt, entry_off);
+                sout << "exec status : " << status << "\n";
 
                 //unmap kernel from user pagetable. 
                 //make sure to do this, as pt_free_pagetable() also frees the underlying pages
-                for(u64 i = BOOTBOOT_MMIO; i != 0x0; i += PAGE_SIZE) {
+                for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
                     void* vaddr = $void* i;
                     if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
                         pt_unmap_page(user_pt, vaddr);

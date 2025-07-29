@@ -8,15 +8,17 @@ struct GSData {
     void* saved_stack;                  //168 : for saving the process stack during syscalls
 }
 
-[__GLOBAL_FIRST__] u64 GSDATA_PAGE      = 0xfffffffff0000000;  // holds the GSData struct
+[__GLOBAL_FIRST__] u64 KERNEL_BOTTOM        = 0xfffffffff0000000;
 
-[__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO    = 0xfffffffff8000000;  // memory mapped IO virtual address
-[__GLOBAL_FIRST__] u64 BOOTBOOT_FB      = 0xfffffffffc000000;  // frame buffer virtual address
-[__GLOBAL_FIRST__] u64 BOOTBOOT_INFO    = 0xffffffffffe00000;  // bootboot struct virtual address
-[__GLOBAL_FIRST__] u64 BOOTBOOT_ENV     = 0xffffffffffe01000;  // environment string virtual address
-[__GLOBAL_FIRST__] u64 BOOTBOOT_CORE    = 0xffffffffffe02000;  // core loadable segment start
+[__GLOBAL_FIRST__] u64 GSDATA_PAGE          = 0xfffffffff7000000;   // holds the GSData struct
+[__GLOBAL_FIRST__] u64 SYSCALL_STACK_BOTTOM = 0xfffffffff7001000;   // 16 KB
+[__GLOBAL_FIRST__] u64 SYSCALL_STACK_TOP    = 0xfffffffff7005000;   
 
-
+[__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO        = 0xfffffffff8000000;   // memory mapped IO virtual address
+[__GLOBAL_FIRST__] u64 BOOTBOOT_FB          = 0xfffffffffc000000;   // frame buffer virtual address
+[__GLOBAL_FIRST__] u64 BOOTBOOT_INFO        = 0xffffffffffe00000;   // bootboot struct virtual address
+[__GLOBAL_FIRST__] u64 BOOTBOOT_ENV         = 0xffffffffffe01000;   // environment string virtual address
+[__GLOBAL_FIRST__] u64 BOOTBOOT_CORE        = 0xffffffffffe02000;   // core loadable segment start
 
 //userspace memory map
 //for reference, top of userspace is          0x00007fffffffffff

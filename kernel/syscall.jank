@@ -16,18 +16,18 @@ i32 init_syscall() {
     efer |= 0x1;
     wrmsr(IA32_EFER_MSR, efer);
 
-    //setup KERNEL_GS_BASE
-    GSData* gs_data = $GSData* palloc();
-    gs_data->syscall_stack = palloc();
-    gs_data->kernel_pt = pt_get_current();
-    wrmsr(KERNEL_GS_BASE_MSR, $u64 gs_data);
-    pt_map_page(pt_get_current(), $void* GSDATA_PAGE, $void* gs_data, PTE_WRITEABLE);
-
-    //setup kernel_datapage
+    //setup GS_BASE
     u64* kernel_pt = pt_get_current();
-    pt_map_page(kernel_pt, $void* KERNEL_DATAPAGE, palloc, PTE_WRITEABLE);
-    KernelDatapage* datapage = $KernelDatapage* KERNEL_DATAPAGE;
-    datapage->kernel_pt = kernel_pt;
+    GSData* gs_data = $GSData* palloc();
+    gs_data->syscall_stack = $void* SYSCALL_STACK_TOP;
+    gs_data->kernel_pt = kernel_pt;
+    wrmsr(GS_BASE_MSR, $u64 gs_data);
+    pt_map_page(kernel_pt, $void* GSDATA_PAGE, $void* gs_data, PTE_WRITEABLE);
+
+    //alloc and map syscall stack
+    for(u64 i = SYSCALL_STACK_BOTTOM; i < SYSCALL_STACK_TOP; i += PAGE_SIZE) {
+        pt_map_page(kernel_pt, $void* i, palloc(), PTE_WRITEABLE);
+    }
 
     sout << "done init syscalls\n";
 }
@@ -48,23 +48,48 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("movq %rsp, %gs:168"); //save process stack 
     asm!("movq %gs:152, %rsp"); //load syscall stack
 
+    //push sysret info
     asm!("pushq 0x1b");     //user data segment
     asm!("pushq %gs:168");  //user stack pointer
     asm!("pushq %r11");     //user rflags
     asm!("pushq 0x23");     //user code segment
     asm!("pushq %rcx");     //user RIP
 
-    //push all registers (except for %rax)
+    //push all value registers (except for %rax)
+    asm!("pushq %rbx");
+    asm!("pushq %rcx");
+    asm!("pushq %rdx");
+    asm!("pushq %rsi");
+    asm!("pushq %rdi");
+    asm!("pushq %r8");
+    asm!("pushq %r9");
+    asm!("pushq %r10");
+    asm!("pushq %r11");
+    asm!("pushq %r12");
+    asm!("pushq %r13");
+    asm!("pushq %r14");
+    asm!("pushq %r15");
 
-    //set global base pointer (%r15)
+    //set kernel global base pointer (%r15)
+    asm!("movq %gs:120, %r15");
 
     //call higher level syscall handler
     asm!("call syscall_handler");
 
-    //pop all registers 
-
-    //swap to user stack
-    asm!("movq %gs:168, %rsp");
+    //pop all registers (except for %rax)
+    asm!("popq %r15");
+    asm!("popq %r14");
+    asm!("popq %r13");
+    asm!("popq %r12");
+    asm!("popq %r11");
+    asm!("popq %r10");
+    asm!("popq %r9");
+    asm!("popq %r8");
+    asm!("popq %rdi");
+    asm!("popq %rsi");
+    asm!("popq %rdx");
+    asm!("popq %rcx");
+    asm!("popq %rbx");
 
     asm!("swapgs");
     asm!("sysret");

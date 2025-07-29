@@ -179,20 +179,10 @@ i32 main() {
 
     shell();
 
-    while(1) {
-        u8 c = read_serial();
+    //qemu shutdown signal
+    outw($u16 0x604, $u16 0x2000);
 
-        serial_print(c);
-        serial_print("\n");
-
-        draw_char($i32 charCnt, $i32 lineCnt, c);
-        
-        charCnt += $u64 font->width;
-        if(charCnt >= FB_WIDTH) {
-            lineCnt += $u64 font->height;
-            charCnt = $u64 0;
-        }
-    }
+    panic("shutdown failed");
     
     return 0;
 }

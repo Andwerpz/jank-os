@@ -49,25 +49,33 @@ i32 exec_user_program(u64* user_pt, u64 entry_off) {
     asm!("movq 24(%rbp), %rax");
     asm!("mov %rax, %cr3");
 
-    //swapgs
+    //switch to user gs
     asm!("swapgs");
+
+    //lret into user code
+    asm!("pushq $0x1B");                // user SS
+    asm!("pushq $0x00007ffffff00000");  // user stack top
+    asm!("pushq $0x202");               // RFLAGS
+    asm!("pushq $0x23");                // user CS
+    asm!("pushq 16(%rbp)");             // user entry point
+    asm!("lretq");
 
     // -- RETURN CODE --
+    //%rax should hold the exit status
     asm!("kernel_ret:");
 
-    //swapgs
-    asm!("swapgs");
+    //we should be returning from sys_exit(), the kernel gs should already be active
 
     //set kernel pagetable
-    asm!("movq %gs:160, %rax");
-    asm!("mov %rax, %cr3");
+    asm!("movq %gs:160, %rbx");
+    asm!("mov %rbx, %cr3");
 
     //load kernel execution context
-    asm!("movq %gs:136, %rax");
-    asm!("pushq");
+    asm!("movq %gs:136, %rbx");
+    asm!("pushq %rbx");
     asm!("popfq");
 
-    asm!("movq %gs:0,   %rax");
+    //don't load %rax
     asm!("movq %gs:8,   %rbx");
     asm!("movq %gs:16,  %rcx");
     asm!("movq %gs:24,  %rdx");
@@ -75,16 +83,19 @@ i32 exec_user_program(u64* user_pt, u64 entry_off) {
     asm!("movq %gs:40,  %rdi");
     asm!("movq %gs:48,  %rbp");
     asm!("movq %gs:56,  %rsp");
-    asm!("movq %gs:64,  %rax");
-    asm!("movq %gs:72,  %rax");
-    asm!("movq %gs:80,  %rax");
-    asm!("movq %gs:88,  %rax");
-    asm!("movq %gs:96,  %rax");
-    asm!("movq %gs:104, %rax");
-    asm!("movq %gs:112, %rax");
-    asm!("movq %gs:120, %rax");
+    asm!("movq %gs:64,  %r8");
+    asm!("movq %gs:72,  %r9");
+    asm!("movq %gs:80,  %r10");
+    asm!("movq %gs:88,  %r11");
+    asm!("movq %gs:96,  %r12");
+    asm!("movq %gs:104, %r13");
+    asm!("movq %gs:112, %r14");
+    asm!("movq %gs:120, %r15");
 
-    return 0;
+    i32 retval;
+    asm!("movq %rax, -8(%rbp)");
+
+    return retval;
 }
 
 

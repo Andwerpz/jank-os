@@ -116,7 +116,13 @@ serial_istream& operator>>(serial_istream& stream, i32& x) {
 void outb(u16 port, u8 val) {
     asm!("movw 24(%rbp), %dx");
     asm!("movb 16(%rbp), %al");
-    asm!("out %al, %dx");
+    asm!("outb %al, %dx");
+}
+
+void outw(u16 port, u16 val) {
+    asm!("movw 24(%rbp), %dx");
+    asm!("movw 16(%rbp), %ax");
+    asm!("outw %ax, %dx");
 }
 
 u8 inb(u16 port) {
