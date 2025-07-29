@@ -1,3 +1,38 @@
+
+i32 init_syscall() {
+    sout << "start init syscalls\n";
+
+    //setup STAR
+    //syscall and sysret automatically loads new segment from descriptor table based off of these values
+    u64 SELECTOR_1 = 0x08;  //kernel code
+    u64 SELECTOR_2 = 0x13;  //kernel data | 3
+    wrmsr(STAR_MSR, (SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48));
+
+    //setup LSTAR
+    wrmsr(LSTAR_MSR, $u64 @syscall_handler_entry);
+
+    //enable syscalls
+    u64 efer = rdmsr(IA32_EFER_MSR);
+    efer |= 0x1;
+    wrmsr(IA32_EFER_MSR, efer);
+
+    //setup KERNEL_GS_BASE
+    GSData* gs_data = $GSData* palloc();
+    gs_data->syscall_stack = palloc();
+    gs_data->kernel_pt = pt_get_current();
+    wrmsr(KERNEL_GS_BASE_MSR, $u64 gs_data);
+    pt_map_page(pt_get_current(), $void* GSDATA_PAGE, $void* gs_data, 0x0); //it's readonly for now
+
+    //setup kernel_datapage
+    u64* kernel_pt = pt_get_current();
+    pt_map_page(kernel_pt, $void* KERNEL_DATAPAGE, palloc, PTE_WRITEABLE);
+    KernelDatapage* datapage = $KernelDatapage* KERNEL_DATAPAGE;
+    datapage->kernel_pt = kernel_pt;
+
+    sout << "done init syscalls\n";
+}
+
+// -- SYSCALL IDENTIFIERS --
 //linux syscalls
 [__GLOBAL_FIRST__] u64 SYS_EXIT = $u64 60;
 
@@ -7,13 +42,17 @@
 [__GLOBAL_FIRST__] extern u8 syscall_handler_entry;
 void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", but we shouldn't use it
     asm!("syscall_handler_entry:");
+    asm!("swapgs");
 
-    //...
+    //swap to syscall stack
+    asm!("movq %)
 
+    //call higher level syscall handler
     asm!("call syscall_handler");
 
-    //TODO write rest of syscall handler
+    //swap back from syscall stack
 
+    asm!("swapgs");
     asm!("sysret");
 }
 
@@ -29,10 +68,14 @@ u64 syscall_handler() {
 
     asm!("movq %rax, -8(%rbp)");
     asm!("movq %rdi, -16(%rbp)");
-    //and so on ...
+    asm!("movq %rsi, -24(%rbp)");
+    asm!("movq %rdx, -32(%rbp)");
+    asm!("movq %r10, -40(%rbp)");
+    asm!("movq %r8, -48(%rbp)");
+    asm!("movq %r9, -56(%rbp)");
 
     if(sys_id == SYS_EXIT) return sys_exit($i32 arg1);
-    else if(sys_id == SYS_SERIAL_PRINT) return sys_serial_print()
+    else if(sys_id == SYS_SERIAL_PRINT) return sys_serial_print($u8* arg1, arg2);
 
     panic("unrecognized sys_id");
     return $u64 -1;
@@ -43,7 +86,8 @@ u64 syscall_handler() {
 //in the future when we do scheduling, this should instead transition to the scheduler. 
 u64 sys_exit(i32 status) {
 
-    //TODO
+    //long return to kernel_ret in exec.jank to switch gdt entry
+    asm!("jmp kernel_ret");
 
     return 0x0;
 }

@@ -1,11 +1,20 @@
 
+[__GLOBAL_FIRST__] u64 PAGE_SIZE = $u64 4096;
+
+struct GSData {
+    ExecutionContext kernel_context;
+    void* syscall_stack;                //152
+    u64* kernel_pt;                     //160
+}
+
+[__GLOBAL_FIRST__] u64 GSDATA_PAGE      = 0xfffffffff0000000;  // holds the GSData struct
+
 [__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO    = 0xfffffffff8000000;  // memory mapped IO virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_FB      = 0xfffffffffc000000;  // frame buffer virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_INFO    = 0xffffffffffe00000;  // bootboot struct virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_ENV     = 0xffffffffffe01000;  // environment string virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_CORE    = 0xffffffffffe02000;  // core loadable segment start
 
-[__GLOBAL_FIRST__] u64 PAGE_SIZE = $u64 4096;
 
 
 //userspace memory map

@@ -126,6 +126,13 @@ void shell() {
                         pt_map_page(user_pt, vaddr, paddr, perm_flags);
                     }
                 }
+
+                //map GSData page
+                {   
+                    void* vaddr = $void* GSDATA_PAGE;
+                    void* paddr = pt_translate(kernel_pt, vaddr);
+                    pt_map_page(user_pt, vaddr, paddr, 0x0);    //should only be readable with kernel perms
+                }
                 sout << "done mapping kernel into user_pt\n";
 
                 //map user stack
@@ -136,10 +143,8 @@ void shell() {
                 //map guard page
                 pt_alloc_and_map_page(user_pt, $void* USER_GUARD_PAGE, PTE_NX);
 
-                //map trapframe
-
-                //TODO context switch to user mode
-                //kernel trapframe??
+                //execute 
+                exec_user_program();
 
                 //unmap kernel from user pagetable. 
                 //make sure to do this, as pt_free_pagetable() also frees the underlying pages

@@ -3,3 +3,5 @@
 *.s
 *.out
 .vscode
+
+!kernel/trampoline.s

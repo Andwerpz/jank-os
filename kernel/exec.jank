@@ -1,0 +1,93 @@
+
+struct ExecutionContext {
+    u64 rax;
+    u64 rbx;
+    u64 rcx;
+    u64 rdx;
+    u64 rsi;
+    u64 rdi;
+    u64 rbp;
+    u64 rsp;
+    u64 r8;
+    u64 r9;
+    u64 r10;
+    u64 r11;
+    u64 r12;
+    u64 r13;
+    u64 r14;
+    u64 r15;
+    u64 rip;
+    u64 rflags;
+    u64 pagetable;
+}
+
+//synchronously executes user program, when done returns the exit code
+i32 exec_user_program(u64* user_pt, u64 entry_off) {
+    //save kernel execution context
+    asm!("movq %rax, %gs:0");
+    asm!("movq %rbx, %gs:8");
+    asm!("movq %rcx, %gs:16");
+    asm!("movq %rdx, %gs:24");
+    asm!("movq %rsi, %gs:32");
+    asm!("movq %rdi, %gs:40");
+    asm!("movq %rbp, %gs:48");
+    asm!("movq %rsp, %gs:56");
+    asm!("movq %r8,  %gs:64");
+    asm!("movq %r9,  %gs:72");
+    asm!("movq %r10, %gs:80");
+    asm!("movq %r11, %gs:88");
+    asm!("movq %r12, %gs:96");
+    asm!("movq %r13, %gs:104");
+    asm!("movq %r14, %gs:112");
+    asm!("movq %r15, %gs:120");
+
+    asm!("pushfq");
+    asm!("popq %rax");
+    asm!("movq %rax, %gs:136");
+
+    //set user pagetable
+    asm!("movq 24(%rbp), %rax");
+    asm!("mov %rax, %cr3");
+
+    //swapgs
+    asm!("swapgs");
+
+    // -- RETURN CODE --
+    asm!("kernel_ret:");
+
+    //swapgs
+    asm!("swapgs");
+
+    //set kernel pagetable
+    asm!("movq %gs:160, %rax");
+    asm!("mov %rax, %cr3");
+
+    //load kernel execution context
+    asm!("movq %gs:136, %rax");
+    asm!("pushq");
+    asm!("popfq");
+
+    asm!("movq %gs:0,   %rax");
+    asm!("movq %gs:8,   %rbx");
+    asm!("movq %gs:16,  %rcx");
+    asm!("movq %gs:24,  %rdx");
+    asm!("movq %gs:32,  %rsi");
+    asm!("movq %gs:40,  %rdi");
+    asm!("movq %gs:48,  %rbp");
+    asm!("movq %gs:56,  %rsp");
+    asm!("movq %gs:64,  %rax");
+    asm!("movq %gs:72,  %rax");
+    asm!("movq %gs:80,  %rax");
+    asm!("movq %gs:88,  %rax");
+    asm!("movq %gs:96,  %rax");
+    asm!("movq %gs:104, %rax");
+    asm!("movq %gs:112, %rax");
+    asm!("movq %gs:120, %rax");
+
+    return 0;
+}
+
+
+
+
+

@@ -18,10 +18,7 @@ void enable_nx() {
     passert(x & $u64 (1 << 20), "enable_nx() : NX should be supported");
 
     //enable NX bit in EFER
-    asm!("mov $0xC0000080, %ecx");   
-    asm!("rdmsr");                
-    asm!("bts $11, %eax");         
-    asm!("wrmsr");   
+    wrmsr(EFER_MSR, rdmsr(EFER_MSR) | $u64 (1 << 11));
 }
 
 i32 init_paging() {

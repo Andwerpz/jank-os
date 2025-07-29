@@ -1,0 +1,19 @@
+
+void wrmsr(u32 reg, u64 val) {
+    u32 low = $u32 val;
+    u32 high = $u32 (val >> $u64 32);
+    asm!("movl 24(%rbp), %ecx");
+    asm!("movl -8(%rbp), %eax");
+    asm!("movl -16(%rbp), %edx");
+    asm!("wrmsr");
+}
+
+u64 rdmsr(u32 reg) {
+    u32 low;
+    u32 high;
+    asm!("movl 16(%rbp), %ecx");   
+    asm!("rdmsr");              
+    asm!("movl %eax, -8(%rbp)");
+    asm!("movl %edx, -16(%rbp)");
+    return ($u64 high << $u64 32) | ($u64 low);
+}

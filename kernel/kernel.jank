@@ -1,20 +1,25 @@
+#include <math>;
+#include <string>;
+#include <jstring>;
+
 #include "serial.jank";
 #include "vga.jank";
 #include "pma.jank";
 #include "pagetable.jank";
 #include "kmalloc.jank";
 #include "shell.jank";
-#include <string>;
-#include <jstring>;
 #include "globals.jank";
 #include "elf.jank";
 #include "gdt.jank";
-#include <math>;
+#include "syscall.jank";
+#include "utils.jank";
+#include "exec.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
 [GDT] i32 INIT_GDT_STATUS = init_gdt();
 [PAGING] i32 INIT_PAGING_STATUS = init_paging();
+[SYSCALL] i32 INIT_SYSCALL_STATUS = init_syscall();
 
 void check_paging_enabled() {
     u64 cr0;
