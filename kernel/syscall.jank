@@ -45,12 +45,26 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("swapgs");
 
     //swap to syscall stack
-    asm!("movq %)
+    asm!("movq %rsp, %gs:168"); //save process stack 
+    asm!("movq %gs:152, %rsp"); //load syscall stack
+
+    asm!("pushq 0x1b");     //user data segment
+    asm!("pushq %gs:168");  //user stack pointer
+    asm!("pushq %r11");     //user rflags
+    asm!("pushq 0x23");     //user code segment
+    asm!("pushq %rcx");     //user RIP
+
+    //push all registers (except for %rax)
+
+    //set global base pointer (%r15)
 
     //call higher level syscall handler
     asm!("call syscall_handler");
 
-    //swap back from syscall stack
+    //pop all registers 
+
+    //swap to user stack
+    asm!("movq %gs:168, %rsp");
 
     asm!("swapgs");
     asm!("sysret");

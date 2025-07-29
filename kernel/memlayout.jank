@@ -5,6 +5,7 @@ struct GSData {
     ExecutionContext kernel_context;
     void* syscall_stack;                //152
     u64* kernel_pt;                     //160
+    void* saved_stack;                  //168 : for saving the process stack during syscalls
 }
 
 [__GLOBAL_FIRST__] u64 GSDATA_PAGE      = 0xfffffffff0000000;  // holds the GSData struct
