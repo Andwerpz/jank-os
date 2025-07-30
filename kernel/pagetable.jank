@@ -139,7 +139,7 @@ void pt_map_page(u64* pt, void* vaddr, void* paddr, u64 leaf_flags) {
 
     //traverse pt to level 1
     i32 level = 1;
-    u64 pte = pt_walk(pt, vaddr, level, 1, PTE_WRITEABLE, leaf_flags);
+    u64 pte = pt_walk(pt, vaddr, level, 1, PTE_WRITEABLE | PTE_USER, leaf_flags);
     passert(level == 1, "pt_map_page() : we should get level 1 pte");
     passert(!(pte & PTE_HUGEPG), "pt_map_page() : pte should not correspond to huge page");
 

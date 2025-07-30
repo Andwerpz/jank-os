@@ -52,9 +52,6 @@ i32 init_gdt() {
     gdt_set_entry(2, $u32 0, $u32 0xffffffff, $u8 0x92, GDT_FLAGS_GRANULARITY, gdt);   // kernel Data segment
     gdt_set_entry(3, $u32 0, $u32 0xffffffff, $u8 0xf2, GDT_FLAGS_GRANULARITY, gdt);   // user data segment
     gdt_set_entry(4, $u32 0, $u32 0xffffffff, $u8 0xfa, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt);   // user code segment
-    //gdt_set_entry(3, $u32 0, $u32 0xffffffff, $u8 0x92, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt);   // user data segment
-    //gdt_set_entry(4, $u32 0, $u32 0xffffffff, $u8 0x9a, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt);   // user code segment
-    
 
     for(i32 i = 0; i < 5; i++){
         serial_print("GDT : ");

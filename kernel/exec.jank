@@ -59,6 +59,11 @@ i32 exec_user_program(u64* user_pt, u64 entry_off) {
     asm!("mov 16(%rbp), %rax");
     asm!("movq (%rax), %rax");
 
+    asm!("mov $0x1B, %ax");
+    asm!("mov %ax, %ds");
+    asm!("mov %ax, %es");
+    asm!("mov %ax, %fs");
+
     asm!("mov 16(%rbp), %rcx");         //new %rip
     asm!("mov $0x202, %r11");           //rflags
     asm!("mov $0x7ffffff00000, %rsp");  //manually set stack pointer

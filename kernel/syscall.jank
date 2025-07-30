@@ -5,7 +5,7 @@ i32 init_syscall() {
     //setup STAR
     //syscall and sysret automatically loads new segment from descriptor table based off of these values
     u64 SELECTOR_1 = 0x08;  //kernel code
-    u64 SELECTOR_2 = 0x13;  //user code | 3
+    u64 SELECTOR_2 = 0x13;  //kernel data | 3
     wrmsr(STAR_MSR, (SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48));
     sout << "STAR : " << $void* ((SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48)) << "\n";
 
