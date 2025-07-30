@@ -1,4 +1,5 @@
 
 i32 main() {
+    asm!("hlt");
     return 123;
 }

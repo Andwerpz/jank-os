@@ -12,7 +12,7 @@ void* malloc(u64 sz) {
     void* addr = $void* kheap_brk;
     u64* kernel_pt = pt_get_current();
     for(u64 i = $u64 0; i < sz; i += PAGE_SIZE) {
-        pt_map_page(kernel_pt, $void* (i + kheap_brk), palloc(), PTE_WRITEABLE | PTE_NX);
+        pt_map_page(kernel_pt, $void* (i + kheap_brk), palloc(), PTE_WRITEABLE);
     }
     kheap_brk += sz;
     return addr;

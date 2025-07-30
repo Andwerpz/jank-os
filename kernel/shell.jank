@@ -124,17 +124,29 @@ void shell() {
                         u64 perm_flags;
                         void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
                         pt_map_page(user_pt, vaddr, paddr, perm_flags);
+                        if($u64 vaddr < BOOTBOOT_MMIO) sout << "MAPPED : " << vaddr << " " << paddr << "\n";
                     }
                 }
+
+                sout << "GDT PADDR : " << pt_translate(user_pt, $void* GDT_PAGE) << "\n";
+
                 sout << "done mapping kernel into user_pt\n";
 
                 //map user stack
-                for(u64 i = USER_STACK_BOTTOM; i < USER_STACK_TOP; i += PAGE_SIZE) {
-                    pt_alloc_and_map_page(user_pt, $void* i, PTE_NX | PTE_USER | PTE_WRITEABLE);
+                for(u64 i = USER_STACK_BOTTOM; i <= USER_STACK_TOP; i += PAGE_SIZE) {
+                    pt_alloc_and_map_page(user_pt, $void* i, PTE_USER | PTE_WRITEABLE);
                 }
 
                 //map guard page
-                pt_alloc_and_map_page(user_pt, $void* USER_GUARD_PAGE, PTE_NX);
+                pt_alloc_and_map_page(user_pt, $void* USER_GUARD_PAGE, 0x0);
+                sout << "done mapping user memory\n";
+
+                sout << "USER STACK TOP PADDR : " << pt_translate(user_pt, $void* USER_STACK_TOP) << "\n";
+                sout << "USER ENTRY POINT PADDR : " << pt_translate(user_pt, $void* entry_off) << "\n";
+                
+                i32 walklevel = 0;
+                sout << "USER ENTRY PTE : " << $void* pt_walk(user_pt, $void* entry_off, walklevel) << "\n";
+                sout << "WALKLEVEL : " << walklevel << "\n";
 
                 //execute 
                 i32 status = exec_user_program(user_pt, entry_off);

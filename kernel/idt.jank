@@ -1,0 +1,6 @@
+
+struct IDTPointer {
+    u16 limit;
+    u64 base;
+}
+

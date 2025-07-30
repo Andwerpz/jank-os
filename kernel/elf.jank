@@ -133,7 +133,13 @@ i32 load_elf(u8* buf, u64 size, u64* pt, u64& out_entry_off) {
         for(u64 ptr = 0x0; ptr < memsz; ptr += PAGE_SIZE) {
             void* paddr = palloc();
             pt_map_page(pt, $void* (vaddr + ptr), paddr, pte_flags);
+            {
+                u64 out_flags;
+                void* out_paddr = pt_translate(pt, $void* (vaddr + ptr), out_flags);
+                sout << "elf map page : " << ($void* (vaddr + ptr)) << " " << paddr << " " << ($void* out_flags) << "\n";
+            }
             if(ptr < filesz) memcpy(paddr, $void* @(buf[offset + ptr]), min(PAGE_SIZE, filesz - ptr));
+
         }
     }
 

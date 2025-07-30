@@ -5,24 +5,26 @@ i32 init_syscall() {
     //setup STAR
     //syscall and sysret automatically loads new segment from descriptor table based off of these values
     u64 SELECTOR_1 = 0x08;  //kernel code
-    u64 SELECTOR_2 = 0x13;  //kernel data | 3
+    u64 SELECTOR_2 = 0x13;  //user code | 3
     wrmsr(STAR_MSR, (SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48));
+    sout << "STAR : " << $void* ((SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48)) << "\n";
 
     //setup LSTAR
     wrmsr(LSTAR_MSR, $u64 @syscall_handler_entry);
 
     //enable syscalls
-    u64 efer = rdmsr(IA32_EFER_MSR);
+    u64 efer = rdmsr(EFER_MSR);
     efer |= 0x1;
-    wrmsr(IA32_EFER_MSR, efer);
+    wrmsr(EFER_MSR, efer);
 
     //setup GS_BASE
     u64* kernel_pt = pt_get_current();
-    GSData* gs_data = $GSData* palloc();
+    pt_map_page(kernel_pt, $void* GSDATA_PAGE, palloc(), PTE_WRITEABLE);
+
+    GSData* gs_data = $GSData* GSDATA_PAGE;
     gs_data->syscall_stack = $void* SYSCALL_STACK_TOP;
     gs_data->kernel_pt = kernel_pt;
     wrmsr(GS_BASE_MSR, $u64 gs_data);
-    pt_map_page(kernel_pt, $void* GSDATA_PAGE, $void* gs_data, PTE_WRITEABLE);
 
     //alloc and map syscall stack
     for(u64 i = SYSCALL_STACK_BOTTOM; i < SYSCALL_STACK_TOP; i += PAGE_SIZE) {
@@ -30,6 +32,7 @@ i32 init_syscall() {
     }
 
     sout << "done init syscalls\n";
+    return 0;
 }
 
 // -- SYSCALL IDENTIFIERS --
@@ -44,15 +47,17 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("syscall_handler_entry:");
     asm!("swapgs");
 
+    asm!("hlt");
+
     //swap to syscall stack
     asm!("movq %rsp, %gs:168"); //save process stack 
     asm!("movq %gs:152, %rsp"); //load syscall stack
 
     //push sysret info
-    asm!("pushq 0x1b");     //user data segment
+    asm!("pushw $0x1b");     //user data segment
     asm!("pushq %gs:168");  //user stack pointer
     asm!("pushq %r11");     //user rflags
-    asm!("pushq 0x23");     //user code segment
+    asm!("pushw $0x23");     //user code segment
     asm!("pushq %rcx");     //user RIP
 
     //push all value registers (except for %rax)

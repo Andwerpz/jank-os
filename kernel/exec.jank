@@ -45,20 +45,24 @@ i32 exec_user_program(u64* user_pt, u64 entry_off) {
     asm!("popq %rax");
     asm!("movq %rax, %gs:136");
 
+    //switch to user gs
+    asm!("swapgs");
+
     //set user pagetable
     asm!("movq 24(%rbp), %rax");
     asm!("mov %rax, %cr3");
 
-    //switch to user gs
-    asm!("swapgs");
+    //asm!("movq 16(%rbp), %rbx");
+    //asm!("lea 1f(%rip), %rax");
+    //asm!("1:");
 
-    //lret into user code
-    asm!("pushq $0x1B");                // user SS
-    asm!("pushq $0x00007ffffff00000");  // user stack top
-    asm!("pushq $0x202");               // RFLAGS
-    asm!("pushq $0x23");                // user CS
-    asm!("pushq 16(%rbp)");             // user entry point
-    asm!("lretq");
+    asm!("mov 16(%rbp), %rax");
+    asm!("movq (%rax), %rax");
+
+    asm!("mov 16(%rbp), %rcx");         //new %rip
+    asm!("mov $0x202, %r11");           //rflags
+    asm!("mov $0x7ffffff00000, %rsp");  //manually set stack pointer
+    asm!("sysretq");
 
     // -- RETURN CODE --
     //%rax should hold the exit status
