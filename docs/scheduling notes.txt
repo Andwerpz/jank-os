@@ -1,0 +1,21 @@
+
+ok, so we need to implement the IDT. Then, setup the timer interrupt to fire every 10ms or so and map the timer interrupt entry (entry 32 i think) to point to our timer interrupt handler. 
+
+scheduler should have two parts, a timer interrupt handler, and a scheduler. Scheduler will assume that we're already in the kernel execution context and pick the next process to run, and run it. Timer interrupt handler assumes that we still need to save the execution context of the active process, then switches to kernel execution context and jumps to the scheduler. 
+
+sys_exit() should cleanup the exiting process and jump directly to the scheduler. 
+
+each process should have its own kernel stack so that we can save the execution context on it. This should be separate from the syscall stack? or maybe it can actually be the same thing. 
+
+for now, we'll make it so that syscalls are non-preemptible. So we can safely reuse the 'syscall' stack to save the execution state. 
+
+execution state should be loaded and unloaded by the scheduler. So the scheduler effectively becomes our trampoline page. 
+
+trapframe should be stored in the kernel mapped area with the syscall stack. All processes syscall stacks and trapframes should be mapped in kernel_pt, but for user_pt it should only be able to see its own syscall stack and trapframe. 
+
+should also support kernel processes, processes that have kernel privileges but can be scheduled the same in the scheduler. Once we implement these, we need to make sure that kernel memory operations are atomic. So pagetable, kmalloc, and pma should all be made atomic. 
+
+should also implement locks. x86_64 has some dedicated atomic instructions, so we can use those to implement some locks. 
+
+what should we store in the process struct?
+
