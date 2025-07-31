@@ -2,6 +2,8 @@
 #include <vector>;
 #include <jstring>;
 
+process* curr_process;
+
 struct file {
     string name;
     u8* buf;
@@ -17,6 +19,10 @@ struct file {
     ~file() {
         free($void* this.buf, this.size);
     }
+}
+
+struct process {
+    u64 brk;
 }
 
 void shell() {
@@ -116,6 +122,9 @@ void shell() {
                 }
                 sout << "entry offset : " << ($void* entry_off) << "\n";
 
+                curr_process = $process* malloc(sizeof(process));
+                curr_process->brk = USER_HEAP_BOTTOM;
+
                 //map kernel into user pagetable. Just copy the mappings
                 u64* kernel_pt = pt_get_current();
                 for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
@@ -162,6 +171,7 @@ void shell() {
                 }
                 
                 pt_free_pagetable(user_pt);
+                free($void* curr_process, sizeof(process));
 
                 sout << "lets go\n";
                 break;
