@@ -65,6 +65,7 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("pushq %rdx");
     asm!("pushq %rsi");
     asm!("pushq %rdi");
+    asm!("pushq %rbp");    
     asm!("pushq %r8");
     asm!("pushq %r9");
     asm!("pushq %r10");
@@ -89,6 +90,7 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("popq %r10");
     asm!("popq %r9");
     asm!("popq %r8");
+    asm!("popq %rbp");   
     asm!("popq %rdi");
     asm!("popq %rsi");
     asm!("popq %rdx");
