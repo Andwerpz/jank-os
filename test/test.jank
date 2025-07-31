@@ -1,5 +1,10 @@
+#include <jstring>;
+
+void serial_print(u8* s) {
+    syscall(1000, u64, s, strlen(s));
+}
 
 i32 main() {
-    asm!("hlt");
-    return 123;
+    serial_print("bello, is steven trolling me up or what!!\n");
+    return 69;
 }

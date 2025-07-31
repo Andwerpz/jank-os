@@ -5,13 +5,16 @@ i32 init_syscall() {
     //setup STAR
     //syscall and sysret automatically loads new segment from descriptor table based off of these values
     u64 SELECTOR_1 = 0x08;  //kernel code
-    u64 SELECTOR_2 = 0x13;  //kernel data | 3
+    u64 SELECTOR_2 = 0x13;  //kernel data
     wrmsr(STAR_MSR, (SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48));
     sout << "STAR : " << $void* ((SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48)) << "\n";
 
     //setup LSTAR
     wrmsr(LSTAR_MSR, $u64 @syscall_handler_entry);
 
+    //setup FMASK (clear interrupt flag on syscall entry)
+    wrmsr(FMASK_MSR, 0x200);  // Clear IF (bit 9) on syscall
+    
     //enable syscalls
     u64 efer = rdmsr(EFER_MSR);
     efer |= 0x1;
@@ -47,17 +50,13 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("syscall_handler_entry:");
     asm!("swapgs");
 
-    asm!("hlt");
-
     //swap to syscall stack
     asm!("movq %rsp, %gs:168"); //save process stack 
     asm!("movq %gs:152, %rsp"); //load syscall stack
 
     //push sysret info
-    asm!("pushw $0x1b");     //user data segment
     asm!("pushq %gs:168");  //user stack pointer
     asm!("pushq %r11");     //user rflags
-    asm!("pushw $0x23");     //user code segment
     asm!("pushq %rcx");     //user RIP
 
     //push all value registers (except for %rax)
@@ -96,8 +95,13 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("popq %rcx");
     asm!("popq %rbx");
 
+    //pop sysret info
+    asm!("popq %rcx");  //user RIP
+    asm!("popq %r11");  //user RFLAGS
+    asm!("popq %rsp");  //switch back to user stack
+
     asm!("swapgs");
-    asm!("sysret");
+    asm!("sysretq");
 }
 
 //this should generate label 'syscall_handler:'

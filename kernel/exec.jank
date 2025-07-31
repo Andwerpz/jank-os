@@ -52,17 +52,11 @@ i32 exec_user_program(u64* user_pt, u64 entry_off) {
     asm!("movq 24(%rbp), %rax");
     asm!("mov %rax, %cr3");
 
-    //asm!("movq 16(%rbp), %rbx");
-    //asm!("lea 1f(%rip), %rax");
-    //asm!("1:");
-
-    asm!("mov 16(%rbp), %rax");
-    asm!("movq (%rax), %rax");
-
-    asm!("mov $0x1B, %ax");
-    asm!("mov %ax, %ds");
-    asm!("mov %ax, %es");
-    asm!("mov %ax, %fs");
+    //set up other segment registers. TODO figure out what depends on these
+    //asm!("mov $0x1B, %ax");
+    //asm!("mov %ax, %ds");
+    //asm!("mov %ax, %es");
+    //asm!("mov %ax, %fs");
 
     asm!("mov 16(%rbp), %rcx");         //new %rip
     asm!("mov $0x202, %r11");           //rflags
@@ -74,6 +68,7 @@ i32 exec_user_program(u64* user_pt, u64 entry_off) {
     asm!("kernel_ret:");
 
     //we should be returning from sys_exit(), the kernel gs should already be active
+    //however, we are still using the syscall stack. 
 
     //set kernel pagetable
     asm!("movq %gs:160, %rbx");
