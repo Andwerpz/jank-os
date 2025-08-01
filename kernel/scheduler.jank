@@ -1,31 +1,76 @@
 
+[__GLOBAL_FIRST__] u64 PROCESS_NEW          = 0x0;
+[__GLOBAL_FIRST__] u64 PROCESS_READY        = 0x1;
+[__GLOBAL_FIRST__] u64 PROCESS_RUNNING      = 0x2;
+[__GLOBAL_FIRST__] u64 PROCESS_ZOMBIE       = 0x3;
+
 struct process {
     u64 pid;
-    u64 kstack_addr;    //address to bottom of this process's kstack
+    u64 kstack_addr;    //address to bottom of this process's kstack area
     u64 brk;
+    u64 status;
 
     process() {
         this.brk = USER_HEAP_BOTTOM;
     }
 }
 
-vector<process> active_processes;
+vector<process*> all_processes;
+deque<process*> process_queue;
+process* current_process;
 
+//should panic if there's no more processes to choose from
+process* schedule_next_process() {
+    //go until you see PROCESS_READY
+    //should probably add a check to see if there's actually some process that's READY in the queue
+    while(1) {
+        passert(process_queue.size() != 0x0, "schedule_next_process() : no more processes!!");
+        process* next = process_queue.front();
+        process_queue.push_back(process_queue.pop_front());
+
+        if(next->status == PROCESS_READY) {
+            return next;
+        }
+        else if(next->status == PROCESS_ZOMBIE) {
+            //remove zombies from queue
+            process_queue.pop_back();
+        }
+    }
+
+    //shouldn't get here
+    return $process* nullptr;
+}
+
+//should allocate a kstack for the new process
+//panics if there isn't enough room for a new kstack
+process* create_new_process() {
+
+}
+
+//this function never returns
 void init_scheduler() {
     sout << "start init scheduler\n";   
 
+    //initialize idler process 
+
     //initialize some shell process?
+
+    //switch to idler process kernel stack
 
     //startup the scheduler
     scheduler();
 }
 
-//this assumes we're currently executing in kernel context
+//this assumes we're currently executing in some process's kernel stack
+//we still need kernel pagetables active as we'll want to access kernel heap structures
 //this should choose a process to run then jump to that process
-//should panic if there's no more processes to choose from
+//this should not have to cleanup, the saved execution context should make it so that 
+//  any stuff leftover is treated as trash memory. 
 void scheduler() {
-    
+    //look for next process to run
+    process* next_process = schedule_next_process();
 
+    //context switch to process and run it
 
 }
 
@@ -33,6 +78,8 @@ void scheduler() {
 void timer_interrupt_handler() {
     //we've just come from a timer interrupt
     asm!("timer_interrupt_entry:");
+
+    //change process state to READY
 
     //save the current execution context to the corresponding trapframe
 

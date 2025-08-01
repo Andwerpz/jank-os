@@ -2,6 +2,7 @@
 #include <string>;
 #include <jstring>;
 #include <vector>;
+#include <deque>;
 
 #include "serial.jank";
 #include "vga.jank";
