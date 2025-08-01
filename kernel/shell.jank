@@ -2,8 +2,6 @@
 #include <vector>;
 #include <jstring>;
 
-process* curr_process;
-
 struct file {
     string name;
     u8* buf;
@@ -21,9 +19,7 @@ struct file {
     }
 }
 
-struct process {
-    u64 brk;
-}
+process* curr_process;
 
 void shell() {
     vector<file> files;

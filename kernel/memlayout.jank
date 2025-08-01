@@ -8,12 +8,26 @@ struct GSData {
     void* saved_stack;                  //168 : for saving the process stack during syscalls
 }
 
+//process kstack layout
+//by kstack, I mean a dedicated stack + trapframe combo, all in upper half memory
+//each process gets its own kstack for use in context switching and syscalls
+//kstacks should be mapped to the same vaddr in both kernel_pt and user_pt
+//this layout is relative to the kstack bottom
+[__GLOBAL_FIRST__] u64 PROC_TRAPFRAME       = 0x0000000000007000;
+[__GLOBAL_FIRST__] u64 PROC_KSTACK_TOP      = 0x0000000000007000;
+[__GLOBAL_FIRST__] u64 PROC_KSTACK_BOTTOM   = 0x0000000000001000;
+[__GLOBAL_FIRST__] u64 PROC_GUARD_PAGE      = 0x0000000000000000;
+
+//kernel layout
+[__GLOBAL_FIRST__] u64 KSTACK_BOTTOM        = 0xffffffff00000000;   //bottom of area to map kstacks
+
 [__GLOBAL_FIRST__] u64 KERNEL_BOTTOM        = 0xfffffffff0000000;
 
 [__GLOBAL_FIRST__] u64 GSDATA_PAGE          = 0xfffffffff7000000;   // holds the GSData struct
 [__GLOBAL_FIRST__] u64 SYSCALL_STACK_BOTTOM = 0xfffffffff7001000;   // 16 KB
 [__GLOBAL_FIRST__] u64 SYSCALL_STACK_TOP    = 0xfffffffff7005000;   
 [__GLOBAL_FIRST__] u64 GDT_PAGE             = 0xfffffffff7005000;
+[__GLOBAL_FIRST__] u64 IDT_PAGE             = 0xfffffffff7006000;
 
 [__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO        = 0xfffffffff8000000;   // memory mapped IO virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_FB          = 0xfffffffffc000000;   // frame buffer virtual address
@@ -21,12 +35,11 @@ struct GSData {
 [__GLOBAL_FIRST__] u64 BOOTBOOT_ENV         = 0xffffffffffe01000;   // environment string virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_CORE        = 0xffffffffffe02000;   // core loadable segment start
 
-//userspace memory map
+//userspace layout
 //for reference, top of userspace is          0x00007fffffffffff
 //kernel will be mapped above userspace top
-
 [__GLOBAL_FIRST__] u64 USER_STACK_TOP       = 0x00007ffffff00000;
 [__GLOBAL_FIRST__] u64 USER_STACK_BOTTOM    = 0x00007fffffef0000;   //64 KB
 [__GLOBAL_FIRST__] u64 USER_GUARD_PAGE      = 0x00007fffffeef000;
-[__GLOBAL_FIRST__] u64 USER_HEAP_BOTTOM     = 0x0000100000000000;
 [__GLOBAL_FIRST__] u64 USER_HEAP_TOP        = 0x0000700000000000;
+[__GLOBAL_FIRST__] u64 USER_HEAP_BOTTOM     = 0x0000100000000000;

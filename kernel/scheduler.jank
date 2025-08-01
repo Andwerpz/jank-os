@@ -1,0 +1,41 @@
+
+struct process {
+    u64 pid;
+    u64 kstack_addr;    //address to bottom of this process's kstack
+    u64 brk;
+
+    process() {
+        this.brk = USER_HEAP_BOTTOM;
+    }
+}
+
+vector<process> active_processes;
+
+void init_scheduler() {
+    sout << "start init scheduler\n";   
+
+    //initialize some shell process?
+
+    //startup the scheduler
+    scheduler();
+}
+
+//this assumes we're currently executing in kernel context
+//this should choose a process to run then jump to that process
+//should panic if there's no more processes to choose from
+void scheduler() {
+    
+
+
+}
+
+[__GLOBAL_FIRST__] extern u8 timer_interrupt_entry;
+void timer_interrupt_handler() {
+    //we've just come from a timer interrupt
+    asm!("timer_interrupt_entry:");
+
+    //save the current execution context to the corresponding trapframe
+
+    //jump to scheduler
+    asm!("jmp scheduler");
+}

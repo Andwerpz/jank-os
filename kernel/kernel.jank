@@ -1,6 +1,7 @@
 #include <math>;
 #include <string>;
 #include <jstring>;
+#include <vector>;
 
 #include "serial.jank";
 #include "vga.jank";
@@ -14,10 +15,13 @@
 #include "syscall.jank";
 #include "utils.jank";
 #include "exec.jank";
+#include "idt.jank";
+#include "scheduler.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
 [GDT] i32 INIT_GDT_STATUS = init_gdt();
+[IDT] i32 INIT_IDT_STATUS = init_idt();
 [PAGING] i32 INIT_PAGING_STATUS = init_paging();
 [SYSCALL] i32 INIT_SYSCALL_STATUS = init_syscall();
 

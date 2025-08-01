@@ -4,3 +4,36 @@ struct IDTPointer {
     u64 base;
 }
 
+struct IDTEntry {
+   u16 offset_1;        // offset bits 0..15
+   u16 selector;        // a code segment selector in GDT or LDT
+   u8  ist;             // bits 0..2 holds Interrupt Stack Table offset, rest of bits zero.
+   u8  type_attributes; // gate type, dpl, and p fields
+   u16 offset_2;        // offset bits 16..31
+   u32 offset_3;        // offset bits 32..63
+   u32 zero;            // reserved
+}
+
+i32 init_idt() {
+    serial_println("start init idt");
+
+    //map page for IDT
+    u64* kernel_pt = pt_get_current();
+    pt_map_page(kernel_pt, $void* IDT_PAGE, palloc(), PTE_WRITEABLE);
+    memset($void* IDT_PAGE, 0, PAGE_SIZE);  //clear page
+
+    IDTPointer* idt_ptr = $IDTPointer* IDT_PAGE;
+    IDTEntry* idt = $IDTEntry* @($u8* IDT_PAGE)[16];
+
+    //setup IDTPointer
+    idt_ptr->limit = $u16 sizeof(IDTEntry) * $u16 256 - $u16 1;
+    idt_ptr->base = $u64 idt;    
+
+    //setup timer interrupt
+
+
+    //flush changes
+
+    serial_println("done init idt");
+    return 0;
+}
