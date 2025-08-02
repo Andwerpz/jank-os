@@ -113,26 +113,6 @@ serial_istream& operator>>(serial_istream& stream, i32& x) {
     return stream;
 }
 
-void outb(u16 port, u8 val) {
-    asm!("movw 24(%rbp), %dx");
-    asm!("movb 16(%rbp), %al");
-    asm!("outb %al, %dx");
-}
-
-void outw(u16 port, u16 val) {
-    asm!("movw 24(%rbp), %dx");
-    asm!("movw 16(%rbp), %ax");
-    asm!("outw %ax, %dx");
-}
-
-u8 inb(u16 port) {
-    u8 ret;
-    asm!("movw 16(%rbp), %dx");
-    asm!("inb %dx, %al");
-    asm!("movb %al, -8(%rbp)");
-    return ret;
-}
-
 i32 init_serial() {
     outb(COM1 + $u16 1, $u8 0x00);    // Disable all interrupts
     outb(COM1 + $u16 3, $u8 0x80);    // Enable DLAB (set baud rate divisor)

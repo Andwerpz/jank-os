@@ -1,4 +1,10 @@
 
+[__GLOBAL_FIRST__] u8 IST_ATTR_PRESENT          = $u8 0b10000000;
+[__GLOBAL_FIRST__] u8 IST_ATTR_DPL_KERNEL       = $u8 0b00000000;
+[__GLOBAL_FIRST__] u8 IST_ATTR_DPL_USER         = $u8 0b01100000;
+[__GLOBAL_FIRST__] u8 IST_ATTR_INTERRUPT_GATE   = $u8 0b00001110;
+[__GLOBAL_FIRST__] u8 IST_ATTR_TRAP_GATE        = $u8 0b00001111;
+
 struct IDTPointer {
     u16 limit;
     u64 base;
@@ -8,7 +14,7 @@ struct IDTEntry {
    u16 offset_1;        // offset bits 0..15
    u16 selector;        // a code segment selector in GDT or LDT
    u8  ist;             // bits 0..2 holds Interrupt Stack Table offset, rest of bits zero.
-   u8  type_attributes; // gate type, dpl, and p fields
+   u8  type_attr;       // gate type, dpl, and p fields
    u16 offset_2;        // offset bits 16..31
    u32 offset_3;        // offset bits 32..63
    u32 zero;            // reserved
@@ -16,24 +22,43 @@ struct IDTEntry {
 
 i32 init_idt() {
     serial_println("start init idt");
+    u64* kernel_pt = pt_get_current();
 
     //map page for IDT
-    u64* kernel_pt = pt_get_current();
     pt_map_page(kernel_pt, $void* IDT_PAGE, palloc(), PTE_WRITEABLE);
     memset($void* IDT_PAGE, 0, PAGE_SIZE);  //clear page
+    IDTEntry* idt = $IDTEntry* IDT_PAGE;
 
-    IDTPointer* idt_ptr = $IDTPointer* IDT_PAGE;
-    IDTEntry* idt = $IDTEntry* @($u8* IDT_PAGE)[16];
+    //create IDTPointer
+    IDTPointer* idt_ptr = $IDTPointer* malloc(sizeof(IDTPointer));
 
     //setup IDTPointer
     idt_ptr->limit = $u16 sizeof(IDTEntry) * $u16 256 - $u16 1;
     idt_ptr->base = $u64 idt;    
 
-    //setup timer interrupt
+    //setup hardware timer
 
+    //setup timer interrupt handler
+    idt_set_entry(32, $u64 @timer_interrupt_entry, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
 
     //flush changes
+    idt_flush(idt_ptr);
 
     serial_println("done init idt");
     return 0;
+}
+
+void idt_set_entry(i32 idx, u64 handler_addr, u16 selector, u8 ist, u8 type_attr, IDTEntry* idt) {
+    idt[idx].offset_1     = $u16 (handler_addr & 0xffff);
+    idt[idx].selector     = selector;
+    idt[idx].ist          = ist & $u8 0x7;
+    idt[idx].type_attr    = type_attr;
+    idt[idx].offset_2     = $u16 ((handler_addr >> $u64 16) & 0xffff);
+    idt[idx].offset_3     = $u32 ((handler_addr >> $u64 32) & 0xffffffff);
+    idt[idx].zero         = $u32 0;
+}
+
+void idt_flush(IDTPointer* ptr) {
+    asm!("movq 16(%rbp), %rax");
+    asm!("lidt (%rax)");
 }

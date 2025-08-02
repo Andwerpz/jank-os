@@ -162,15 +162,22 @@ void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 o
     asm!("movq %gs:160, %rax");
     asm!("mov %rax, %cr3");
 
-    if(len % PAGE_SIZE != 0x0) return $void* $u64 -1;
+    // check if len is page aligned
+    if(len % PAGE_SIZE != 0x0) {
+        return $void* $u64 -1;
+    }
 
+    // check if we've ran out of heap space
+    if(curr_process->brk + len > USER_HEAP_TOP) {
+        return $void* $u64 -1;
+    }
+
+    // alloc mem
     void* vaddr = $void* curr_process->brk;
-
     for(u64 i = 0x0; i < len; i += PAGE_SIZE) {
         // void pt_alloc_and_map_page(u64* pt, void* vaddr, u64 leaf_flags)
         pt_alloc_and_map_page(user_pt, $void* ($u64 vaddr + i), map_flags | PTE_USER);
     }
-
     curr_process->brk += len;
 
     // set user pt back

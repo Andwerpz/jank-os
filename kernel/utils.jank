@@ -17,3 +17,23 @@ u64 rdmsr(u32 reg) {
     asm!("movl %edx, -16(%rbp)");
     return ($u64 high << $u64 32) | ($u64 low);
 }
+
+void outb(u16 port, u8 val) {
+    asm!("movw 24(%rbp), %dx");
+    asm!("movb 16(%rbp), %al");
+    asm!("outb %al, %dx");
+}
+
+void outw(u16 port, u16 val) {
+    asm!("movw 24(%rbp), %dx");
+    asm!("movw 16(%rbp), %ax");
+    asm!("outw %ax, %dx");
+}
+
+u8 inb(u16 port) {
+    u8 ret;
+    asm!("movw 16(%rbp), %dx");
+    asm!("inb %dx, %al");
+    asm!("movb %al, -8(%rbp)");
+    return ret;
+}

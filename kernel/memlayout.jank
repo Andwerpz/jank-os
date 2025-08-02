@@ -13,13 +13,15 @@ struct GSData {
 //each process gets its own kstack for use in context switching and syscalls
 //kstacks should be mapped to the same vaddr in both kernel_pt and user_pt
 //this layout is relative to the kstack bottom
-[__GLOBAL_FIRST__] u64 PROC_TRAPFRAME       = 0x0000000000007000;
-[__GLOBAL_FIRST__] u64 PROC_KSTACK_TOP      = 0x0000000000007000;
-[__GLOBAL_FIRST__] u64 PROC_KSTACK_BOTTOM   = 0x0000000000001000;
-[__GLOBAL_FIRST__] u64 PROC_GUARD_PAGE      = 0x0000000000000000;
+[__GLOBAL_FIRST__] u64 KSTACK_SIZE            = 0x0000000000008000;
+[__GLOBAL_FIRST__] u64 KSTACK_TRAPFRAME       = 0x0000000000007000;
+[__GLOBAL_FIRST__] u64 KSTACK_TOP             = 0x0000000000007000;
+[__GLOBAL_FIRST__] u64 KSTACK_BOTTOM          = 0x0000000000001000;
+[__GLOBAL_FIRST__] u64 KSTACK_GUARD_PAGE      = 0x0000000000000000;
 
 //kernel layout
-[__GLOBAL_FIRST__] u64 KSTACK_BOTTOM        = 0xffffffff00000000;   //bottom of area to map kstacks
+[__GLOBAL_FIRST__] u64 KSTACK_AREA_BOTTOM   = 0xffffffff00000000;   //area to map kstacks
+[__GLOBAL_FIRST__] u64 KSTACK_AREA_TOP      = 0xfffffffff0000000;
 
 [__GLOBAL_FIRST__] u64 KERNEL_BOTTOM        = 0xfffffffff0000000;
 
