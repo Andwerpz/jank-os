@@ -173,6 +173,30 @@ void shell() {
                 break;
             }
         }   
+        else if(cmd[0] == "schedule") {
+            while(1) {
+                if(cmd.size() < 0x2) {
+                    sout << "Usage : schedule <file_ind>\n";
+                    break;
+                }
+
+                errno = 0x0;
+                u64 ind = stou64(cmd[1]);
+                if(errno) {
+                    sout << "file_ind malformed\n";
+                    break;
+                }
+
+                //initialize process
+                process* proc = create_process(f.buf, f.size);
+
+                //point %rsp to top of kernel stack
+                asm!("lea BOOTBOOT_STACK_TOP(%rip), %rsp");
+
+                //startup the scheduler
+                scheduler();
+            }
+        }
         else {
             sout << "Unknown command\n";
         }

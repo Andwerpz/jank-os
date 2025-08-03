@@ -27,11 +27,12 @@ struct trapframe {
 }
 
 struct process {
-    u64 pid;
-    u64 kstack_bottom;  
-    u64 brk;
-    u64 status;
-    u64* pt;
+    u64 pid;            // 0
+    u64 kstack_bottom;  // 8
+    u64 brk;            // 16
+    u64 status;         // 24
+    u64* pt;            // 32
+    i32 exit_status;    // 40
 }
 
 vector<process*> all_processes;
@@ -77,7 +78,7 @@ process* create_process(u8* elf_buf, u64 size) {
     proc.pt = pt_alloc_new();
     proc.pid = pid_ptr ++;
     proc.brk = USER_HEAP_BOTTOM;
-    proc.status = PROCESS_NEW;
+    proc.status = PROCESS_READY;
 
     //map kernel into process
     for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
@@ -162,41 +163,156 @@ void remove_process(u64 pid) {
     all_processes.erase(ind);
 }
 
-//this function never returns
+//once we call this, the initial kernel startup phase has finished
+//this function should never return. 
 void init_scheduler() {
     sout << "start init scheduler\n";   
 
-    //initialize idler process 
+    //initialize shell process 
 
-    //initialize some shell process?
-
-    //switch to idler process kernel stack
+    //point %rsp to top of kernel stack
+    asm!("lea BOOTBOOT_STACK_TOP(%rip), %rsp");
 
     //startup the scheduler
     scheduler();
 }
 
-//this assumes we're currently executing in some process's kernel stack
-//we still need kernel pagetables active as we'll want to access kernel heap structures
+//before jumping here, should make it so that %rsp points to a stack that we can safely
+//  put garbage on. you can use the kernel stack for this
+//this expects kernel pagetables to be active as we'll want to access kernel heap structures
 //this should choose a process to run then jump to that process
 //this should not have to cleanup, the saved execution context should make it so that 
 //  any stuff leftover is treated as trash memory. 
 void scheduler() {
     //look for next process to run
-    process* next_process = schedule_next_process();
+    process* proc = schedule_next_process();
+    u64 proc_trapframe_off = proc->kstack_bottom + KSTACK_TRAPFRAME;    // -16(%rbp)
+
+    //set process state to RUNNING
+    proc->status = PROCESS_RUNNING;
 
     //context switch to process and run it
+    asm!("movq -16(%rbp), %rax");
 
+    //iretq information
+    asm!("pushq $0x1B");        // SS
+    asm!("pushq 56(%rax)");     // %rsp
+    asm!("pushq 136(%rax)");    // rflags
+    asm!("pushq $0x23");        // CS
+    asm!("pushq 128(%rax)");    // %rip
+
+    //push registers
+    asm!("pushq 0(%rax)");      // %rax
+    asm!("pushq 8(%rax)");      // %rbx
+    asm!("pushq 16(%rax)");     // %rcx
+    asm!("pushq 24(%rax)");     // %rdx
+    asm!("pushq 32(%rax)");     // %rsi
+    asm!("pushq 40(%rax)");     // %rdi
+    asm!("pushq 48(%rax)");     // %rbp
+                                // skip %rsp
+    asm!("pushq 64(%rax)");     // %r8
+    asm!("pushq 72(%rax)");     // %r9
+    asm!("pushq 80(%rax)");     // %r10
+    asm!("pushq 88(%rax)");     // %r11
+    asm!("pushq 96(%rax)");     // %r12
+    asm!("pushq 104(%rax)");    // %r13
+    asm!("pushq 112(%rax)");    // %r14
+    asm!("pushq 120(%rax)");    // %r15
+
+    //pop registers
+    asm!("popq %r15");
+    asm!("popq %r14");
+    asm!("popq %r13");
+    asm!("popq %r12");
+    asm!("popq %r11");
+    asm!("popq %r10");
+    asm!("popq %r9");
+    asm!("popq %r8");
+                                // skip %rsp
+    asm!("popq %rbp");
+    asm!("popq %rdi");
+    asm!("popq %rsi");
+    asm!("popq %rdx");
+    asm!("popq %rcx");
+    asm!("popq %rbx");
+    asm!("popq %rax");
+
+    asm!("iretq");
 }
 
+//this should use whatever stack happens to be active to write to the user trapframe
+//the execution state should not be affected by this
 [__GLOBAL_FIRST__] extern u8 timer_interrupt_entry;
 void timer_interrupt_handler() {
     //we've just come from a timer interrupt
     asm!("timer_interrupt_entry:");
 
-    //change process state to READY
+    //we should've come from user mode
+    //cpu will have pushed these things onto the stack:
+    // SS
+    // %rsp
+    // RFLAGS
+    // CS
+    // %rip
+    //when we add preemption to syscalls, need to account for different stack contents
 
-    //save the current execution context to the corresponding trapframe
+    //push registers onto stack
+    asm!("pushq %rax");
+    asm!("pushq %rbx");
+    asm!("pushq %rcx");
+    asm!("pushq %rdx");
+    asm!("pushq %rsi");
+    asm!("pushq %rdi");
+    asm!("pushq %rbp");
+                                // skip %rsp
+    asm!("pushq %r8");
+    asm!("pushq %r9");
+    asm!("pushq %r10");
+    asm!("pushq %r11");
+    asm!("pushq %r12");
+    asm!("pushq %r13");
+    asm!("pushq %r14");
+    asm!("pushq %r15");
+
+    //get current process
+    asm!("call get_cur_proc");      //%rax now holds pointer to current process
+    asm!("movq PROCESS_READY(%rip), %rbx");
+    asm!("movq %rbx, 24(%rax)");    //change state of current process to READY
+
+    //put trapframe addr into %rax
+    asm!("movq 8(%rax), %rax"); //%rax now holds proc->kstack_bottom
+    asm!("movq KSTACK_TRAPFRAME(%rip), %rbx");
+    asm!("add %rbx, %rax");     //%rax now holds trapframe addr
+
+    //write to trapframe
+    asm!("popq 120(%rax)");     // %r15
+    asm!("popq 112(%rbx)");     // %r14
+    asm!("popq 104(%rbx)");     // %r13
+    asm!("popq 96(%rbx)");      // %r12
+    asm!("popq 88(%rbx)");      // %r11
+    asm!("popq 80(%rbx)");      // %r10
+    asm!("popq 72(%rbx)");      // %r9
+    asm!("popq 64(%rbx)");      // %r8
+                                // skip %rsp
+    asm!("popq 48(%rbx)");      // %rbp
+    asm!("popq 40(%rbx)");      // %rdi
+    asm!("popq 32(%rbx)");      // %rsi
+    asm!("popq 24(%rbx)");      // %rdx
+    asm!("popq 16(%rbx)");      // %rcx
+    asm!("popq 8(%rbx)");       // %rbx
+    asm!("popq 0(%rbx)");       // %rax
+
+    asm!("popq 128(%rax)");     // %rip 
+    asm!("add $8, %rsp");       // CS
+    asm!("popq 136(%rax)");     // RFLAGS
+    asm!("popq 56(%rax)");      // %rsp
+    asm!("add $8, %rsp");       // SS
+
+    //setup kernel execution context
+    asm!("swapgs");                                 //swap to kernel GS 
+    asm!("movq %gs:160, %rax");                     //swap to kernel pagetable
+    asm!("mov %rax, %cr3");
+    asm!("lea BOOTBOOT_STACK_TOP(%rip), %rsp");     //switch to initial kernel stack
 
     //jump to scheduler
     asm!("jmp scheduler");

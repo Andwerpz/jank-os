@@ -13,11 +13,11 @@ struct GSData {
 //each process gets its own kstack for use in context switching and syscalls
 //kstacks should be mapped to the same vaddr in both kernel_pt and user_pt
 //this layout is relative to the kstack bottom
-[__GLOBAL_FIRST__] u64 KSTACK_SIZE            = 0x0000000000008000;
-[__GLOBAL_FIRST__] u64 KSTACK_TRAPFRAME       = 0x0000000000007000;
-[__GLOBAL_FIRST__] u64 KSTACK_TOP             = 0x0000000000007000;
-[__GLOBAL_FIRST__] u64 KSTACK_BOTTOM          = 0x0000000000001000;
-[__GLOBAL_FIRST__] u64 KSTACK_GUARD_PAGE      = 0x0000000000000000;
+[__GLOBAL_FIRST__] u64 KSTACK_SIZE          = 0x0000000000008000;
+[__GLOBAL_FIRST__] u64 KSTACK_TRAPFRAME     = 0x0000000000007000;
+[__GLOBAL_FIRST__] u64 KSTACK_TOP           = 0x0000000000007000;
+[__GLOBAL_FIRST__] u64 KSTACK_BOTTOM        = 0x0000000000001000;
+[__GLOBAL_FIRST__] u64 KSTACK_GUARD_PAGE    = 0x0000000000000000;
 
 //kernel layout
 [__GLOBAL_FIRST__] u64 KSTACK_AREA_BOTTOM   = 0xffffffff00000000;   //area to map kstacks
@@ -36,6 +36,7 @@ struct GSData {
 [__GLOBAL_FIRST__] u64 BOOTBOOT_INFO        = 0xffffffffffe00000;   // bootboot struct virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_ENV         = 0xffffffffffe01000;   // environment string virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_CORE        = 0xffffffffffe02000;   // core loadable segment start
+[__GLOBAL_FIRST__] u64 BOOTBOOT_STACK_TOP   = 0x0000000000000000;   // initial kernel stack
 
 //userspace layout
 //for reference, top of userspace is          0x00007fffffffffff

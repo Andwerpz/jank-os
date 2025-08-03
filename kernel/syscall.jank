@@ -136,13 +136,21 @@ u64 syscall_handler() {
 }
 
 //terminates the calling process
-//this shouldn't even return, should directly jump to where the kernel left off. 
-//in the future when we do scheduling, this should instead transition to the scheduler. 
 u64 sys_exit(i32 status) {
-    //just jump to kernel_ret
-    //observe that we're already in kernel mode via syscall. 
-    asm!("mov 16(%rbp), %rax");
-    asm!("jmp kernel_ret");
+    //switch to kernel_pt
+    asm!("movq %gs:160, %rax");
+    asm!("mov %rax, %cr3");
+
+    //update cur process
+    process* proc = get_cur_proc();
+    proc->status = PROCESS_ZOMBIE;
+    proc->exit_status = status;
+
+    //point %rsp to top of kernel stack
+    asm!("lea BOOTBOOT_STACK_TOP(%rip), %rsp");
+
+    //jump to scheduler
+    scehduler();
 
     return 0x0;
 }
