@@ -1,0 +1,63 @@
+
+// https://wiki.osdev.org/8259_PIC
+// 8259 PIC (Programmable Interrupt Controller)
+// legacy chip to manage hardware interrupts. 
+// replaced by APIC in modern systems
+
+[__GLOBAL_FIRST__] u16 PIC_MASTER_COMMAND   = $u16 0x0020;
+[__GLOBAL_FIRST__] u16 PIC_MASTER_DATA      = $u16 0x0021;
+[__GLOBAL_FIRST__] u16 PIC_SLAVE_COMMAND    = $u16 0x00a0;
+[__GLOBAL_FIRST__] u16 PIC_SLAVE_DATA       = $u16 0x00a1;
+
+[__GLOBAL_FIRST__] u8 PIC_EOI               = $u8 0x20;
+
+// https://wiki.osdev.org/Programmable_Interval_Timer
+// PIT (Programmable Interval Timer)
+// oscillates at roughly 1.193182 MHz
+// has 3 output channels, the useful one is channel 0 for generating timer interrupts. 
+// channel 0 is connected to PIC IRQ 0
+
+[__GLOBAL_FIRST__] u16 PIT_CHANNEL0         = $u16 0x0040;
+[__GLOBAL_FIRST__] u16 PIT_COMMAND          = $u16 0x0043;
+
+i32 init_pic() {
+    sout << "start init pic\n";
+
+    //initialize PIC (send signal 0x11)
+    //after this, both PICs will wait for 3 extra initialization bytes:
+    // - Its vector offset. (ICW2)
+    // - Tell it how it is wired to master/slaves. (ICW3)
+    // - Gives additional information about the environment. (ICW4)
+    outb(PIC_MASTER_COMMAND, $u8 0x11);
+    outb(PIC_SLAVE_COMMAND, $u8 0x11);
+
+    //ICW2
+    outb(PIC_MASTER_DATA, $u8 0x20);
+    outb(PIC_SLAVE_DATA, $u8 0x28);
+
+    //ICW3
+    outb(PIC_MASTER_DATA, $u8 0x04);    //tell master there is slave pic at IRQ2
+    outb(PIC_SLAVE_DATA, $u8 0x02);     //tell slave its cascade identity
+
+    //ICW4, have PICs use 8086 mode
+    outb(PIC_MASTER_DATA, $u8 0x01);
+    outb(PIC_SLAVE_DATA, $u8 0x01);
+
+    //set PIC masks
+    outb(PIC_MASTER_DATA, $u8 0b11111110);
+    outb(PIC_SLAVE_DATA, $u8 0b11111111);
+
+    //setup PIT
+    {
+        u64 divisor = $u64 (1193182 / 100); // 100 Hz
+
+        //channel 0, access mode: lobyte/hibyte, mode 3 (square wave)
+        outb(PIT_COMMAND, $u8 0b00110110);
+
+        outb(PIT_CHANNEL0, $u8 (divisor & 0xff));           //low byte
+        outb(PIT_CHANNEL0, $u8 ((divisor >> 0x8) & 0xff));  //high byte
+    }
+
+    sout << "done init pic\n";
+    return 0;
+}

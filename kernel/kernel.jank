@@ -17,6 +17,7 @@
 #include "utils.jank";
 #include "idt.jank";
 #include "scheduler.jank";
+#include "pic.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -24,6 +25,7 @@
 [IDT] i32 INIT_IDT_STATUS = init_idt();
 [PAGING] i32 INIT_PAGING_STATUS = init_paging();
 [SYSCALL] i32 INIT_SYSCALL_STATUS = init_syscall();
+[PIC] i32 INIT_PIC_STATUS = init_pic();
 
 void check_paging_enabled() {
     u64 cr0;
@@ -176,10 +178,6 @@ i32 main() {
         serial_print("KHEAP PTR : ");
         serial_println($void* kheap_brk);
     }
-
-    u64 charCnt = $u64 0;
-    u64 lineCnt = $u64 0;
-    psf_header* font = $psf_header* @_binary_font_psf_start;
 
     shell();
 
