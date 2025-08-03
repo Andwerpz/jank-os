@@ -15,7 +15,6 @@
 #include "gdt.jank";
 #include "syscall.jank";
 #include "utils.jank";
-#include "exec.jank";
 #include "idt.jank";
 #include "scheduler.jank";
 

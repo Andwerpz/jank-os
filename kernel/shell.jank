@@ -95,84 +95,6 @@ void shell() {
                 sout << "\n";
             }
         }
-        else if(cmd[0] == "exec") {
-            while(1) {
-                if(cmd.size() < 0x2) {
-                    sout << "Usage : exec <file_ind>\n";
-                    break;
-                }
-
-                errno = 0x0;
-                u64 ind = stou64(cmd[1]);
-                if(errno) {
-                    sout << "file_ind malformed\n";
-                    break;
-                }
-
-                file& f = files[ind];
-                u64 entry_off;
-                u64* user_pt = pt_alloc_new();
-                if(load_elf(f.buf, f.size, user_pt, entry_off)) {
-                    sout << "could not load elf\n";
-                    break;
-                }
-                sout << "entry offset : " << ($void* entry_off) << "\n";
-
-                curr_process = $process* malloc(sizeof(process));
-                curr_process->brk = USER_HEAP_BOTTOM;
-
-                //map kernel into user pagetable. Just copy the mappings
-                u64* kernel_pt = pt_get_current();
-                for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
-                    void* vaddr = $void* i;
-                    if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
-                        u64 perm_flags;
-                        void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
-                        pt_map_page(user_pt, vaddr, paddr, perm_flags);
-                        if($u64 vaddr < BOOTBOOT_MMIO) sout << "MAPPED : " << vaddr << " " << paddr << "\n";
-                    }
-                }
-
-                sout << "GDT PADDR : " << pt_translate(user_pt, $void* GDT_PAGE) << "\n";
-
-                sout << "done mapping kernel into user_pt\n";
-
-                //map user stack
-                for(u64 i = USER_STACK_BOTTOM; i <= USER_STACK_TOP; i += PAGE_SIZE) {
-                    pt_alloc_and_map_page(user_pt, $void* i, PTE_USER | PTE_WRITEABLE);
-                }
-
-                //map guard page
-                pt_alloc_and_map_page(user_pt, $void* USER_GUARD_PAGE, 0x0);
-                sout << "done mapping user memory\n";
-
-                sout << "USER STACK TOP PADDR : " << pt_translate(user_pt, $void* USER_STACK_TOP) << "\n";
-                sout << "USER ENTRY POINT PADDR : " << pt_translate(user_pt, $void* entry_off) << "\n";
-                
-                i32 walklevel = 0;
-                sout << "USER ENTRY PTE : " << $void* pt_walk(user_pt, $void* entry_off, walklevel) << "\n";
-                sout << "WALKLEVEL : " << walklevel << "\n";
-
-                //execute 
-                i32 status = exec_user_program(user_pt, entry_off);
-                sout << "exec status : " << status << "\n";
-
-                //unmap kernel from user pagetable. 
-                //make sure to do this, as pt_free_pagetable() also frees the underlying pages
-                for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
-                    void* vaddr = $void* i;
-                    if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
-                        pt_unmap_page(user_pt, vaddr);
-                    }
-                }
-                
-                pt_free_pagetable(user_pt);
-                free($void* curr_process, sizeof(process));
-
-                sout << "lets go\n";
-                break;
-            }
-        }   
         else if(cmd[0] == "schedule") {
             while(1) {
                 if(cmd.size() < 0x2) {
@@ -188,10 +110,12 @@ void shell() {
                 }
 
                 //initialize process
+                file& f = files[ind];
                 process* proc = create_process(f.buf, f.size);
+                sout << "PROC ADDR : " << proc << "\n";
 
                 //point %rsp to top of kernel stack
-                asm!("lea BOOTBOOT_STACK_TOP(%rip), %rsp");
+                asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
 
                 //startup the scheduler
                 scheduler();

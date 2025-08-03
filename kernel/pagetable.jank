@@ -62,6 +62,16 @@ u64* pt_get_current() {
     return ret;
 }
 
+void pt_switch(u64* npt) {
+    asm!("movq 16(%rbp), %rax");
+    asm!("mov %rax, %cr3");
+}
+
+void pt_switch_to_kernel() {
+    asm!("movq %gs:0, %rax");
+    asm!("mov %rax, %cr3");
+}
+
 //given virtual page address, walks along the provided pagetable
 //stops traversing at level 'level' and returns the PTE to the next page at that level
 // if(create), then it creates stuff wherever needed

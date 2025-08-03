@@ -25,14 +25,8 @@ i32 init_syscall() {
     pt_map_page(kernel_pt, $void* GSDATA_PAGE, palloc(), PTE_WRITEABLE);
 
     GSData* gs_data = $GSData* GSDATA_PAGE;
-    gs_data->syscall_stack = $void* SYSCALL_STACK_TOP;
     gs_data->kernel_pt = kernel_pt;
     wrmsr(GS_BASE_MSR, $u64 gs_data);
-
-    //alloc and map syscall stack
-    for(u64 i = SYSCALL_STACK_BOTTOM; i < SYSCALL_STACK_TOP; i += PAGE_SIZE) {
-        pt_map_page(kernel_pt, $void* i, palloc(), PTE_WRITEABLE);
-    }
 
     sout << "done init syscalls\n";
     return 0;
@@ -47,17 +41,14 @@ i32 init_syscall() {
 //jank syscalls
 [__GLOBAL_FIRST__] u64 SYS_SERIAL_PRINT = $u64 1000;
 
+//for now, this is just using the user stack to save the execution context
 [__GLOBAL_FIRST__] extern u8 syscall_handler_entry;
 void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", but we shouldn't use it
     asm!("syscall_handler_entry:");
     asm!("swapgs");
 
-    //swap to syscall stack
-    asm!("movq %rsp, %gs:168"); //save process stack 
-    asm!("movq %gs:152, %rsp"); //load syscall stack
-
     //push sysret info
-    asm!("pushq %gs:168");  //user stack pointer
+    asm!("pushq %rsp");     //user stack pointer
     asm!("pushq %r11");     //user rflags
     asm!("pushq %rcx");     //user RIP
 
@@ -77,11 +68,15 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("pushq %r14");
     asm!("pushq %r15");
 
-    //set kernel global base pointer (%r15)
-    asm!("movq %gs:120, %r15");
+    //switch to process kstack
+    asm!("movq %rsp, %gs:8");       //save original %rsp
+    asm!("movq %gs:16, %rsp");      //%rsp now points to top of process kstack
 
     //call higher level syscall handler
     asm!("call syscall_handler");
+
+    //switch to user stack
+    asm!("movq %gs:8, %rsp");
 
     //pop all registers (except for %rax)
     asm!("popq %r15");
@@ -138,8 +133,7 @@ u64 syscall_handler() {
 //terminates the calling process
 u64 sys_exit(i32 status) {
     //switch to kernel_pt
-    asm!("movq %gs:160, %rax");
-    asm!("mov %rax, %cr3");
+    pt_switch_to_kernel();
 
     //update cur process
     process* proc = get_cur_proc();
@@ -147,10 +141,10 @@ u64 sys_exit(i32 status) {
     proc->exit_status = status;
 
     //point %rsp to top of kernel stack
-    asm!("lea BOOTBOOT_STACK_TOP(%rip), %rsp");
+    asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
 
     //jump to scheduler
-    scehduler();
+    scheduler();
 
     return 0x0;
 }
@@ -161,48 +155,48 @@ u64 sys_serial_print(u8* buf, u64 amt) {
 }
 
 void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 offset) {
-    // save user pt
-    u64* user_pt;
-    asm!("movq %cr3, %rax");
-    asm!("movq %rax, -8(%rbp)");
+    // switch to kernel_pt
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
 
-    // switch cr3 to kernel pt
-    asm!("movq %gs:160, %rax");
-    asm!("mov %rax, %cr3");
+    process* proc = get_cur_proc();
 
     // check if len is page aligned
     if(len % PAGE_SIZE != 0x0) {
+        // set user pt back
+        asm!("movq -8(%rbp), %rax");
+        asm!("movq %rax, %cr3");
+
         return $void* $u64 -1;
     }
 
     // check if we've ran out of heap space
-    if(curr_process->brk + len > USER_HEAP_TOP) {
+    if(proc->brk + len > USER_HEAP_TOP) {
+        // set user pt back
+        asm!("movq -8(%rbp), %rax");
+        asm!("movq %rax, %cr3");
+
         return $void* $u64 -1;
     }
 
     // alloc mem
-    void* vaddr = $void* curr_process->brk;
+    void* vaddr = $void* proc->brk;
     for(u64 i = 0x0; i < len; i += PAGE_SIZE) {
         // void pt_alloc_and_map_page(u64* pt, void* vaddr, u64 leaf_flags)
         pt_alloc_and_map_page(user_pt, $void* ($u64 vaddr + i), map_flags | PTE_USER);
     }
-    curr_process->brk += len;
+    proc->brk += len;
 
     // set user pt back
-    asm!("movq -8(%rbp), %rax");
-    asm!("movq %rax, %cr3");
+    pt_switch(user_pt);
 
     return vaddr; 
 }
 
 i32 sys_munmap(void* addr, u64 len) {
-    u64* user_pt;
-    asm!("movq %cr3, %rax");
-    asm!("movq %rax, -8(%rbp)");
-
-    // switch cr3 to kernel pt
-    asm!("movq %gs:160, %rax");
-    asm!("mov %rax, %cr3");
+    // switch to kernel_pt
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
 
     if($u64 addr % PAGE_SIZE != 0x0 || len % PAGE_SIZE != 0x0) return -1;
     // void pt_unmap_page(u64* pt, void* vaddr)
@@ -218,8 +212,7 @@ i32 sys_munmap(void* addr, u64 len) {
     }
 
     // set user pt back
-    asm!("movq -8(%rbp), %rax");
-    asm!("movq %rax, %cr3");
+    pt_switch(user_pt);
 
     return 0;
 }

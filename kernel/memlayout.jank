@@ -2,10 +2,9 @@
 [__GLOBAL_FIRST__] u64 PAGE_SIZE = $u64 4096;
 
 struct GSData {
-    ExecutionContext kernel_context;
-    void* syscall_stack;                //152
-    u64* kernel_pt;                     //160
-    void* saved_stack;                  //168 : for saving the process stack during syscalls
+    u64* kernel_pt;                     //0
+    void* saved_stack;                  //8 : for saving the process stack during syscalls
+    u64 cur_proc_kstack_top;            //16 : set in the scheduler
 }
 
 //process kstack layout
@@ -26,10 +25,8 @@ struct GSData {
 [__GLOBAL_FIRST__] u64 KERNEL_BOTTOM        = 0xfffffffff0000000;
 
 [__GLOBAL_FIRST__] u64 GSDATA_PAGE          = 0xfffffffff7000000;   // holds the GSData struct
-[__GLOBAL_FIRST__] u64 SYSCALL_STACK_BOTTOM = 0xfffffffff7001000;   // 16 KB
-[__GLOBAL_FIRST__] u64 SYSCALL_STACK_TOP    = 0xfffffffff7005000;   
-[__GLOBAL_FIRST__] u64 GDT_PAGE             = 0xfffffffff7005000;
-[__GLOBAL_FIRST__] u64 IDT_PAGE             = 0xfffffffff7006000;
+[__GLOBAL_FIRST__] u64 GDT_PAGE             = 0xfffffffff7001000;
+[__GLOBAL_FIRST__] u64 IDT_PAGE             = 0xfffffffff7002000;
 
 [__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO        = 0xfffffffff8000000;   // memory mapped IO virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_FB          = 0xfffffffffc000000;   // frame buffer virtual address
