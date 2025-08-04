@@ -19,3 +19,9 @@ should also implement locks. x86_64 has some dedicated atomic instructions, so w
 
 what should we store in the process struct?
 
+
+really nice resource
+https://github.com/dreamportdev/Osdev-Notes
+
+
+so it seems like we need a TSS setup in order for interrupts to switch from user to kernel mode. 

@@ -302,21 +302,21 @@ void timer_interrupt_handler() {
 
     //write to trapframe
     asm!("popq 120(%rax)");     // %r15
-    asm!("popq 112(%rbx)");     // %r14
-    asm!("popq 104(%rbx)");     // %r13
-    asm!("popq 96(%rbx)");      // %r12
-    asm!("popq 88(%rbx)");      // %r11
-    asm!("popq 80(%rbx)");      // %r10
-    asm!("popq 72(%rbx)");      // %r9
-    asm!("popq 64(%rbx)");      // %r8
+    asm!("popq 112(%rax)");     // %r14
+    asm!("popq 104(%rax)");     // %r13
+    asm!("popq 96(%rax)");      // %r12
+    asm!("popq 88(%rax)");      // %r11
+    asm!("popq 80(%rax)");      // %r10
+    asm!("popq 72(%rax)");      // %r9
+    asm!("popq 64(%rax)");      // %r8
                                 // skip %rsp
-    asm!("popq 48(%rbx)");      // %rbp
-    asm!("popq 40(%rbx)");      // %rdi
-    asm!("popq 32(%rbx)");      // %rsi
-    asm!("popq 24(%rbx)");      // %rdx
-    asm!("popq 16(%rbx)");      // %rcx
-    asm!("popq 8(%rbx)");       // %rbx
-    asm!("popq 0(%rbx)");       // %rax
+    asm!("popq 48(%rax)");      // %rbp
+    asm!("popq 40(%rax)");      // %rdi
+    asm!("popq 32(%rax)");      // %rsi
+    asm!("popq 24(%rax)");      // %rdx
+    asm!("popq 16(%rax)");      // %rcx
+    asm!("popq 8(%rax)");       // %rbx
+    asm!("popq 0(%rax)");       // %rax
 
     asm!("popq 128(%rax)");     // %rip 
     asm!("add $8, %rsp");       // CS

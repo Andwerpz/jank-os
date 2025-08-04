@@ -17,7 +17,7 @@
 [__GLOBAL_FIRST__] u8 GDT_FLAGS_LONGMODE    = $u8 0b00100000;   //if set, this segment is a 64-bit code segment
                                                                 //for any other type of segment (other code types or any data segment), this should be 0
 
-struct GDTEntry {
+struct GDTSegmentDescriptor {
     u16 limit;
     u16 base_low;
     u8  base_middle;
@@ -26,25 +26,60 @@ struct GDTEntry {
     u8  base_high;
 }
 
+struct GDTSystemDescriptor {
+    u16 limit0;
+    u16 base0;
+    u8 base1;
+    u8 access;
+    u8 flags;
+    u8 base2;
+    u32 base3;
+    u32 reserved;
+}
+
 struct GDTPointer {
     u16 limit;
     u64 base;
 }
 
+struct TSS {
+    u32 reserved0;
+    u64 rsp0;        
+    u64 rsp1;        
+    u64 rsp2;       
+    u64 reserved1;
+    u64 ist1;        
+    u64 ist2;
+    u64 ist3;
+    u64 ist4;
+    u64 ist5;
+    u64 ist6;
+    u64 ist7;
+    u64 reserved2;
+    u16 reserved3;
+    u16 io_bitmap_offset;
+}
+
 // https://wiki.osdev.org/Global_Descriptor_Table
 i32 init_gdt() {
     serial_println("start init gdt");
+    u64* kernel_pt = pt_get_current();
 
     //map page for GDT
-    u64* kernel_pt = pt_get_current();
     pt_map_page(kernel_pt, $void* GDT_PAGE, palloc(), PTE_WRITEABLE);
+    memset($void* GDT_PAGE, 0, PAGE_SIZE);  //clear page
+    GDTSegmentDescriptor* gdt = $GDTSegmentDescriptor* GDT_PAGE;
 
-    GDTPointer* gdt_ptr = $GDTPointer* GDT_PAGE;
-    GDTEntry* gdt = $GDTEntry* @($u8* GDT_PAGE)[16];
+    //initialize TSS
+    pt_map_page(kernel_pt, $void* TSS_PAGE, palloc(), PTE_WRITEABLE);
+    memset($void* TSS_PAGE, 0, PAGE_SIZE);
+    TSS* tss = $TSS* TSS_PAGE;
+    tss->rsp0 = BOOTBOOT_STACK_TOP; 
 
-    //setup GDTPointer
-    gdt_ptr->limit = $u16 sizeof(GDTEntry) * $u16 5 - $u16 1;
-    gdt_ptr->base = $u64 gdt;
+    //create GDTPointer
+    GDTPointer* gdt_ptr = $GDTPointer* malloc(sizeof(GDTPointer));
+    gdt_ptr->limit = $u16 sizeof(GDTSegmentDescriptor) * $u16 7 - $u16 1;  // 7 entries (including TSS which takes 2)
+    gdt_ptr->base = $u64 gdt;    
 
     //setup GDT
     gdt_set_entry(0, $u32 0, $u32 0, $u8 0, $u8 0, gdt); // NULL segment
@@ -52,20 +87,28 @@ i32 init_gdt() {
     gdt_set_entry(2, $u32 0, $u32 0xffffffff, $u8 0x92, GDT_FLAGS_GRANULARITY, gdt);   // kernel Data segment
     gdt_set_entry(3, $u32 0, $u32 0xffffffff, $u8 0xf2, GDT_FLAGS_GRANULARITY, gdt);   // user data segment
     gdt_set_entry(4, $u32 0, $u32 0xffffffff, $u8 0xfa, GDT_FLAGS_GRANULARITY | GDT_FLAGS_LONGMODE, gdt);   // user code segment
-
-    for(i32 i = 0; i < 5; i++){
-        serial_print("GDT : ");
-        serial_println($void* ($u64* gdt)[i]);
-    }
+    
+    // TSS entry (takes 2 GDT entries: 5 and 6)
+    gdt_set_system_entry(5, 
+        TSS_PAGE, 
+        $u32 sizeof(TSS) - $u32 1, 
+        GDT_ACCESS_PRESENT | GDT_ACCESS_EXECUTABLE | GDT_ACCESS_ACCESSED, 
+        $u8 0x00, 
+        gdt
+    );
 
     //flush changes
     gdt_flush(gdt_ptr);
+    
+    // Load TSS
+    asm!("mov $0x28, %ax"); 
+    asm!("ltr %ax");
 
     serial_println("done init gdt");
     return 0;
 }
 
-void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 flags, GDTEntry* gdt) {
+void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 flags, GDTSegmentDescriptor* gdt) {
     gdt[idx].base_low     = $u16 (base & $u32 0xffff);
     gdt[idx].base_middle  = $u8 ((base >> $u32 16) & $u32 0xff);
     gdt[idx].base_high    = $u8 ((base >> $u32 24) & $u32 0xff);
@@ -74,6 +117,19 @@ void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 flags, GDTEntry* 
     gdt[idx].flags       |= flags;
     gdt[idx].access       = access;
 }
+
+void gdt_set_system_entry(i32 idx, u64 base, u32 limit, u8 access, u8 flags, GDTSegmentDescriptor* gdt) {
+    GDTSystemDescriptor* ent = $GDTSystemDescriptor* @gdt[idx];
+    ent->limit0           = $u16 (limit & $u32 0xffff);
+    ent->base0            = $u16 (base & 0xffff);
+    ent->base1            = $u8 ((base >> $u64 16) & 0xff);
+    ent->access           = access;
+    ent->flags            = $u8 ((limit >> $u32 16) & $u32 0x0f);
+    ent->flags           |= flags;
+    ent->base2            = $u8 ((base >> $u64 24) & 0xff);
+    ent->base3            = $u32 ((base >> $u64 32) & 0xffffffff);
+    ent->reserved         = $u32 0;
+}   
 
 void gdt_flush(GDTPointer* ptr) {
     //set new GDT
