@@ -330,6 +330,10 @@ void timer_interrupt_handler() {
     asm!("mov %rax, %cr3");
     asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");     //switch to initial kernel stack
 
+    //send EOI
+    asm!("movb $0x20, %al");
+    asm!("outb %al, $0x20");
+
     //jump to scheduler
     asm!("jmp scheduler");
 }

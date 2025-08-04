@@ -3,11 +3,11 @@
 #global_node PMA [SERIAL];
 #global_node PAGING [SERIAL, PMA];
 #global_node MALLOC [PMA, PAGING];
-#global_node GDT [MALLOC, SERIAL];
-#global_node IDT [MALLOC, SERIAL];
 #global_node SERIAL_STREAM [MALLOC, SERIAL];
-#global_node SYSCALL [MALLOC, SERIAL_STREAM];
+#global_node GDT [MALLOC, SERIAL_STREAM];
+#global_node IDT [MALLOC, SERIAL_STREAM];
 #global_node PIC [MALLOC, SERIAL_STREAM];
+#global_node SYSCALL [MALLOC, SERIAL_STREAM];
 
 [__GLOBAL_FIRST__] u32 EFER_MSR             = $u32 0xc0000080;
 [__GLOBAL_FIRST__] u32 STAR_MSR             = $u32 0xc0000081;

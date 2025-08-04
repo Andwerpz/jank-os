@@ -40,6 +40,7 @@ i32 init_idt() {
 
     //setup timer interrupt handler
     idt_set_entry(32, $u64 @timer_interrupt_entry, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
+    sout << "TIMER INTERRUPT ENTRY : " << $void* @timer_interrupt_entry << "\n";
 
     //flush changes
     idt_flush(idt_ptr);

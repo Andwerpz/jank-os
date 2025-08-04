@@ -165,7 +165,7 @@ u64 sys_sched_yield() {
     panic("sys_sched_yield() : need to implement syscall preemption");
     
     //trigger timer interrupt
-    asm!("int 0x20");
+    asm!("int $0x20");
 
     return 0x0;
 }
