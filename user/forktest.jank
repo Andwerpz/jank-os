@@ -23,7 +23,10 @@ void serial_println(T x) {
 
 i32 main() {
 
-    sys_fork();
+    for(i32 i = 0; i < 5; i++){
+        sys_fork();
+    }
+
     u64 pid = sys_getpid();
     string out = "PID : " + to_string(pid) + "\n";
     serial_print(out);

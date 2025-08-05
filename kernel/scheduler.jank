@@ -34,6 +34,7 @@ struct process {
     u64 status;         // 24
     u64* pt;            // 32
     i32 exit_status;    // 40
+    file_descriptor*[64] fd_table;  //empty fds will be nullptr
 }
 
 vector<process*> all_processes;
@@ -62,26 +63,27 @@ process* schedule_next_process() {
         }
     }
 
-    //shouldn't get here
+    panic("schedule_next_process() : you shouldn't be here D:");
     return $process* nullptr;
 }
 
 u64 kstack_ptr = KSTACK_AREA_BOTTOM; //for now, just incrementally map new kstacks
 u64 pid_ptr = 0x0;
 
-//should allocate a kstack for the new process
-//panics if there isn't enough room for a new kstack
-//assumes we're currently using the kernel_pt
-process* create_process(u8* elf_buf, u64 size) {
+//creates a dummy process
+//you still need to do some stuff, this just takes care of some busywork
+[__GLOBAL_FIRST__] u64 PROCESS_CREATE_STACK     = $u64 1 << $u64 0;
+[__GLOBAL_FIRST__] u64 PROCESS_CREATE_FDTABLE   = $u64 1 << $u64 1;
+process* create_process(u64 flags) {
     u64* kernel_pt = pt_get_current();
 
     process* proc = $process* malloc(sizeof(process));
     proc->pt = pt_alloc_new();
     proc->pid = pid_ptr ++;
     proc->brk = USER_HEAP_BOTTOM;
-    proc->status = PROCESS_READY;
+    proc->status = PROCESS_NEW;
 
-    //map kernel into process
+    //map kernel
     for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
         void* vaddr = $void* i;
         if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
@@ -90,7 +92,7 @@ process* create_process(u8* elf_buf, u64 size) {
             pt_map_page(proc->pt, vaddr, paddr, perm_flags);
         }
     }
-    
+
     //alloc new kstack for process, need to map in kernel as well
     passert(kstack_ptr + KSTACK_SIZE <= KSTACK_AREA_TOP, "create_process() : ran out of room for kstacks");
     proc->kstack_bottom = kstack_ptr;
@@ -101,24 +103,25 @@ process* create_process(u8* elf_buf, u64 size) {
     }
     kstack_ptr += KSTACK_SIZE;
 
-    //map user stack
-    for(u64 i = USER_STACK_BOTTOM; i <= USER_STACK_TOP; i += PAGE_SIZE) {
-        pt_alloc_and_map_page(proc->pt, $void* i, PTE_USER | PTE_WRITEABLE);
+    if(flags & PROCESS_CREATE_STACK) {
+        //map user stack
+        for(u64 i = USER_STACK_BOTTOM; i <= USER_STACK_TOP; i += PAGE_SIZE) {
+            pt_alloc_and_map_page(proc->pt, $void* i, PTE_USER | PTE_WRITEABLE);
+        }
+
+        //map guard page
+        pt_alloc_and_map_page(proc->pt, $void* USER_GUARD_PAGE, 0x0);
     }
 
-    //map guard page
-    pt_alloc_and_map_page(proc->pt, $void* USER_GUARD_PAGE, 0x0);
-
-    //map elf 
-    u64 entry_off;
-    if(load_elf(elf_buf, size, proc->pt, entry_off)) {
-        panic("failed to load elf");
+    if(flags & PROCESS_CREATE_FDTABLE) {
+        proc->fd_table[0] = create_serial_fd(O_RDONLY); //STDIN
+        proc->fd_table[1] = create_serial_fd(O_WRONLY); //STDOUT
+        proc->fd_table[2] = create_serial_fd(O_WRONLY); //STDERR
     }
 
     //write initial execution context to trapframe
     trapframe* tf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
     tf->rsp = USER_STACK_TOP;
-    tf->rip = entry_off;
     tf->rflags = 0x202;     //enable timer interrupt
     tf->pt = $u64 proc->pt;
 
@@ -129,27 +132,107 @@ process* create_process(u8* elf_buf, u64 size) {
     return proc;
 }
 
-//creates a child process from the parent
-//modifies the child's %rax to be 0
-process* create_process(process* parent) {
-    u64* kernel_pt = pt_get_current();
+//create new process with ELF code
+process* create_process(u8* elf_buf, u64 size) {
+    process* proc = create_process(PROCESS_CREATE_STACK | PROCESS_CREATE_FDTABLE);
 
-    //TODO
+    //map elf 
+    u64 entry_off;
+    if(load_elf(elf_buf, size, proc->pt, entry_off)) {
+        panic("failed to load elf");
+    }
 
-    return $process* 0x0;
+    //set entry point
+    trapframe* tf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
+    tf->rip = entry_off;
+
+    //make ready
+    proc->status = PROCESS_READY;
+
+    return proc;
 }
 
-//should only be able to remove zombie processes
-void remove_process(u64 pid) {
-    //find process
+//creates a clone of the parent process's user memory state and other stuff
+//does not clone register state
+process* create_process(process* parent) {
+    process* child = create_process(0x0);
+
+    //copy process info
+    child->brk = parent->brk;
+    child->fd_table = parent->fd_table;
+
+    //increment refcount of file descriptors
+    for(i32 i = 0; i < 64; i++){
+        if($void* child->fd_table[i] == nullptr) continue;
+        child->fd_table[i]->refcount ++;
+    }
+
+    //copy parent lower half mappings
+    pt_copy_lower_half(parent->pt, child->pt);
+
+    return proc;
+}
+
+//copies all mappings from pt to out_pt that exist in the lower half
+//allocs new pages and copies the data over as well
+void pt_copy_lower_half(u64* pt, u64* out_pt, u64 vaddr, u64 level) {
+    for(u64 i = 0x0; i < $u64 512; i++){
+        if(level == 0x3 && i == $u64 256) break; 
+
+        u64 cvaddr = vaddr | (i << ($u64 12 + $u64 9 * level));
+        u64 pte = pt[i];    
+        if(!(pte & PTE_PRESENT)) continue;
+
+        //if this is not a leaf, copy subtree
+        if(level) pt_copy_lower_half(pt, out_pt, cvaddr, level - 0x1);
+
+        //if this is a leaf, copy mapping
+        if(!level) {
+            u64 flags = pte_get_permission_flags(pte);
+            void* paddr = $void* pte_get_addr(pte);
+            void* npaddr = palloc();
+
+            pt_map_page(out_pt, $void* cvaddr, npaddr, flags);
+            memcpy(npaddr, paddr, PAGE_SIZE);
+        }
+    }
+}
+
+void pt_copy_lower_half(u64* pt, u64* out_pt) {
+    pt_copy_lower_half(pt, out_pt, 0x0, 0x3);
+}
+
+//on success, returns a pointer to a process
+//on failure, panics
+process* find_process(u64 pid) {
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
         if(all_processes[i]->pid != pid) continue;
-        if(ind != all_processes.size()) panic("remove_process() : found two processes with same pid");
+        if(ind != all_processes.size()) panic("find_process() : found two processes with same pid");
         ind = i;
     }
-    if(ind == all_processes.size()) panic("remove_process() : could not find process");
-    process* proc = all_processes[ind];
+    if(ind == all_processes.size()) panic("find_process() : could not find process");
+    return all_processes[ind];
+}
+
+//all new processes should go through this to become ready
+//does some last checks and setup
+void make_process_ready(process* proc) {
+
+}
+
+//marks process as dead, cleans up process. 
+//the process will still exist in the scheduler as a zombie
+//if this is the current process, jumps to scheduler. 
+void kill_process(u64 pid, i32 status) {
+    
+}
+
+//this completely gets rid of the process from the scheduler
+//should only be able to remove zombie processes
+void remove_process(u64 pid) {
+    //find process
+    process* proc = find_process(pid);
 
     //make sure process is a zombie process
     passert(proc->status == PROCESS_ZOMBIE, "remove_process() : process must be zombie");
@@ -167,6 +250,12 @@ void remove_process(u64 pid) {
     for(u64 i = 0x0; i < KSTACK_SIZE; i++){
         void* vaddr = $void* (proc->kstack_bottom + i);
         pt_unmap_page(kernel_pt, vaddr);
+    }
+
+    //free file descriptors
+    for(i32 i = 0; i < 64; i++){
+        if(proc->fd_table[i] == nullptr) continue;
+        sys_close(i);
     }
 
     //free pagetable + underlying pages

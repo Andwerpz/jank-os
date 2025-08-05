@@ -1,0 +1,38 @@
+
+[__GLOBAL_FIRST__] u64 O_RDONLY = $u64 1 << $u64 0;
+[__GLOBAL_FIRST__] u64 O_WRONLY = $u64 1 << $u64 1;
+[__GLOBAL_FIRST__] u64 O_RDWR   = $u64 1 << $u64 2;
+[__GLOBAL_FIRST__] u64 O_APPEND = $u64 1 << $u64 3;
+
+[__GLOBAL_FIRST__] u64 FD_TYPE_SERIAL = 0x0;
+
+[__GLOBAL_FIRST__] file_ops* FILE_OPS_SERIAL;
+
+struct file_ops {
+    fn<u64(file_descriptor*, u8*, u64)> op_read;
+    fn<u64(file_descriptor*, u8*, u64)> op_write;
+    fn<u64(file_descriptor*, u64, i32)> op_lseek;
+    fn<i32(file_descriptor*)> op_close;
+}
+
+struct file_descriptor {
+    u64 type;
+    void* resource_ptr;
+    file_ops* ops;
+    u64 position;
+    u64 flags;
+    u64 refcount;
+}
+
+file_descriptor* create_serial_fd(u64 flags) {
+    file_descriptor* fd = malloc(sizeof(file_descriptor));
+
+    fd->type = FD_TYPE_SERIAL;
+    fd->resource_ptr = nullptr;
+    fd->ops = FILE_OPS_SERIAL;
+    fd->position = 0x0;
+    fd->flags = flags;
+    fd->refcount = 0x1;
+
+    return fd;
+}
