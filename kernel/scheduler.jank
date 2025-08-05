@@ -6,24 +6,25 @@
 [__GLOBAL_FIRST__] u64 PROCESS_IDLE         = 0x4;
 
 struct trapframe {
-    u64 rax;
-    u64 rbx;
-    u64 rcx;
-    u64 rdx;
-    u64 rsi;
-    u64 rdi;
-    u64 rbp;
-    u64 rsp;
-    u64 r8;
-    u64 r9;
-    u64 r10;
-    u64 r11;
-    u64 r12;
-    u64 r13;
-    u64 r14;
-    u64 r15;
-    u64 rip;
-    u64 rflags;
+    u64 rax;        // 0
+    u64 rbx;        // 8
+    u64 rcx;        // 16
+    u64 rdx;        // 24
+    u64 rsi;        // 32
+    u64 rdi;        // 40
+    u64 rbp;        // 48
+    u64 rsp;        // 56
+    u64 r8;         // 64
+    u64 r9;         // 72
+    u64 r10;        // 80
+    u64 r11;        // 88
+    u64 r12;        // 96
+    u64 r13;        // 104
+    u64 r14;        // 112
+    u64 r15;        // 120
+    u64 rip;        // 128
+    u64 rflags;     // 136
+    u64 pt;         // 144
 }
 
 struct process {
@@ -119,12 +120,23 @@ process* create_process(u8* elf_buf, u64 size) {
     tf->rsp = USER_STACK_TOP;
     tf->rip = entry_off;
     tf->rflags = 0x202;     //enable timer interrupt
+    tf->pt = $u64 proc->pt;
 
     //add to scheduler
     all_processes.push_back(proc);
     process_queue.push_back(proc);
 
     return proc;
+}
+
+//creates a child process from the parent
+//modifies the child's %rax to be 0
+process* create_process(process* parent) {
+    u64* kernel_pt = pt_get_current();
+
+    //TODO
+
+    return $process* 0x0;
 }
 
 //should only be able to remove zombie processes
@@ -189,7 +201,6 @@ void scheduler() {
     //look for next process to run
     current_process = schedule_next_process();
     u64 proc_trapframe_off = current_process->kstack_bottom + KSTACK_TRAPFRAME;    // -8(%rbp)
-    u64* user_pt = current_process->pt;        // -16(%rbp)
 
     //set process state to RUNNING
     current_process->status = PROCESS_RUNNING;
@@ -200,10 +211,6 @@ void scheduler() {
 
     //swapgs
     asm!("swapgs");
-
-    //switch to user pagetable
-    asm!("movq -16(%rbp), %rax");
-    asm!("mov %rax, %cr3");
 
     //context switch to process and run it
     asm!("movq -8(%rbp), %rax");
@@ -232,8 +239,12 @@ void scheduler() {
     asm!("pushq 104(%rax)");    // %r13
     asm!("pushq 112(%rax)");    // %r14
     asm!("pushq 120(%rax)");    // %r15
+    asm!("pushq 144(%rax)");    // %cr3
 
     //pop registers
+    asm!("popq %rax");
+    asm!("movq %rax, %cr3");
+    
     asm!("popq %r15");
     asm!("popq %r14");
     asm!("popq %r13");
@@ -286,6 +297,9 @@ void timer_interrupt_handler() {
     asm!("pushq %r14");
     asm!("pushq %r15");
 
+    asm!("mov %cr3, %rax");
+    asm!("pushq %rax");
+
     //setup kernel execution context
     asm!("swapgs");                                 //swap to kernel GS 
     asm!("movq %gs:0, %rax");                       //swap to kernel pagetable
@@ -302,6 +316,7 @@ void timer_interrupt_handler() {
     asm!("add %rbx, %rax");         //%rax now holds trapframe addr
 
     //write to trapframe
+    asm!("popq 144(%rax)");     // %cr3
     asm!("popq 120(%rax)");     // %r15
     asm!("popq 112(%rax)");     // %r14
     asm!("popq 104(%rax)");     // %r13
