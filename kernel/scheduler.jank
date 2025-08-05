@@ -254,14 +254,10 @@ void scheduler() {
     asm!("iretq");
 }
 
-//this should use whatever stack happens to be active to write to the user trapframe
-//the execution state should not be affected by this
+//TSS should make it so that this uses the kernel stack
 [__GLOBAL_FIRST__] extern u8 timer_interrupt_entry;
 void timer_interrupt_handler() {
-    //we've just come from a timer interrupt
-    asm!("timer_interrupt_entry:");
-
-    asm!("hlt");
+    asm!("timer_interrupt_entry:"); //don't want stack frame messing stuff up
 
     //we should've come from user mode
     //cpu will have pushed these things onto the stack:
@@ -290,15 +286,20 @@ void timer_interrupt_handler() {
     asm!("pushq %r14");
     asm!("pushq %r15");
 
+    //setup kernel execution context
+    asm!("swapgs");                                 //swap to kernel GS 
+    asm!("movq %gs:0, %rax");                       //swap to kernel pagetable
+    asm!("mov %rax, %cr3");
+
     //get current process
     asm!("call get_cur_proc");      //%rax now holds pointer to current process
     asm!("movq PROCESS_READY(%rip), %rbx");
     asm!("movq %rbx, 24(%rax)");    //change state of current process to READY
 
     //put trapframe addr into %rax
-    asm!("movq 8(%rax), %rax"); //%rax now holds proc->kstack_bottom
+    asm!("movq 8(%rax), %rax");     //%rax now holds proc->kstack_bottom
     asm!("movq KSTACK_TRAPFRAME(%rip), %rbx");
-    asm!("add %rbx, %rax");     //%rax now holds trapframe addr
+    asm!("add %rbx, %rax");         //%rax now holds trapframe addr
 
     //write to trapframe
     asm!("popq 120(%rax)");     // %r15
@@ -323,12 +324,6 @@ void timer_interrupt_handler() {
     asm!("popq 136(%rax)");     // RFLAGS
     asm!("popq 56(%rax)");      // %rsp
     asm!("add $8, %rsp");       // SS
-
-    //setup kernel execution context
-    asm!("swapgs");                                 //swap to kernel GS 
-    asm!("movq %gs:0, %rax");                       //swap to kernel pagetable
-    asm!("mov %rax, %cr3");
-    asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");     //switch to initial kernel stack
 
     //send EOI
     asm!("movb $0x20, %al");
