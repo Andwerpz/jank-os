@@ -1,25 +1,6 @@
 #include <jstring>;
 #include <string>;
-
-void serial_print(u8* s) {
-    syscall(1000, u64, s, strlen(s));
-}
-
-void serial_print(string s){
-    syscall(1000, u64, s.arr, s.size());
-}
-
-void serial_print(i32 x) {
-    serial_print(to_string(x));
-}
-
-void serial_print
-
-template<T>
-void serial_println(T x) {
-    serial_print(x);
-    serial_print("\n");
-}
+#include <iostream>;
 
 i32 main() {
 
@@ -29,6 +10,6 @@ i32 main() {
 
     u64 pid = sys_getpid();
     string out = "PID : " + to_string(pid) + "\n";
-    serial_print(out);
+    cout << out;
 
 }

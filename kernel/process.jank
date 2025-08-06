@@ -5,6 +5,7 @@
 [__GLOBAL_FIRST__] u64 PROCESS_ZOMBIE       = 0x3;
 [__GLOBAL_FIRST__] u64 PROCESS_IDLE         = 0x4;
 
+[__GLOBAL_FIRST__] u64 PROCESS_MAX_FD = $u64 64;
 struct process {
     u64 pid;            // 0
     u64 kstack_bottom;  // 8
@@ -13,10 +14,11 @@ struct process {
     u64* pt;            // 32
     i32 exit_status;    // 40
     file_descriptor*[64] fd_table;  //empty fds will be nullptr
+    u64 parent_pid;     //a parent pid of 0 will indicate the process was created directly by kernel
 }
 
 u64 kstack_ptr = KSTACK_AREA_BOTTOM; //for now, just incrementally map new kstacks
-u64 pid_ptr = 0x0;
+u64 pid_ptr = 0x1;
 
 //creates a dummy process
 //you still need to do some stuff, this just takes care of some busywork
@@ -105,12 +107,15 @@ process* create_process(u8* elf_buf, u64 size) {
 process* create_process(process* parent, trapframe* parent_tf) {
     process* child = create_process(0x0);
 
+    //set child's parent 
+    child->parent_pid = parent->pid;
+
     //copy process info
     child->brk = parent->brk;
     child->fd_table = parent->fd_table;
 
     //increment refcount of file descriptors
-    for(i32 i = 0; i < 64; i++){
+    for(i32 i = 0; i < PROCESS_MAX_FD; i++){
         if($void* child->fd_table[i] == nullptr) continue;
         child->fd_table[i]->refcount ++;
     }
@@ -157,10 +162,10 @@ void kill_process(u64 pid, i32 status) {
         }
     }
 
-    //unmap kstack from kernel pt (we want to delete the underlying pages)
+    //unmap kstack (we'll wait to delete kstack as we're still currently using it)
     for(u64 i = 0x0; i < KSTACK_SIZE; i += PAGE_SIZE){
         void* vaddr = $void* (proc->kstack_bottom + i);
-        pt_unmap_page(kernel_pt, vaddr);
+        pt_unmap_page(proc->pt, vaddr);
     }
 
     //free pagetable + underlying pages
@@ -168,13 +173,15 @@ void kill_process(u64 pid, i32 status) {
     proc->pt = $u64* nullptr;
 
     //free file descriptors
-    for(i32 i = 0; i < 64; i++){
+    for(i32 i = 0; i < PROCESS_MAX_FD; i++){
         if(proc->fd_table[i] == nullptr) continue;
         fd_close(proc->fd_table[i]);
+        proc->fd_table[i] = $file_descriptor* nullptr;
     }
 }
 
 //this completely gets rid of the process from the scheduler
+//should also delete kstack
 //should only be able to remove zombie processes
 void remove_process(u64 pid) {
     //find process
@@ -182,6 +189,15 @@ void remove_process(u64 pid) {
 
     //make sure process is a zombie process
     passert(proc->status == PROCESS_ZOMBIE, "remove_process() : process must be zombie");
+
+    //dealloc kstack
+    u64* kernel_pt = pt_get_current();
+    for(u64 i = 0x0; i < KSTACK_SIZE; i += PAGE_SIZE) {
+        void* vaddr = $void* (proc->kstack_bottom + i);
+        void* paddr = pt_translate(kernel_pt, vaddr);
+        pt_unmap_page(kernel_pt, vaddr);
+        pfree(paddr);
+    }
 
     //remove process from scheduler
     erase_process(pid);

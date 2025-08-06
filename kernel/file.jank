@@ -22,10 +22,17 @@ struct file_descriptor {
     u64 position;
     u64 flags;
     u64 refcount;
+
+    //statistics
+    u64 bytes_read;
+    u64 bytes_written;
+    u64 read_count;
+    u64 write_count;
 }
 
 file_descriptor* create_serial_fd(u64 flags) {
     file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
+    *fd := new file_descriptor();
 
     fd->type = FD_TYPE_SERIAL;
     fd->resource_ptr = nullptr;
@@ -38,11 +45,15 @@ file_descriptor* create_serial_fd(u64 flags) {
 }
 
 i64 fd_read(file_descriptor* fd, u8* buf, u64 amt) {
-    return fd->ops->op_read#(fd, buf, amt);
+    i64 retval = fd->ops->op_read#(fd, buf, amt);
+    fd->read_count ++;
+    if(retval > $i64 0) fd->bytes_read += $u64 retval;
 }
 
 i64 fd_write(file_descriptor* fd, u8* buf, u64 amt) {
-    return fd->ops->op_write#(fd, buf, amt);
+    i64 retval = fd->ops->op_write#(fd, buf, amt);
+    fd->write_count ++;
+    if(retval > $i64 0) fd->bytes_written += $u64 retval;
 }   
 
 i64 fd_lseek(file_descriptor* fd, u64 off, i32 whence) {

@@ -83,7 +83,7 @@ i32 copy_from_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
         //check flags
         u64 flags;
         void* paddr = pt_translate(user_pt, $void* uptr, flags);
-        if(!(flags & PTE_WRITEABLE) || !(flags & PTE_USER)) {
+        if(!(flags & PTE_USER)) {
             return -ERR_FAULT;
         }
 
@@ -111,6 +111,7 @@ i32 copy_from_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
 [__GLOBAL_FIRST__] u64 SYS_GETPID       = $u64 39;
 [__GLOBAL_FIRST__] u64 SYS_FORK         = $u64 57;
 [__GLOBAL_FIRST__] u64 SYS_EXIT         = $u64 60;
+[__GLOBAL_FIRST__] u64 SYS_WAIT4        = $u64 61;
 
 //jank syscalls
 [__GLOBAL_FIRST__] u64 SYS_SERIAL_WRITE = $u64 1000;
@@ -231,12 +232,19 @@ u64 syscall_handler() {
     else if(sys_id == SYS_MUNMAP) return $u64 sys_munmap($void* arg1, $u64 arg2);
     else if(sys_id == SYS_GETPID) return sys_getpid();
     else if(sys_id == SYS_FORK) return sys_fork();
+    else if(sys_id == SYS_WAIT4) return sys_wait4($u64 arg1, $i32 arg2, $i32 arg3, $void* arg4);
 
     else if(sys_id == SYS_SERIAL_WRITE) return sys_serial_write($u8* arg1, arg2);
     else if(sys_id == SYS_SERIAL_READ) return sys_serial_read($u8* arg1, arg2);
 
     panic("unrecognized sys_id");
     return $u64 -1;
+}
+
+u64 sys_wait4(u64 pid, i32 wstatus, i32 options, void* rusage) {
+    passert(rusage == nullptr, "sys_wait4() : I don't support rusage yet");
+    //TODO implement typedefs D:
+    return 0x0;
 }
 
 i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
@@ -263,7 +271,8 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
 
     //transfer data to user buffer
     if(retval > $i64 0) {
-        copy_to_user(user_pt, kbuf, buf, $u64 retval);
+        i64 cpy_status = $i64 copy_to_user(user_pt, kbuf, buf, $u64 retval);
+        if(cpy_status < $i64 0) retval = cpy_status;
     }
 
     //free kbuf
@@ -295,7 +304,11 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
 
     //transfer data from user buffer
     u8* kbuf = $u8* malloc(amt);
-    copy_from_user(user_pt, kbuf, buf, amt);
+    i64 cpy_status = $i64 copy_from_user(user_pt, kbuf, buf, amt);
+    if(cpy_status < $i64 0) {
+        free($void* kbuf, amt);
+        return cpy_status;
+    }
 
     //do write
     i64 retval = fd_write(fd, kbuf, amt);
@@ -316,6 +329,7 @@ i32 sys_close(i32 fd_ind) {
 
     process* proc = get_cur_proc();
     file_descriptor* fd = proc->fd_table[fd_ind];
+    proc->fd_table[fd_ind] = $file_descriptor* nullptr;
     
     if($u64 fd == $u64 nullptr) {
         pt_switch(user_pt);
@@ -365,6 +379,10 @@ u64 sys_fork() {
     trapframe* parent_tf = get_user_trapframe();
     process* child = create_process(parent, parent_tf);
     u64 retval = child->pid;
+
+    // set child return value to 0
+    trapframe* child_tf = $trapframe* (child->kstack_bottom + KSTACK_TRAPFRAME);
+    child_tf->rax = 0x0;
 
     // set user pt back
     pt_switch(user_pt);
