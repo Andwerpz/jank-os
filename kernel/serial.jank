@@ -140,6 +140,14 @@ u8 is_transmit_empty() {
     return inb(COM1 + $u16 5) & $u8 0x20;
 }
 
+u8 read_serial() {
+    while(serial_received() == $u8 0) {}
+    u8 c = inb(COM1);
+    write_serial(c);
+    if(c == '\r') write_serial('\n');
+    return c;
+}
+
 void write_serial(u8 a) {
     if(a == '\n') {
         while(is_transmit_empty() == $u8 0) {}
@@ -148,6 +156,7 @@ void write_serial(u8 a) {
     while(is_transmit_empty() == $u8 0) {}
     outb(COM1, a);
 }
+
 
 void serial_print(u8 c) {
     write_serial(c);
@@ -209,10 +218,32 @@ u8 serial_received() {
     return inb(COM1 + $u16 5) & $u8 1;
 }
 
-u8 read_serial() {
-    while(serial_received() == $u8 0) {}
-    u8 c = inb(COM1);
-    write_serial(c);
-    if(c == '\r') write_serial('\n');
-    return c;
+
+i64 serial_read(file_descriptor* fd, u8* buf, u64 amt) {
+    for(u64 i = 0x0; i < amt; i++) buf[i] = read_serial();
+    return $i64 amt;
+}
+
+i64 serial_write(file_descriptor* fd, u8* buf, u64 amt) {
+    for(u64 i = 0x0; i < amt; i++) write_serial(buf[i]);
+    return $i64 amt;
+}
+
+i64 serial_lseek(file_descriptor* fd, u64 off, i32 whence) {
+    //lseek doesn't make sense for serial input
+    return $i64 -1;
+}
+
+i32 serial_close(file_descriptor* fd) {
+    //do nothing
+    return 0;
+}
+
+void init_serial_file_ops() {
+    FILE_OPS_SERIAL = $file_ops* malloc(sizeof(file_ops));
+    *FILE_OPS_SERIAL := new file_ops();
+    FILE_OPS_SERIAL->op_read = #<serial_read(file_descriptor*, u8*, u64)>;
+    FILE_OPS_SERIAL->op_write = #<serial_write(file_descriptor*, u8*, u64)>;
+    FILE_OPS_SERIAL->op_lseek = #<serial_lseek(file_descriptor*, u64, i32)>;
+    FILE_OPS_SERIAL->op_close = #<serial_close(file_descriptor*)>;
 }

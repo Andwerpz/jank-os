@@ -18,6 +18,8 @@
 #include "idt.jank";
 #include "scheduler.jank";
 #include "pic.jank";
+#include "file.jank";
+#include "process.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -77,8 +79,7 @@ void print_mmap() {
     }
 }
 
-i32 main() {
-
+void tests() {
     check_syscall_enabled();
 
     if(1) {
@@ -178,6 +179,13 @@ i32 main() {
         serial_print("KHEAP PTR : ");
         serial_println($void* kheap_brk);
     }
+}
+
+i32 main() {
+
+    tests();
+
+    init_serial_file_ops();
 
     shell();
 

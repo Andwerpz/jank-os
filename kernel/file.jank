@@ -9,9 +9,9 @@
 [__GLOBAL_FIRST__] file_ops* FILE_OPS_SERIAL;
 
 struct file_ops {
-    fn<u64(file_descriptor*, u8*, u64)> op_read;
-    fn<u64(file_descriptor*, u8*, u64)> op_write;
-    fn<u64(file_descriptor*, u64, i32)> op_lseek;
+    fn<i64(file_descriptor*, u8*, u64)> op_read;
+    fn<i64(file_descriptor*, u8*, u64)> op_write;
+    fn<i64(file_descriptor*, u64, i32)> op_lseek;
     fn<i32(file_descriptor*)> op_close;
 }
 
@@ -25,7 +25,7 @@ struct file_descriptor {
 }
 
 file_descriptor* create_serial_fd(u64 flags) {
-    file_descriptor* fd = malloc(sizeof(file_descriptor));
+    file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
 
     fd->type = FD_TYPE_SERIAL;
     fd->resource_ptr = nullptr;
@@ -35,4 +35,28 @@ file_descriptor* create_serial_fd(u64 flags) {
     fd->refcount = 0x1;
 
     return fd;
+}
+
+i64 fd_read(file_descriptor* fd, u8* buf, u64 amt) {
+    return fd->ops->op_read#(fd, buf, amt);
+}
+
+i64 fd_write(file_descriptor* fd, u8* buf, u64 amt) {
+    return fd->ops->op_write#(fd, buf, amt);
+}   
+
+i64 fd_lseek(file_descriptor* fd, u64 off, i32 whence) {
+    return fd->ops->op_lseek#(fd, off, whence);
+}
+
+i32 fd_close(file_descriptor* fd) {
+    passert(fd->refcount > 0x0, "fd_close() : file descriptors with 0 references should be already dealloced");
+    fd->refcount --;
+    i32 retval = 0;
+    if(fd->refcount == 0x0) {
+        retval = fd->ops->op_close#(fd);
+        fd->~();
+        free($void* fd, sizeof(file_descriptor));
+    }
+    return retval;
 }

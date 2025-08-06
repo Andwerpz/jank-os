@@ -1,0 +1,220 @@
+
+[__GLOBAL_FIRST__] u64 PROCESS_NEW          = 0x0;
+[__GLOBAL_FIRST__] u64 PROCESS_READY        = 0x1;
+[__GLOBAL_FIRST__] u64 PROCESS_RUNNING      = 0x2;
+[__GLOBAL_FIRST__] u64 PROCESS_ZOMBIE       = 0x3;
+[__GLOBAL_FIRST__] u64 PROCESS_IDLE         = 0x4;
+
+struct process {
+    u64 pid;            // 0
+    u64 kstack_bottom;  // 8
+    u64 brk;            // 16
+    u64 status;         // 24
+    u64* pt;            // 32
+    i32 exit_status;    // 40
+    file_descriptor*[64] fd_table;  //empty fds will be nullptr
+}
+
+u64 kstack_ptr = KSTACK_AREA_BOTTOM; //for now, just incrementally map new kstacks
+u64 pid_ptr = 0x0;
+
+//creates a dummy process
+//you still need to do some stuff, this just takes care of some busywork
+[__GLOBAL_FIRST__] u64 PROCESS_CREATE_STACK     = $u64 1 << $u64 0;
+[__GLOBAL_FIRST__] u64 PROCESS_CREATE_FDTABLE   = $u64 1 << $u64 1;
+process* create_process(u64 flags) {
+    u64* kernel_pt = pt_get_current();
+
+    process* proc = $process* malloc(sizeof(process));
+    *proc := new process();
+    proc->pt = pt_alloc_new();
+    proc->pid = pid_ptr ++;
+    proc->brk = USER_HEAP_BOTTOM;
+    proc->status = PROCESS_NEW;
+
+    //map kernel
+    for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
+        void* vaddr = $void* i;
+        if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
+            u64 perm_flags;
+            void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
+            pt_map_page(proc->pt, vaddr, paddr, perm_flags);
+        }
+    }
+
+    //alloc new kstack for process, need to map in kernel as well
+    passert(kstack_ptr + KSTACK_SIZE <= KSTACK_AREA_TOP, "create_process() : ran out of room for kstacks");
+    proc->kstack_bottom = kstack_ptr;
+    for(u64 i = 0x0; i < KSTACK_SIZE; i += PAGE_SIZE) {
+        void* paddr = palloc();
+        pt_map_page(kernel_pt, $void* (kstack_ptr + i), paddr, PTE_WRITEABLE);
+        pt_map_page(proc->pt, $void* (kstack_ptr + i), paddr, PTE_WRITEABLE);
+    }
+    kstack_ptr += KSTACK_SIZE;
+
+    if(flags & PROCESS_CREATE_STACK) {
+        //map user stack
+        for(u64 i = USER_STACK_BOTTOM; i <= USER_STACK_TOP; i += PAGE_SIZE) {
+            pt_alloc_and_map_page(proc->pt, $void* i, PTE_USER | PTE_WRITEABLE);
+        }
+
+        //map guard page
+        pt_alloc_and_map_page(proc->pt, $void* USER_GUARD_PAGE, 0x0);
+    }
+
+    if(flags & PROCESS_CREATE_FDTABLE) {
+        proc->fd_table[0] = create_serial_fd(O_RDONLY); //STDIN
+        proc->fd_table[1] = create_serial_fd(O_WRONLY); //STDOUT
+        proc->fd_table[2] = create_serial_fd(O_WRONLY); //STDERR
+    }
+
+    //write initial execution context to trapframe
+    trapframe* tf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
+    tf->rsp = USER_STACK_TOP;
+    tf->rflags = 0x202;     //enable timer interrupt
+    tf->pt = $u64 proc->pt;
+
+    //add to process list
+    all_processes.push_back(proc);
+
+    return proc;
+}
+
+//create new process with ELF code
+process* create_process(u8* elf_buf, u64 size) {
+    process* proc = create_process(PROCESS_CREATE_STACK | PROCESS_CREATE_FDTABLE);
+
+    //map elf 
+    u64 entry_off;
+    if(load_elf(elf_buf, size, proc->pt, entry_off)) {
+        panic("failed to load elf");
+    }
+
+    //set entry point
+    trapframe* tf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
+    tf->rip = entry_off;
+
+    //make ready
+    make_process_ready(proc);
+
+    return proc;
+}
+
+//creates a clone of the parent process's user memory state and other stuff
+//also needs trapframe for the register state
+process* create_process(process* parent, trapframe* parent_tf) {
+    process* child = create_process(0x0);
+
+    //copy process info
+    child->brk = parent->brk;
+    child->fd_table = parent->fd_table;
+
+    //increment refcount of file descriptors
+    for(i32 i = 0; i < 64; i++){
+        if($void* child->fd_table[i] == nullptr) continue;
+        child->fd_table[i]->refcount ++;
+    }
+
+    //copy parent lower half mappings
+    pt_copy_lower_half(parent->pt, child->pt);
+
+    //copy over trapframe
+    trapframe* child_tf = $trapframe* (child->kstack_bottom + KSTACK_TRAPFRAME);
+    memcpy($void* child_tf, $void* parent_tf, sizeof(trapframe));
+    child_tf->pt = $u64 child->pt;   //note that pagetables are different
+
+    //make ready
+    make_process_ready(child);
+
+    return child;
+}
+
+//all new processes should go through this to become ready
+//does some last checks and setup
+//panics on failure
+void make_process_ready(process* proc) {
+    passert(proc->status == PROCESS_NEW, "make_process_ready() : should only receive new processes");
+
+    proc->status = PROCESS_READY;
+    process_queue.push_back(proc->pid);
+}
+
+//marks process as dead, cleans up process. 
+//the process will still exist in the scheduler as a zombie
+void kill_process(u64 pid, i32 status) {
+    u64* kernel_pt = pt_get_current();
+
+    process* proc = find_process(pid);
+    passert(proc != nullptr, "kill_process() : should be able to find process");
+    proc->status = PROCESS_ZOMBIE;
+    proc->exit_status = status;
+
+    //unmap kernel
+    for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
+        void* vaddr = $void* i;
+        if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
+            pt_unmap_page(proc->pt, vaddr);
+        }
+    }
+
+    //unmap kstack from kernel pt (we want to delete the underlying pages)
+    for(u64 i = 0x0; i < KSTACK_SIZE; i += PAGE_SIZE){
+        void* vaddr = $void* (proc->kstack_bottom + i);
+        pt_unmap_page(kernel_pt, vaddr);
+    }
+
+    //free pagetable + underlying pages
+    pt_free_pagetable(proc->pt);
+    proc->pt = $u64* nullptr;
+
+    //free file descriptors
+    for(i32 i = 0; i < 64; i++){
+        if(proc->fd_table[i] == nullptr) continue;
+        fd_close(proc->fd_table[i]);
+    }
+}
+
+//this completely gets rid of the process from the scheduler
+//should only be able to remove zombie processes
+void remove_process(u64 pid) {
+    //find process
+    process* proc = find_process(pid);
+
+    //make sure process is a zombie process
+    passert(proc->status == PROCESS_ZOMBIE, "remove_process() : process must be zombie");
+
+    //remove process from scheduler
+    erase_process(pid);
+    free($void* proc, sizeof(process));
+}
+
+
+
+//copies all mappings from pt to out_pt that exist in the lower half
+//allocs new pages and copies the data over as well
+void pt_copy_lower_half(u64* pt, u64* out_pt, u64 vaddr, u64 level) {
+    for(u64 i = 0x0; i < $u64 512; i++){
+        if(level == 0x3 && i == $u64 256) break; 
+
+        u64 cvaddr = vaddr | (i << ($u64 12 + $u64 9 * level));
+        u64 pte = pt[i];    
+        if(!(pte & PTE_PRESENT)) continue;
+
+        //if this is not a leaf, copy subtree
+        if(level) pt_copy_lower_half(pt, out_pt, cvaddr, level - 0x1);
+
+        //if this is a leaf, copy mapping
+        if(!level) {
+            u64 flags = pte_get_permission_flags(pte);
+            void* paddr = $void* pte_get_addr(pte);
+            void* npaddr = palloc();
+
+            pt_map_page(out_pt, $void* cvaddr, npaddr, flags);
+            memcpy(npaddr, paddr, PAGE_SIZE);
+        }
+    }
+}
+
+void pt_copy_lower_half(u64* pt, u64* out_pt) {
+    pt_copy_lower_half(pt, out_pt, 0x0, 0x3);
+}

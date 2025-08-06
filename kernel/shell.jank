@@ -38,7 +38,7 @@ void shell() {
                     break;
                 }
 
-                errno = 0x0;
+                errno = 0;
                 u64 file_len = stou64(cmd[2]);
                 if(errno) {
                     sout << "file_len malformed\n";
@@ -102,7 +102,7 @@ void shell() {
                     break;
                 }
 
-                errno = 0x0;
+                errno = 0;
                 u64 ind = stou64(cmd[1]);
                 if(errno) {
                     sout << "file_ind malformed\n";

@@ -32,6 +32,74 @@ i32 init_syscall() {
     return 0;
 }
 
+//returns 0 on success, negative on failure
+//expects kernel_pt to be active
+i32 copy_to_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
+    u64 uptr = $u64 ubuf;
+    uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
+    u64 ubuf_end = $u64 ubuf + amt;
+    u64 kptr = 0x0;
+
+    while(uptr < ubuf_end) {
+        //make sure page is mapped
+        if(!pt_is_vaddr_mapped(user_pt, $void* uptr)) {
+            return -ERR_FAULT;
+        }
+
+        //check flags
+        u64 flags;
+        void* paddr = pt_translate(user_pt, $void* uptr, flags);
+        if(!(flags & PTE_WRITEABLE) || !(flags & PTE_USER)) {
+            return -ERR_FAULT;
+        }
+
+        //copy data
+        for(u64 i = 0x0; i < PAGE_SIZE; i++) {
+            u64 cptr = uptr + i;
+            if(cptr < $u64 ubuf || cptr >= ubuf_end) continue;
+            ($u8* paddr)[i] = kbuf[kptr ++];
+        }
+
+        uptr += PAGE_SIZE;
+    }
+
+    return 0;
+}
+
+//returns 0 on success, negative on failure
+//expects kernel_pt to be active
+i32 copy_from_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
+    u64 uptr = $u64 ubuf;
+    uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
+    u64 ubuf_end = $u64 ubuf + amt;
+    u64 kptr = 0x0;
+
+    while(uptr < ubuf_end) {
+        //make sure page is mapped
+        if(!pt_is_vaddr_mapped(user_pt, $void* uptr)) {
+            return -ERR_FAULT;
+        }
+
+        //check flags
+        u64 flags;
+        void* paddr = pt_translate(user_pt, $void* uptr, flags);
+        if(!(flags & PTE_WRITEABLE) || !(flags & PTE_USER)) {
+            return -ERR_FAULT;
+        }
+
+        //copy data
+        for(u64 i = 0x0; i < PAGE_SIZE; i++) {
+            u64 cptr = uptr + i;
+            if(cptr < $u64 ubuf || cptr >= ubuf_end) continue;
+            kbuf[kptr ++] = ($u8* paddr)[i];
+        }
+
+        uptr += PAGE_SIZE;
+    }
+
+    return 0;
+}
+
 // -- SYSCALL IDENTIFIERS --
 //linux syscalls
 [__GLOBAL_FIRST__] u64 SYS_READ         = $u64 0;
@@ -154,8 +222,8 @@ u64 syscall_handler() {
     asm!("movq %r8, -48(%rbp)");
     asm!("movq %r9, -56(%rbp)");
 
-    if(sys_id == SYS_READ) return sys_read($i32 arg1, $void* arg2, arg3);
-    else if(sys_id == SYS_WRITE) return sys_write($i32 arg1, $void* arg2, arg3);
+    if(sys_id == SYS_READ) return $u64 sys_read($i32 arg1, $u8* arg2, arg3);
+    else if(sys_id == SYS_WRITE) return $u64 sys_write($i32 arg1, $u8* arg2, arg3);
     else if(sys_id == SYS_CLOSE) return $u64 sys_close($i32 arg1);
     else if(sys_id == SYS_EXIT) return sys_exit($i32 arg1);
     else if(sys_id == SYS_SCHED_YIELD) return sys_sched_yield();
@@ -171,38 +239,95 @@ u64 syscall_handler() {
     return $u64 -1;
 }
 
-u64 sys_read(i32 fd, void* buf, u64 amt) {
-    return 0x0; //TODO
+i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
+    // switch to kernel pt
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    process* proc = get_cur_proc();
+    file_descriptor* fd = proc->fd_table[fd_ind];
+
+    // check if file descriptor exists
+    if(fd == nullptr) {
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor has read flags
+    if(!(fd->flags == O_RDONLY || fd->flags == O_RDWR)) {
+        return $i64 -ERR_BADF;
+    }
+
+    //do read
+    u8* kbuf = $u8* malloc(amt);
+    i64 retval = fd_read(fd, kbuf, amt);
+
+    //transfer data to user buffer
+    if(retval > $i64 0) {
+        copy_to_user(user_pt, kbuf, buf, $u64 retval);
+    }
+
+    //free kbuf
+    free($void* kbuf, amt);
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return $i64 retval;
 }
 
-u64 sys_write(i32 fd, void* buf, u64 amt) {
-    return 0x0; //TODO
+i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
+    // switch to kernel pt
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    process* proc = get_cur_proc();
+    file_descriptor* fd = proc->fd_table[fd_ind];
+
+    // check if file descriptor exists
+    if(fd == nullptr) {
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor has write flags
+    if(!(fd->flags == O_WRONLY || fd->flags == O_RDWR || fd->flags == O_APPEND)) {
+        return $i64 -ERR_BADF;
+    }
+
+    //transfer data from user buffer
+    u8* kbuf = $u8* malloc(amt);
+    copy_from_user(user_pt, kbuf, buf, amt);
+
+    //do write
+    i64 retval = fd_write(fd, kbuf, amt);
+
+    //free kbuf
+    free($void* kbuf, amt);
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return $i64 retval;
 }
 
-i32 sys_close(i32 fd) {
+i32 sys_close(i32 fd_ind) {
     // switch to kernel_pt
     u64* user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     process* proc = get_cur_proc();
-    file_descriptor* fd = proc->fd_table[i];
+    file_descriptor* fd = proc->fd_table[fd_ind];
     
-    if(fd == nullptr) {
+    if($u64 fd == $u64 nullptr) {
         pt_switch(user_pt);
         return -1;
     }
 
-    passert(fd->refcount > 0x0, "sys_close() : file descriptors with 0 references should be dealloced");
-    fd->refcount --;
-    if(fd->refcount == 0x0) {
-        fd->~();
-        free($void* fd, sizeof(file_descriptor));
-    }
+    i32 retval = fd_close(fd);
 
     // set user pt back
     pt_switch(user_pt);
 
-    return 0;
+    return retval;
 }
 
 //terminates the calling process
@@ -210,10 +335,8 @@ u64 sys_exit(i32 status) {
     //switch to kernel_pt
     pt_switch_to_kernel();
 
-    //update cur process
-    process* proc = get_cur_proc();
-    proc->status = PROCESS_ZOMBIE;
-    proc->exit_status = status;
+    //kill current process
+    kill_process(get_cur_pid(), status);
 
     //point %rsp to top of kernel stack
     asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
@@ -239,19 +362,9 @@ u64 sys_fork() {
 
     // create child process
     process* parent = get_cur_proc();
-    process* child = create_process(parent);
+    trapframe* parent_tf = get_user_trapframe();
+    process* child = create_process(parent, parent_tf);
     u64 retval = child->pid;
-
-    // copy syscall entry trapframe to child
-    trapframe* parent_trapframe = get_user_trapframe();
-    trapframe* child_trapframe = $trapframe* (child->kstack_bottom + KSTACK_TRAPFRAME);
-    memcpy($void* child_trapframe, $void* parent_trapframe, sizeof(trapframe));
-
-    // child return value should be 0
-    child_trapframe->rax = 0x0;
-
-    // child is ready
-    child->status = PROCESS_READY;
 
     // set user pt back
     pt_switch(user_pt);
