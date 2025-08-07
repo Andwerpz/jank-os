@@ -44,6 +44,14 @@ u8 inb(u16 port) {
     return ret;
 }
 
+u32 inl(u16 port) {
+    u32 ret;
+    asm!("movw 16(%rbp), %dx");
+    asm!("inl %dx, %eax");
+    asm!("movl %eax, -8(%rbp)");
+    return ret;
+}
+
 [__GLOBAL_FIRST__] u64 irq_disable_count = 0x0;
 [__GLOBAL_FIRST__] u64 irq_saved_rflags;
 

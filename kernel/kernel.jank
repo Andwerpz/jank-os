@@ -20,6 +20,7 @@
 #include "pic.jank";
 #include "file.jank";
 #include "process.jank";
+#include "ahci.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -178,6 +179,11 @@ void tests() {
 
         serial_print("KHEAP PTR : ");
         serial_println($void* kheap_brk);
+    }
+
+    // scan for ahci
+    if(1) {
+        scan_for_ahci();
     }
 }
 

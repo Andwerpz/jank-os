@@ -1,4 +1,59 @@
 // https://wiki.osdev.org/AHCI
 // https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
 
-// https://wiki.osdev.org/PCI#Enumerating_PCI_Buses
+
+
+
+
+// https://wiki.osdev.org/PCI#Configuration_Space_Access_Mechanism_#1
+// Bit 31       Bits 30-24  Bits 23-16  Bits 15-11      Bits 10-8           Bits 7-0
+// Enable Bit   Reserved    Bus Number  Device Number   Function Number     Register Offset
+[__GLOBAL_FIRST__] u64 PCI_CONFIG_ADDRESS           = 0xcf8;
+[__GLOBAL_FIRST__] u64 PCI_CONFIG_DATA              = 0xcfc;
+[__GLOBAL_FIRST__] u64 AHCI_CLASS_CODE              = 0x1;
+[__GLOBAL_FIRST__] u64 AHCI_SUBCLASS                = 0x6;
+
+u32 pci_read(u8 bus, u8 device, u8 function, u8 offset) {
+    u32 enabled = ($u32 1) << $u32 31;
+    u32 busl = ($u32 bus) << $u32 16;
+    u32 devicel = ($u32 device) << $u32 11;
+    u32 functionl = ($u32 function) << $u32 8;
+    u32 offsetl = ($u32 offset) & $u32 0xfc; // the two lowest bits of CONFIG_ADDRESS must always be zero (?)
+
+    u32 addr = enabled | busl | devicel | functionl | offsetl;
+
+    outl($u16 PCI_CONFIG_ADDRESS, addr);
+
+    return inl($u16 PCI_CONFIG_DATA); // vendor in lower 16 bits, device in upper 16 bits
+}
+
+i32 scan_for_ahci() {
+    sout << "scanning pci bus for ahci controller :O" << "\n";
+
+    for(i32 bus = 0; bus < 256; bus++) {
+        for(i32 device = 0; device < 32; device++) {
+            u16 vendor_id = $u16 (pci_read($u8 bus, $u8 device, $u8 0, $u8 0) & $u32 0xffff);
+            if(vendor_id == $u16 0xffff) continue;
+
+            u8 header_type = $u8 ((pci_read($u8 bus, $u8 device, $u8 0, $u8 0xc) >> $u32 16) & $u32 0xff); // Common Header Fields -> Header type offset
+            
+            i32 max_functions = 1;
+            if(header_type & $u8 0x80) max_functions = 8; // Multi-function Devices - bit 7 of the header type field set
+            for(i32 function = 0; function < max_functions; function++) {
+                // Common Header Fields -> Class code offset
+                u32 class_reg = pci_read($u8 bus, $u8 device, $u8 0, $u8 0x8);
+                u8 class_code = $u8 ((class_reg >> $u32 24) & $u32 0xff);
+                u8 subclass = $u8 ((class_reg >> $u32 16) & $u32 0xff);
+
+                if(class_code == $u8 AHCI_CLASS_CODE && subclass == $u8 AHCI_SUBCLASS) {
+                    sout << "found ahci hba @" << bus << ":" << device << ":" << function << "\n";
+
+                    return 0;
+                }
+            }
+        }
+    }
+
+    sout << "no ahci controller found" << "\n";
+    return -1;
+}
