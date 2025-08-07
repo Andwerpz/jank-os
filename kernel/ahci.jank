@@ -1,0 +1,4 @@
+// https://wiki.osdev.org/AHCI
+// https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
+
+// https://wiki.osdev.org/PCI#Enumerating_PCI_Buses
