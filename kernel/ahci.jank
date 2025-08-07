@@ -46,8 +46,15 @@ i32 scan_for_ahci() {
                 u8 subclass = $u8 ((class_reg >> $u32 16) & $u32 0xff);
 
                 if(class_code == $u8 AHCI_CLASS_CODE && subclass == $u8 AHCI_SUBCLASS) {
-                    sout << "found ahci hba @" << bus << ":" << device << ":" << function << "\n";
-
+                    sout << "found ahci hba @ " << bus << ":" << device << ":" << function << "\n";
+                    
+                    u32 bar5 = pci_read($u8 bus, $u8 device, $u8 function, $u8 0x24); // Base Address Registers -> Memory Space BAR Layout 
+                    u8 bar_type = $u8 ((bar5 >> $u32 1) & $u32 0x3); // 0x0 = 32bit; 0x2 = 64bit
+                    if(bar_type == $u8 0x2) {
+                        sout << "64 bit ABAR" << "\n";
+                    } else {
+                        sout << "32 bit ABAR: " << $void* $u64 (bar5 & $u32 0xfffffff0) << "\n";
+                    }
                     return 0;
                 }
             }
