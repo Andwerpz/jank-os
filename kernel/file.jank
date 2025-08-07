@@ -48,14 +48,14 @@ i64 fd_read(file_descriptor* fd, u8* buf, u64 amt) {
     i64 retval = fd->ops->op_read#(fd, buf, amt);
     fd->read_count ++;
     if(retval > $i64 0) fd->bytes_read += $u64 retval;
-    return $i64 0; // TEMP TO GET IT TO COMPILE
+    return $i64 retval;
 }
 
 i64 fd_write(file_descriptor* fd, u8* buf, u64 amt) {
     i64 retval = fd->ops->op_write#(fd, buf, amt);
     fd->write_count ++;
     if(retval > $i64 0) fd->bytes_written += $u64 retval;
-    return $i64 0; // TEMP TO GET IT TO COMPILE
+    return $i64 retval;
 }   
 
 i64 fd_lseek(file_descriptor* fd, u64 off, i32 whence) {
