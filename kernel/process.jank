@@ -115,9 +115,9 @@ process* create_process(process* parent, trapframe* parent_tf) {
     child->fd_table = parent->fd_table;
 
     //increment refcount of file descriptors
-    for(i32 i = 0; i < PROCESS_MAX_FD; i++){
+    for(u64 i = 0x0; i < PROCESS_MAX_FD; i++){
         if($void* child->fd_table[i] == nullptr) continue;
-        child->fd_table[i]->refcount ++;
+        child->fd_table[i]->refcount++;
     }
 
     //copy parent lower half mappings
@@ -173,7 +173,7 @@ void kill_process(u64 pid, i32 status) {
     proc->pt = $u64* nullptr;
 
     //free file descriptors
-    for(i32 i = 0; i < PROCESS_MAX_FD; i++){
+    for(u64 i = 0x0; i < PROCESS_MAX_FD; i++){
         if(proc->fd_table[i] == nullptr) continue;
         fd_close(proc->fd_table[i]);
         proc->fd_table[i] = $file_descriptor* nullptr;

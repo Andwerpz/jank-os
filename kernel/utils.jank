@@ -30,6 +30,12 @@ void outw(u16 port, u16 val) {
     asm!("outw %ax, %dx");
 }
 
+void outl(u16 port, u32 val) {
+    asm!("movl 24(%rbp), %edx");
+    asm!("movl 16(%rbp), %eax");
+    asm!("outl %eax, %edx");
+}
+
 u8 inb(u16 port) {
     u8 ret;
     asm!("movw 16(%rbp), %dx");

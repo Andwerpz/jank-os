@@ -242,7 +242,7 @@ u64 syscall_handler() {
 }
 
 u64 sys_wait4(u64 pid, i32 wstatus, i32 options, void* rusage) {
-    passert(rusage == nullptr, "sys_wait4() : I don't support rusage yet");
+    passert(rusage == nullptr, "sys_wait4() : I don\'t support rusage yet");
     //TODO implement typedefs D:
     return 0x0;
 }
