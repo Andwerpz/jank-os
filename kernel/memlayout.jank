@@ -22,12 +22,12 @@ struct GSData {
 [__GLOBAL_FIRST__] u64 KSTACK_AREA_BOTTOM   = 0xffffffff00000000;   //area to map kstacks
 [__GLOBAL_FIRST__] u64 KSTACK_AREA_TOP      = 0xfffffffff0000000;
 
-[__GLOBAL_FIRST__] u64 KERNEL_BOTTOM        = 0xfffffffff7000000;
-
+[__GLOBAL_FIRST__] u64 KERNEL_DATA_BOTTOM   = 0xfffffffff7000000;
 [__GLOBAL_FIRST__] u64 GSDATA_PAGE          = 0xfffffffff7000000;   // holds the GSData struct
 [__GLOBAL_FIRST__] u64 GDT_PAGE             = 0xfffffffff7001000;
 [__GLOBAL_FIRST__] u64 IDT_PAGE             = 0xfffffffff7002000;
 [__GLOBAL_FIRST__] u64 TSS_PAGE             = 0xfffffffff7003000;
+[__GLOBAL_FIRST__] u64 KERNEL_DATA_TOP      = 0xfffffffff7004000;
 
 [__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO        = 0xfffffffff8000000;   // memory mapped IO virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_FB          = 0xfffffffffc000000;   // frame buffer virtual address

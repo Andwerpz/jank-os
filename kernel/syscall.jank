@@ -390,12 +390,10 @@ pid_t sys_fork() {
     pt_switch_to_kernel();
 
     // create child process
-    sout << "FORKING START\n";
     process* parent = get_cur_proc();
     trapframe* parent_tf = get_user_trapframe();
     process* child = create_process(parent, parent_tf);
     pid_t retval = child->pid;
-    sout << "FORKING END\n";
 
     // set child return value to 0
     trapframe* child_tf = $trapframe* (child->kstack_bottom + KSTACK_TRAPFRAME);
@@ -475,11 +473,17 @@ i32 sys_munmap(void* addr, u64 len) {
 }
 
 u64 sys_serial_write(u8* buf, u64 amt) {
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
     for(u64 i = 0x0; i < amt; i++) serial_print(buf[i]);
+    pt_switch(user_pt);
     return 0x0;
 }
 
 u64 sys_serial_read(u8* buf, u64 amt) {
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
     for(u64 i = 0x0; i < amt; i++) buf[i] = read_serial();
+    pt_switch(user_pt);
     return 0x0;
 }

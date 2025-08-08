@@ -34,14 +34,23 @@ process* create_process(u64 flags) {
     proc->brk = USER_HEAP_BOTTOM;
     proc->status = PROCESS_NEW;
 
-    //map kernel
-    for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
+    //map kernel code and stack
+    for(u64 i = BOOTBOOT_CORE; i != 0x0; i += PAGE_SIZE) {
         void* vaddr = $void* i;
         if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
             u64 perm_flags;
             void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
             pt_map_page(proc->pt, vaddr, paddr, perm_flags);
         }
+    }
+
+    //map kernel data
+    for(u64 i = KERNEL_DATA_BOTTOM; i < KERNEL_DATA_TOP; i += PAGE_SIZE) {
+        void* vaddr = $void* i;
+        passert(pt_is_vaddr_mapped(kernel_pt, vaddr), "create_process() : kernel data should be mapped");
+        u64 perm_flags;
+        void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
+        pt_map_page(proc->pt, vaddr, paddr, perm_flags);
     }
 
     //alloc new kstack for process, need to map in kernel as well
@@ -154,12 +163,18 @@ void kill_process(pid_t pid, i32 status) {
     proc->status = PROCESS_ZOMBIE;
     proc->exit_status = status;
 
-    //unmap kernel
-    for(u64 i = KERNEL_BOTTOM; i != 0x0; i += PAGE_SIZE) {
+    //unmap kernel code and stack
+    for(u64 i = BOOTBOOT_CORE; i != 0x0; i += PAGE_SIZE) {
         void* vaddr = $void* i;
         if(pt_is_vaddr_mapped(kernel_pt, vaddr)) {
             pt_unmap_page(proc->pt, vaddr);
         }
+    }
+
+    //unmap kernel data
+    for(u64 i = KERNEL_DATA_BOTTOM; i < KERNEL_DATA_TOP; i += PAGE_SIZE) {
+        void* vaddr = $void* i;
+        pt_unmap_page(proc->pt, vaddr);
     }
 
     //unmap kstack (we'll wait to delete kstack as we're still currently using it)
