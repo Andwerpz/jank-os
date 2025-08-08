@@ -7,18 +7,18 @@
 
 [__GLOBAL_FIRST__] u64 PROCESS_MAX_FD = $u64 64;
 struct process {
-    u64 pid;            // 0
-    u64 kstack_bottom;  // 8
-    u64 brk;            // 16
-    u64 status;         // 24
-    u64* pt;            // 32
-    i32 exit_status;    // 40
+    pid_t pid;              // 0
+    u64 kstack_bottom;      // 8
+    u64 brk;                // 16
+    u64 status;             // 24
+    u64* pt;                // 32
+    i32 exit_status;        // 40
     file_descriptor*[64] fd_table;  //empty fds will be nullptr
-    u64 parent_pid;     //a parent pid of 0 will indicate the process was created directly by kernel
+    pid_t parent_pid;       //a parent pid of 0 will indicate the process was created directly by kernel
 }
 
 u64 kstack_ptr = KSTACK_AREA_BOTTOM; //for now, just incrementally map new kstacks
-u64 pid_ptr = 0x1;
+pid_t pid_ptr = $pid_t 1;
 
 //creates a dummy process
 //you still need to do some stuff, this just takes care of some busywork
@@ -139,6 +139,7 @@ process* create_process(process* parent, trapframe* parent_tf) {
 //panics on failure
 void make_process_ready(process* proc) {
     passert(proc->status == PROCESS_NEW, "make_process_ready() : should only receive new processes");
+    sout << "MAKE PROCESS READY : " << proc->pid << "\n";
 
     proc->status = PROCESS_READY;
     process_queue.push_back(proc->pid);
@@ -146,8 +147,9 @@ void make_process_ready(process* proc) {
 
 //marks process as dead, cleans up process. 
 //the process will still exist in the scheduler as a zombie
-void kill_process(u64 pid, i32 status) {
+void kill_process(pid_t pid, i32 status) {
     u64* kernel_pt = pt_get_current();
+    sout << "KILL PROCESS : " << pid << "\n";
 
     process* proc = find_process(pid);
     passert(proc != nullptr, "kill_process() : should be able to find process");
@@ -183,7 +185,7 @@ void kill_process(u64 pid, i32 status) {
 //this completely gets rid of the process from the scheduler
 //should also delete kstack
 //should only be able to remove zombie processes
-void remove_process(u64 pid) {
+void remove_process(pid_t pid) {
     //find process
     process* proc = find_process(pid);
 
@@ -215,9 +217,10 @@ void pt_copy_lower_half(u64* pt, u64* out_pt, u64 vaddr, u64 level) {
         u64 cvaddr = vaddr | (i << ($u64 12 + $u64 9 * level));
         u64 pte = pt[i];    
         if(!(pte & PTE_PRESENT)) continue;
+        u64* npt = pte_get_addr(pte);
 
         //if this is not a leaf, copy subtree
-        if(level) pt_copy_lower_half(pt, out_pt, cvaddr, level - 0x1);
+        if(level) pt_copy_lower_half(npt, out_pt, cvaddr, level - 0x1);
 
         //if this is a leaf, copy mapping
         if(!level) {

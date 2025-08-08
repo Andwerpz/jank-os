@@ -47,12 +47,13 @@ void print_trapframe(trapframe* tf) {
 //we shouldn't store processes anywhere else. 
 vector<process*> all_processes;
 
-deque<u64> process_queue; 
-u64 current_process;
+deque<pid_t> process_queue; 
+pid_t current_process;
 
 //on success, returns a pointer to a process
 //on failure, returns nullptr
-process* find_process(u64 pid) {
+process* find_process(pid_t pid) {
+    sout << "FIND PROCESS : " << pid << "\n";
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
         if(all_processes[i]->pid != pid) continue;
@@ -66,7 +67,8 @@ process* find_process(u64 pid) {
 //should only be able to erase zombie processes
 //just removes process from scheduler
 //if it can't find the process, it panics
-void erase_process(u64 pid) {
+void erase_process(pid_t pid) {
+    sout << "ERASE PROCESS : " << pid << "\n";
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
         if(all_processes[i]->pid != pid) continue;
@@ -83,7 +85,7 @@ process* get_cur_proc() {
     return proc;
 }
 
-u64 get_cur_pid() {
+pid_t get_cur_pid() {
     return current_process;
 }
 
@@ -93,7 +95,7 @@ process* schedule_next_process() {
     //should probably add a check to see if there's actually some process that's READY in the queue
     while(1) {
         passert(process_queue.size() != 0x0, "schedule_next_process() : no more processes!!");
-        u64 pid = process_queue.front();
+        pid_t pid = process_queue.front();
         process_queue.push_back(process_queue.pop_front());
 
         process* proc = find_process(pid);

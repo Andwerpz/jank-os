@@ -17,6 +17,11 @@ serial_ostream& operator<<(serial_ostream& stream, u8 c) {
     return stream;
 }
 
+serial_ostream& operator<<(serial_ostream& stream, i64 x) {
+    serial_print(x);
+    return stream;
+}
+
 serial_ostream& operator<<(serial_ostream& stream, i32 x) {
     serial_print(x);
     return stream;
@@ -184,6 +189,10 @@ void serial_print(u32 x){
 }
 
 void serial_print(u16 x) {
+    serial_print(to_string(x));
+}
+
+void serial_print(i64 x) {
     serial_print(to_string(x));
 }
 
