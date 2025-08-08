@@ -6,18 +6,13 @@ i32 main() {
 
     cout << "before fork\n";
 
-    sys_fork();
-    sys_fork();
-
     for(i32 i = 0; i < 5; i++) {
-        
+        sys_fork();
     }
 
     pid_t pid = sys_getpid();
     string out = "PID : " + to_string(pid) + "\n";
     cout << out;
-
-    while(1) {}
 
     return 0;
 }

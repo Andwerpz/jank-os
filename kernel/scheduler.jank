@@ -53,7 +53,6 @@ pid_t current_process;
 //on success, returns a pointer to a process
 //on failure, returns nullptr
 process* find_process(pid_t pid) {
-    sout << "FIND PROCESS : " << pid << "\n";
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
         if(all_processes[i]->pid != pid) continue;
@@ -68,7 +67,6 @@ process* find_process(pid_t pid) {
 //just removes process from scheduler
 //if it can't find the process, it panics
 void erase_process(pid_t pid) {
-    sout << "ERASE PROCESS : " << pid << "\n";
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
         if(all_processes[i]->pid != pid) continue;

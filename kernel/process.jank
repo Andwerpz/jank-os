@@ -139,7 +139,6 @@ process* create_process(process* parent, trapframe* parent_tf) {
 //panics on failure
 void make_process_ready(process* proc) {
     passert(proc->status == PROCESS_NEW, "make_process_ready() : should only receive new processes");
-    sout << "MAKE PROCESS READY : " << proc->pid << "\n";
 
     proc->status = PROCESS_READY;
     process_queue.push_back(proc->pid);
@@ -149,7 +148,6 @@ void make_process_ready(process* proc) {
 //the process will still exist in the scheduler as a zombie
 void kill_process(pid_t pid, i32 status) {
     u64* kernel_pt = pt_get_current();
-    sout << "KILL PROCESS : " << pid << "\n";
 
     process* proc = find_process(pid);
     passert(proc != nullptr, "kill_process() : should be able to find process");

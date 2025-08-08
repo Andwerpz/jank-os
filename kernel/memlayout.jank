@@ -22,7 +22,7 @@ struct GSData {
 [__GLOBAL_FIRST__] u64 KSTACK_AREA_BOTTOM   = 0xffffffff00000000;   //area to map kstacks
 [__GLOBAL_FIRST__] u64 KSTACK_AREA_TOP      = 0xfffffffff0000000;
 
-[__GLOBAL_FIRST__] u64 KERNEL_BOTTOM        = 0xfffffffff0000000;
+[__GLOBAL_FIRST__] u64 KERNEL_BOTTOM        = 0xfffffffff7000000;
 
 [__GLOBAL_FIRST__] u64 GSDATA_PAGE          = 0xfffffffff7000000;   // holds the GSData struct
 [__GLOBAL_FIRST__] u64 GDT_PAGE             = 0xfffffffff7001000;
