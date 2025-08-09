@@ -1,0 +1,99 @@
+// Advanced Configuration and Power Interface (ACPI)
+// to use the ACPI, we first must find the RSDP
+// Root System Description Pointer (RSDP)
+struct RSDP {
+    u8[8]   signature;  //"RSD PTR " (note the trailing space)
+    u8      checksum;
+    u8[6]   OEMID;
+    u8      revision;
+    u32     rsdt_address;
+}
+
+struct ACPIHeader {
+    u8[4]   signature;  
+    u32     length;
+    u8      revision;
+    u8      checksum;
+    u8[6]   oemid;
+    u64     oem_tableid;
+    u32     oem_revision;
+    u32     creator_id;
+    u32     creator_revision;
+}
+
+struct ACPIAddress {
+    u8      address_space_id;    // 0 - system memory, 1 - system I/O
+    u8      register_bit_width;
+    u8      register_bit_offset;
+    u8      reserved;
+    u64     address;
+} 
+
+// High Precision Event Timer (HPET)
+struct HPET {
+    ACPIHeader  header;
+    u8          hardware_rev_id;
+    u8          info_bits;     // comparator_count:5, counter_size:1, reserved:1, legacy_replacement:1
+    u16         pci_vendor_id;
+    ACPIAddress address;
+    u8          hpet_number;
+    u16         minimum_tick;
+    u8          page_protection;
+}
+
+i32 init_acpi() {
+    sout << "start init acpi\n";
+
+    //find RSDP struct. It should be 16 byte aligned
+    RSDP* rsdp;
+    {
+        //retrieve Extended Bios Data Area base address (EBDA)
+        u64 ebda = (($u64 ($u16* 0x040e)[0]) << 0x4);
+        sout << "EBDA : " << $void* ebda << "\n";
+
+        //look in first page of EBDA
+        for(u64 i = 0x0; i < 0x1000; i += 0x10){
+            u8* ptr = $u8* (ebda + i);
+            if(ptr[0] == 'R' &&
+               ptr[1] == 'S' && 
+               ptr[2] == 'D' && 
+               ptr[3] == ' ' && 
+               ptr[4] == 'P' && 
+               ptr[5] == 'T' && 
+               ptr[6] == 'R' && 
+               ptr[7] == ' ') {
+                rsdp = $RSDP* ptr;
+            }
+        }
+
+        //look in 0x000E0000 to 0x000FFFFF
+        for(u64 i = 0xe0000; i < 0x100000; i += 0x10) {
+            u8* ptr = $u8* i;
+            if(ptr[0] == 'R' &&
+               ptr[1] == 'S' && 
+               ptr[2] == 'D' && 
+               ptr[3] == ' ' && 
+               ptr[4] == 'P' && 
+               ptr[5] == 'T' && 
+               ptr[6] == 'R' && 
+               ptr[7] == ' ') {
+                rsdp = $RSDP* ptr;
+            }
+        }
+    }
+    passert(rsdp != nullptr, "init_acpi() : could not find RSDP");
+    sout << "RSDP : " << rsdp << "\n";
+    sout << "ACPI VERSION : " << ($u64 rsdp->revision) << "\n";
+
+    // check RSDP checksum
+    
+
+    sout << "done init acpi\n";
+    return 0;
+}
+
+i32 init_hpet() {
+    
+
+    return 0;
+}

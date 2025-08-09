@@ -1,28 +1,29 @@
 #include <jstring>;
 #include <string>;
 #include <iostream>;
-#include <wait>;
 
-i32 main() {
+i32 main() {                                                                                          
 
-    cout << "before fork\n";
+    cout << "\n";
+    cout << "        88                           88          ,ad8888ba,     ad88888ba " << "\n";     
+    cout << "        88                           88         d8``    ``8b   d8`     `8b" << "\n";     
+    cout << "        88                           88        d8`        `8b  Y8,        " << "\n";     
+    cout << "        88  ,adPPYYba,  8b,dPPYba,   88   ,d8  88          88  `Y8aaaaa,  " << "\n";     
+    cout << "        88  ``     `Y8  88P`   ``8a  88 ,a8`   88          88    ``````8b," << "\n";     
+    cout << "        88  ,adPPPPP88  88       88  8888[     Y8,        ,8P          `8b" << "\n";     
+    cout << "88,   ,d88  88,    ,88  88       88  88``Yba,   Y8a.    .a8P   Y8a     a8P" << "\n";     
+    cout << " `Y8888P`   ``8bbdP`Y8  88       88  88   `Y8a   ``Y8888Y``     `Y88888P` " << "\n";
+    cout << "\n";
 
-    pid_t pid = sys_fork();
-    if(pid == $pid_t 0) {
-        cout << "child\n";
-        for(i32 i = 0; i < 1000; i++) {
-            cout << "I : " << i << "\n";
-            for(i32 j = 0; j < 100000; j++) {
-                //bla
-            }
+    while(1) {
+        cout << "jankshell> ";
+        vector<string> cmd = cin.next_line().split(' ');
+        if(cmd[0] == "quit") {
+            break;
         }
-        return 0;
-    }
-    else {
-        while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
-            //continue
+        else {
+            cout << "unknown command\n";
         }
-        cout << "parent\n";
     }
 
     return 0;

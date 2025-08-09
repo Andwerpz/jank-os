@@ -21,6 +21,7 @@
 #include "file.jank";
 #include "process.jank";
 #include "ahci.jank";
+#include "acpi.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -182,16 +183,17 @@ void tests() {
     }
 
     // scan for ahci
-    if(1) {
+    if(0) {
         init_ahci();
     }
 }
 
 i32 main() {
 
-    tests();
-
+    init_acpi();
     init_serial_file_ops();
+
+    //tests();    
 
     shell();
 

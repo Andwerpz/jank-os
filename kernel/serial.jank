@@ -227,10 +227,15 @@ u8 serial_received() {
     return inb(COM1 + $u16 5) & $u8 1;
 }
 
-
+// flush output on newline
 i64 serial_read(file_descriptor* fd, u8* buf, u64 amt) {
-    for(u64 i = 0x0; i < amt; i++) buf[i] = read_serial();
-    return $i64 amt;
+    i64 retval = $i64 0;
+    for(u64 i = 0x0; i < amt; i++) {
+        buf[i] = read_serial();
+        retval ++;
+        if(buf[i] == '\r') break;
+    }
+    return retval;
 }
 
 i64 serial_write(file_descriptor* fd, u8* buf, u64 amt) {

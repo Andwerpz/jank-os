@@ -1,0 +1,11 @@
+#include <iostream>;
+#include <assert>;
+
+i32 main() {
+
+    //bruh
+
+    //shouldn't return
+    assert(0, "init shouldn't return");
+    return 0;
+}
