@@ -183,7 +183,7 @@ void tests() {
 
     // scan for ahci
     if(1) {
-        scan_for_ahci();
+        init_ahci();
     }
 }
 
