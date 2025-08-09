@@ -181,17 +181,14 @@ void tests() {
         serial_print("KHEAP PTR : ");
         serial_println($void* kheap_brk);
     }
-
-    // scan for ahci
-    if(0) {
-        init_ahci();
-    }
 }
 
 i32 main() {
 
     init_acpi();
     init_serial_file_ops();
+
+    init_ahci();
 
     //tests();    
 
