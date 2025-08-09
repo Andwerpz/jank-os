@@ -1,5 +1,3 @@
-all: jankos initdir disk bios
-
 # compile kernel
 jankos:
 	@mkdir build build/kernel 2>/dev/null | true
@@ -23,7 +21,7 @@ disk: initdir config/config.json
 # test the disk image
 # debug flags: `-d int,cpu_reset -no-reboot`
 
-bios: disk
+normal: disk
 	qemu-system-x86_64 \
     -d int,cpu_reset \
     -no-reboot \
@@ -32,13 +30,13 @@ bios: disk
     -drive file=build/jankos-disk.img,if=none,id=mydisk \
     -device ide-hd,bus=ahci.0,drive=mydisk
 
-# bios: disk
-# 	qemu-system-x86_64 \
-#     -no-reboot \
-#     -serial telnet:localhost:4321,server,nowait \
-#     -device ich9-ahci,id=ahci \
-#     -drive file=build/jankos-disk.img,if=none,id=mydisk \
-#     -device ide-hd,bus=ahci.0,drive=mydisk
+telnet: disk
+	qemu-system-x86_64 \
+    -no-reboot \
+    -serial telnet:localhost:4321,server,nowait \
+    -device ich9-ahci,id=ahci \
+    -drive file=build/jankos-disk.img,if=none,id=mydisk \
+    -device ide-hd,bus=ahci.0,drive=mydisk
 
 # clean up
 clean:
