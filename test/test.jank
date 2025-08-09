@@ -1,18 +1,29 @@
 #include <jstring>;
 #include <string>;
 #include <iostream>;
+#include <wait>;
 
 i32 main() {
 
     cout << "before fork\n";
 
-    for(i32 i = 0; i < 5; i++) {
-        sys_fork();
+    pid_t pid = sys_fork();
+    if(pid == $pid_t 0) {
+        cout << "child\n";
+        for(i32 i = 0; i < 1000; i++) {
+            cout << "I : " << i << "\n";
+            for(i32 j = 0; j < 100000; j++) {
+                //bla
+            }
+        }
+        return 0;
     }
-
-    pid_t pid = sys_getpid();
-    string out = "PID : " + to_string(pid) + "\n";
-    cout << out;
+    else {
+        while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
+            //continue
+        }
+        cout << "parent\n";
+    }
 
     return 0;
 }

@@ -14,7 +14,8 @@ struct process {
     u64* pt;                // 32
     i32 exit_status;        // 40
     file_descriptor*[64] fd_table;  //empty fds will be nullptr
-    pid_t parent_pid;       //a parent pid of 0 will indicate the process was created directly by kernel
+    process* parent;        // nullptr indicates this is created by the kernel
+    vector<process*> children;
 }
 
 u64 kstack_ptr = KSTACK_AREA_BOTTOM; //for now, just incrementally map new kstacks
@@ -117,7 +118,10 @@ process* create_process(process* parent, trapframe* parent_tf) {
     process* child = create_process(0x0);
 
     //set child's parent 
-    child->parent_pid = parent->pid;
+    child->parent = parent;
+
+    //set parent's child
+    parent->children.push_back(child);
 
     //copy process info
     child->brk = parent->brk;
@@ -155,13 +159,24 @@ void make_process_ready(process* proc) {
 
 //marks process as dead, cleans up process. 
 //the process will still exist in the scheduler as a zombie
+//TODO transfer children to init instead of this parents parent
 void kill_process(pid_t pid, i32 status) {
     u64* kernel_pt = pt_get_current();
 
+    //update process status
     process* proc = find_process(pid);
     passert(proc != nullptr, "kill_process() : should be able to find process");
     proc->status = PROCESS_ZOMBIE;
     proc->exit_status = status;
+
+    //reparent children (for now just reparent to grandparent)
+    if(proc->parent != nullptr) {
+        process* grandparent = proc->parent;
+        for(u64 i = 0x0; i < proc->children.size(); i++) {
+            grandparent->children.push_back(proc->children[i]);
+        }
+        proc->children.clear();
+    }
 
     //unmap kernel code and stack
     for(u64 i = BOOTBOOT_CORE; i != 0x0; i += PAGE_SIZE) {

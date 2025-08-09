@@ -241,7 +241,7 @@ u64 syscall_handler() {
     else if(sys_id == SYS_MUNMAP) return $u64 sys_munmap($void* arg1, $u64 arg2);
     else if(sys_id == SYS_GETPID) return $u64 sys_getpid();
     else if(sys_id == SYS_FORK) return $u64 sys_fork();
-    else if(sys_id == SYS_WAIT4) return $u64 sys_wait4($pid_t arg1, $i32 arg2, $i32 arg3, $void* arg4);
+    else if(sys_id == SYS_WAIT4) return $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
 
     else if(sys_id == SYS_SERIAL_WRITE) return sys_serial_write($u8* arg1, arg2);
     else if(sys_id == SYS_SERIAL_READ) return sys_serial_read($u8* arg1, arg2);
@@ -250,11 +250,38 @@ u64 syscall_handler() {
     return $u64 -1;
 }
 
-pid_t sys_wait4(pid_t pid, i32 wstatus, i32 options, void* rusage) {
-    passert(rusage == nullptr, "sys_wait4() : I don\'t support rusage yet");
-    passert(0, "need to impl sys_wait4");
-    //TODO implement typedefs D:
-    return $pid_t 0;
+//on success, returns the pid of the child that got WAIT'd
+//if WNOHANG was specified and no child was WAIT'd, returns 0
+//on failure some negative error code is returned
+pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    passert(rusage == nullptr, "sys_wait4() : no support for rusage");
+    passert(wstatus == nullptr, "sys_wait4() : no support for wstatus");
+    passert(pid > $pid_t -1 && pid != $pid_t 0, "sys_wait4() : pgids not supported");
+
+    pid_t retval = $pid_t 0;
+    process* proc = get_cur_proc();
+    if(proc->children.size() == 0x0) {
+        pt_switch(user_pt);
+        return $pid_t -ERR_CHILD;
+    }
+    while(retval == $pid_t 0) {
+        for(u64 i = 0x0; i < proc->children.size(); i++){
+            process* child = proc->children[i];
+            if(child->status != PROCESS_ZOMBIE) continue;
+            if(pid == $pid_t -1 || pid == child->pid) {
+                retval = child->pid;
+                remove_process(child->pid);
+                break;
+            }
+        }
+        if(options & WNOHANG) break;
+    }
+
+    pt_switch(user_pt);
+    return retval;
 }
 
 i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {

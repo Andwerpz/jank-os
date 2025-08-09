@@ -24,10 +24,20 @@ x86_64-elf-gcc -ffreestanding -T link.ld kernel.o font.o -o boot/kernel.out -nos
 # telnet localhost 4321
 
 # normal + debug + ahci
+# qemu-system-x86_64 \
+#     -d int,cpu_reset \
+#     -no-reboot \
+#     -serial stdio \
+#     -device ich9-ahci,id=ahci \
+#     -drive file=myos.img,if=none,id=mydisk \
+#     -device ide-hd,bus=ahci.0,drive=mydisk
+
+# server + debug + ahci
 qemu-system-x86_64 \
     -d int,cpu_reset \
     -no-reboot \
-    -serial stdio \
     -device ich9-ahci,id=ahci \
     -drive file=myos.img,if=none,id=mydisk \
+    -serial telnet:localhost:4321,server,nowait \
+    -monitor stdio \
     -device ide-hd,bus=ahci.0,drive=mydisk
