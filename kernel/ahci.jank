@@ -136,7 +136,7 @@ void hba_info(ahci_hba* hba) {
     HBA_MEM* h = $HBA_MEM* hba->abar;
 
     sout << "HBA Info:\n";
-    sout << "bus : device : function";
+    sout << "bus : device : function\n";
     sout << $i32 hba->bus << ":" << $i32 hba->device << ":" << $i32 hba->function << "\n";
     sout << "abar: " << $void* hba->abar << "\n";
 
@@ -201,3 +201,9 @@ void rebase_port(HBA_PORT* p, i32 port_num) {
 
     start_cmd(p);
 }
+
+// TODO
+// map abar to vaddr
+// PCD, is the 'Cache Disable' bit. If the bit is set, the page will not be cached. Otherwise, it will be. ADD CONSTANT TO PGTBL
+// pt_map_page calc size and map
+// palloc 3 pages, assign clb,fb,ctba
