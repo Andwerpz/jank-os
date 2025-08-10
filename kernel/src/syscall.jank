@@ -102,16 +102,17 @@ i32 copy_from_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
 
 // -- SYSCALL IDENTIFIERS --
 //linux syscalls
-[__GLOBAL_FIRST__] u64 SYS_READ         = $u64 0;
-[__GLOBAL_FIRST__] u64 SYS_WRITE        = $u64 1;
-[__GLOBAL_FIRST__] u64 SYS_CLOSE        = $u64 3;
-[__GLOBAL_FIRST__] u64 SYS_MMAP         = $u64 9;
-[__GLOBAL_FIRST__] u64 SYS_MUNMAP       = $u64 11;
-[__GLOBAL_FIRST__] u64 SYS_SCHED_YIELD  = $u64 24;
-[__GLOBAL_FIRST__] u64 SYS_GETPID       = $u64 39;
-[__GLOBAL_FIRST__] u64 SYS_FORK         = $u64 57;
-[__GLOBAL_FIRST__] u64 SYS_EXIT         = $u64 60;
-[__GLOBAL_FIRST__] u64 SYS_WAIT4        = $u64 61;
+[__GLOBAL_FIRST__] u64 SYS_READ             = $u64 0;
+[__GLOBAL_FIRST__] u64 SYS_WRITE            = $u64 1;
+[__GLOBAL_FIRST__] u64 SYS_CLOSE            = $u64 3;
+[__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
+[__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
+[__GLOBAL_FIRST__] u64 SYS_SCHED_YIELD      = $u64 24;
+[__GLOBAL_FIRST__] u64 SYS_GETPID           = $u64 39;
+[__GLOBAL_FIRST__] u64 SYS_FORK             = $u64 57;
+[__GLOBAL_FIRST__] u64 SYS_EXIT             = $u64 60;
+[__GLOBAL_FIRST__] u64 SYS_WAIT4            = $u64 61;
+[__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
 
 //jank syscalls
 [__GLOBAL_FIRST__] u64 SYS_SERIAL_WRITE = $u64 1000;
@@ -242,12 +243,36 @@ u64 syscall_handler() {
     else if(sys_id == SYS_GETPID) return $u64 sys_getpid();
     else if(sys_id == SYS_FORK) return $u64 sys_fork();
     else if(sys_id == SYS_WAIT4) return $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
+    else if(sys_id == SYS_CLOCK_GETTIME) return $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
 
     else if(sys_id == SYS_SERIAL_WRITE) return sys_serial_write($u8* arg1, arg2);
     else if(sys_id == SYS_SERIAL_READ) return sys_serial_read($u8* arg1, arg2);
 
     panic("unrecognized sys_id");
     return $u64 -1;
+}
+
+//on success, populates ts with the current time in the requested clock and returns 0
+//on failure, returns some negative error code
+//currently only supports CLOCK_REALTIME
+u64 sys_clock_gettime(u64 clock_id, timespec* ts) {
+    u64* user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    passert(clock_id == CLOCK_REALTIME, "sys_clock_gettime() : currently only support CLOCK_REALTIME");
+
+    timespec* kts = $timespec* malloc(sizeof(timespec));
+    hpet_get_sys_time(kts);
+    i64 tv_sec = kts->tv_sec;
+    i64 tv_nsec = kts->tv_nsec;
+    free($void* kts, sizeof(timespec));
+
+    pt_switch(user_pt);
+
+    ts->tv_sec = tv_sec;
+    ts->tv_nsec = tv_nsec;
+
+    return 0x0;
 }
 
 //on success, returns the pid of the child that got WAIT'd

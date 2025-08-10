@@ -1,7 +1,7 @@
 // Advanced Configuration and Power Interface (ACPI)
 // to use the ACPI, we first must find the RSDP
 // Root System Description Pointer (RSDP)
-struct RSDP {
+struct RSDP {   //this is for ACPI 1.0. For ACPI 2.0+, use XSDP
     u8[8]   signature;  //"RSD PTR " (note the trailing space)
     u8      checksum;
     u8[6]   OEMID;
@@ -9,12 +9,21 @@ struct RSDP {
     u32     rsdt_address;
 }
 
+// Root System Description Table (RSDT)
+// contains pointers to all the other System Description Tables
+struct RSDT {
+    ACPIHeader  header;
+
+    //usage : $u32* @(RSDT->pstart). There will be header->length of them
+    u8          pstart; 
+}
+
 struct ACPIHeader {
     u8[4]   signature;  
     u32     length;
     u8      revision;
     u8      checksum;
-    u8[6]   oemid;
+    u8[6]   OEMID;
     u64     oem_tableid;
     u32     oem_revision;
     u32     creator_id;
@@ -33,12 +42,82 @@ struct ACPIAddress {
 struct HPET {
     ACPIHeader  header;
     u8          hardware_rev_id;
-    u8          info_bits;     // comparator_count:5, counter_size:1, reserved:1, legacy_replacement:1
+    u8          info_bits;      // comparator_count:5, counter_size:1, reserved:1, legacy_replacement:1
     u16         pci_vendor_id;
-    ACPIAddress address;
+    ACPIAddress address;        // address to HPET registers
     u8          hpet_number;
     u16         minimum_tick;
     u8          page_protection;
+}
+
+//pointed to by HPET->address
+struct HPETRegisters {
+    u64     capabilities;
+    u64     reserved0;
+    u64     config;
+    u64     reserved1;
+    u64     interrupt_status;
+    u64[25] reserved2;
+    u64     main_counter;
+    u64     reserved3;
+}
+
+//returns 1 if good
+i32 rsdp_validate(RSDP* rsdp) {
+    // check signature
+    if( rsdp->signature[0] != 'R' ||
+        rsdp->signature[1] != 'S' || 
+        rsdp->signature[2] != 'D' || 
+        rsdp->signature[3] != ' ' || 
+        rsdp->signature[4] != 'P' || 
+        rsdp->signature[5] != 'T' || 
+        rsdp->signature[6] != 'R' || 
+        rsdp->signature[7] != ' ') {
+        return 0;
+    }
+
+    // checksum
+    u64 sum = 0x0;
+    for(u64 i = 0x0; i < sizeof(RSDP); i++){
+        sum += $u64 ($u8* rsdp)[i];
+    }
+    if($u8 sum != $u8 0x0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+//returns 1 if good
+i32 acpi_validate(ACPIHeader* header, u8* exp_sig) {
+    // check signature
+    for(u64 i = 0x0; i < 0x4; i++) {    
+        if(header->signature[i] != exp_sig[i]) return 0;
+    }
+
+    // checksum. Should sum the entire table including the header
+    u64 sum = 0x0;
+    for(u64 i = 0x0; i < $u64 header->length; i++) {
+        sum += $u64 ($u8* header)[i];
+    }
+    if($u8 sum != $u8 0x0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+//on success, returns a pointer to the struct with the provided signature
+//on failure, returns nullptr
+void* rsdt_find_entry(RSDT* rsdt, u8* exp_sig) {
+    u32* ptrs = $u32* @(rsdt->pstart);
+    for(u64 i = 0x0; i < ($u64 rsdt->header.length - sizeof(ACPIHeader)) / sizeof(u32); i++) {
+        ACPIHeader* nheader = $ACPIHeader* $u64 ptrs[i];
+        if(acpi_validate(nheader, exp_sig)) {
+            return $void* nheader;
+        }
+    }
+    return nullptr;
 }
 
 i32 init_acpi() {
@@ -53,47 +132,226 @@ i32 init_acpi() {
 
         //look in first page of EBDA
         for(u64 i = 0x0; i < 0x1000; i += 0x10){
-            u8* ptr = $u8* (ebda + i);
-            if(ptr[0] == 'R' &&
-               ptr[1] == 'S' && 
-               ptr[2] == 'D' && 
-               ptr[3] == ' ' && 
-               ptr[4] == 'P' && 
-               ptr[5] == 'T' && 
-               ptr[6] == 'R' && 
-               ptr[7] == ' ') {
-                rsdp = $RSDP* ptr;
+            RSDP* ptr = $RSDP* (ebda + i);
+            if(rsdp_validate(ptr)) {
+                rsdp = ptr;
             }
         }
 
         //look in 0x000E0000 to 0x000FFFFF
         for(u64 i = 0xe0000; i < 0x100000; i += 0x10) {
-            u8* ptr = $u8* i;
-            if(ptr[0] == 'R' &&
-               ptr[1] == 'S' && 
-               ptr[2] == 'D' && 
-               ptr[3] == ' ' && 
-               ptr[4] == 'P' && 
-               ptr[5] == 'T' && 
-               ptr[6] == 'R' && 
-               ptr[7] == ' ') {
-                rsdp = $RSDP* ptr;
+            RSDP* ptr = $RSDP* i;
+            if(rsdp_validate(ptr)) {
+                rsdp = ptr;
             }
         }
     }
     passert(rsdp != nullptr, "init_acpi() : could not find RSDP");
-    sout << "RSDP : " << rsdp << "\n";
-    sout << "ACPI VERSION : " << ($u64 rsdp->revision) << "\n";
+    sout << "ACPI REVISION : " << ($u64 rsdp->revision) << "\n";
 
-    // check RSDP checksum
+    // right now, only support ACPI v1.0
+    passert(rsdp->revision == $u8 0x0, "init_acpi() : only support ACPI v1.0");
+
+    //find RSDT struct. 
+    RSDT* rsdt = $RSDT* $u64 rsdp->rsdt_address;
+    passert(acpi_validate(@rsdt->header, "RSDT"), "init_acpi() : could not validate RSDT");
+    {
+        sout << "RSDT CONTENTS : ";
+        u32* ptrs = $u32* @(rsdt->pstart);
+        for(u64 i = 0x0; i < ($u64 rsdt->header.length - sizeof(ACPIHeader)) / sizeof(u32); i++) {
+            ACPIHeader* nheader = $ACPIHeader* $u64 ptrs[i];
+            for(u64 j = 0x0; j < 0x4; j++) sout << nheader->signature[j];
+            sout << " ";
+        }
+        sout << "\n";
+    }
     
+    //initialize HPET
+    init_hpet(rsdt);
 
     sout << "done init acpi\n";
     return 0;
 }
 
-i32 init_hpet() {
-    
+//the number of nanoseconds after the epoch should be equal to (roughly):
+// HPET_SECONDS_BASE * 10^9 + hpet_get_ns();
+[__GLOBAL_FIRST__] u64* HPET_MAIN_COUNTER;
+[__GLOBAL_FIRST__] u64  HPET_FREQUENCY_FS;
+[__GLOBAL_FIRST__] u64  HPET_SECONDS_BASE;  
+u64 hpet_get_ns() {
+    u64 val = HPET_MAIN_COUNTER[0];
+    u64 high = val >> $u64 32;
+    u64 low = val & 0xffffffff;
+    return  (low * HPET_FREQUENCY_FS) / $u64 1000000 + 
+            (((high * HPET_FREQUENCY_FS) / $u64 1000000) << $u64 32);
+}
+
+void hpet_get_sys_time(timespec* ts) {
+    u64 hpet_ns = hpet_get_ns();
+    ts->tv_sec = $i64 (HPET_SECONDS_BASE + hpet_ns / $u64 1000000000);
+    ts->tv_nsec = $i64 (hpet_ns % $u64 1000000000);
+}
+
+i32 init_hpet(RSDT* rsdt) {
+    //find HPET entry
+    HPET* hpet = $HPET* rsdt_find_entry(rsdt, "HPET");
+    passert(hpet != nullptr, "init_hpet() : could not find HPET");
+
+    //find HPET registers
+    HPETRegisters* regs = $HPETRegisters* hpet->address.address;
+
+    //enable counter
+    regs->config |= 0x01;
+
+    //get frequency in femtoseconds (10^15 seconds)
+    HPET_FREQUENCY_FS = regs->capabilities >> $u64 32;
+    sout << "HPET FREQUENCY FS : " << HPET_FREQUENCY_FS << "\n";
+
+    //get main counter address
+    HPET_MAIN_COUNTER = @regs->main_counter;
+
+    //get time in seconds after epoch from CMOS
+    u64 cmos_epoch_sec = cmos_get_epoch_time_sec();
+
+    //reset HPET counter
+    HPET_SECONDS_BASE = cmos_epoch_sec;
+    HPET_MAIN_COUNTER[0] = 0x0;
 
     return 0;
+}
+
+//when communicating with CMOS, you always have to mask out NMI
+[__GLOBAL_FIRST__] u16 CMOS_IN    = $u16 0x70;
+[__GLOBAL_FIRST__] u16 CMOS_OUT   = $u16 0x71;
+
+[__GLOBAL_FIRST__] u8 CMOS_NMI_DISABLE_BIT      = $u8 0x80;
+[__GLOBAL_FIRST__] u8 CMOS_UPDATE_IN_PROG_BIT   = $u8 0x80;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_SECONDS     = $u8 0x00;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_MINUTES     = $u8 0x02;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_HOURS       = $u8 0x04;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_DAY         = $u8 0x07;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_MONTH       = $u8 0x08;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_YEAR        = $u8 0x09;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_CENTURY     = $u8 0x32;  //support for this one is questionable
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_STATUSA     = $u8 0x0a;     
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_STATUSB     = $u8 0x0b;
+
+//this should be 24 hour time
+struct rtc_time {
+    u64 seconds;    // [0, 59]
+    u64 minutes;    // [0, 59]
+    u64 hours;      // [0, 23]
+    u64 day;        // [1, 31]
+    u64 month;      // [1, 12]
+    u64 year;      
+}
+
+i32 is_leap_year(u64 year) {
+    return (year % $u64 4 == 0x0) && ((year % $u64 100 != 0x0) || (year % $u64 400 == 0x0));
+}
+
+//we'll need to figure out timezones, but this will do for now
+u64 cmos_get_epoch_time_sec() {
+    rtc_time time = cmos_read_time();
+    u64 ans = 0x0;
+
+    //figure out how many days have passed
+    u64 days_passed = 0x0;
+    days_passed += time.day - 0x1;
+    if(time.month > $u64 1) days_passed += $u64 31; //lmao
+    if(time.month > $u64 2) days_passed += $u64 28;
+    if(time.month > $u64 3) days_passed += $u64 31;
+    if(time.month > $u64 4) days_passed += $u64 30;
+    if(time.month > $u64 5) days_passed += $u64 31;
+    if(time.month > $u64 6) days_passed += $u64 30;
+    if(time.month > $u64 7) days_passed += $u64 31;
+    if(time.month > $u64 8) days_passed += $u64 31;
+    if(time.month > $u64 9) days_passed += $u64 30;
+    if(time.month > $u64 10) days_passed += $u64 31;
+    if(time.month > $u64 11) days_passed += $u64 30;
+    if(time.month > $u64 12) days_passed += $u64 31; 
+    if(is_leap_year(time.year) && time.month > $u64 2) days_passed ++;
+    for(u64 i = $u64 1970; i < time.year; i++){
+        days_passed += $u64 365;
+        if(is_leap_year(i)) days_passed ++;
+    }
+    ans += days_passed * $u64 86400;
+
+    //add the hour/minute/second 
+    ans += time.hours * $u64 3600 + time.minutes * $u64 60 + time.seconds;
+    
+    return ans;
+}
+
+u8 cmos_read_register(u8 which) {
+    outb(CMOS_IN, CMOS_NMI_DISABLE_BIT | which);
+    return inb(CMOS_OUT);
+}
+
+u8 bcd_to_bin(u8 val) {
+    return (val & $u8 0x0f) + ((val >> $u8 4) * $u8 10);
+}
+
+rtc_time cmos_read_time() { 
+    rtc_time t1 = new rtc_time();
+    rtc_time t2 = new rtc_time();
+
+    while(1) {
+        //wait until there's no update in progress
+        while(cmos_read_register(CMOS_REGISTER_STATUSA) & CMOS_UPDATE_IN_PROG_BIT) {
+            //idle
+        }
+
+        //read in stuff twice
+        t1.seconds = $u64 cmos_read_register(CMOS_REGISTER_SECONDS);
+        t1.minutes = $u64 cmos_read_register(CMOS_REGISTER_MINUTES);
+        t1.hours = $u64 cmos_read_register(CMOS_REGISTER_HOURS);
+        t1.day = $u64 cmos_read_register(CMOS_REGISTER_DAY);
+        t1.month = $u64 cmos_read_register(CMOS_REGISTER_MONTH);
+        t1.year = $u64 cmos_read_register(CMOS_REGISTER_YEAR);
+        u64 century1 = $u64 cmos_read_register(CMOS_REGISTER_CENTURY);
+
+        t2.seconds = $u64 cmos_read_register(CMOS_REGISTER_SECONDS);
+        t2.minutes = $u64 cmos_read_register(CMOS_REGISTER_MINUTES);
+        t2.hours = $u64 cmos_read_register(CMOS_REGISTER_HOURS);
+        t2.day = $u64 cmos_read_register(CMOS_REGISTER_DAY);
+        t2.month = $u64 cmos_read_register(CMOS_REGISTER_MONTH);
+        t2.year = $u64 cmos_read_register(CMOS_REGISTER_YEAR);
+        u64 century2 = $u64 cmos_read_register(CMOS_REGISTER_CENTURY);
+
+        //if they're the same, return
+        if(memcmp($void* @t1, $void* @t2, sizeof(rtc_time)) == 0 && century1 == century2) {
+            // how is it encoded?
+            u8 statusB = cmos_read_register(CMOS_REGISTER_STATUSB);
+
+            // BCD conversion if needed
+            if(!(statusB & $u8 0x04)) { // bit 2 = 0 -> BCD mode
+                t1.seconds  = $u64 bcd_to_bin($u8 t1.seconds);
+                t1.minutes  = $u64 bcd_to_bin($u8 t1.minutes);
+                t1.hours    = $u64 bcd_to_bin($u8 (t1.hours & 0x7f));
+                t1.day      = $u64 bcd_to_bin($u8 t1.day);
+                t1.month    = $u64 bcd_to_bin($u8 t1.month);
+                t1.year     = $u64 bcd_to_bin($u8 t1.year);
+                century1    = $u64 bcd_to_bin($u8 century1);
+            }
+
+            // handle 12-hour format
+            if(!(statusB & $u8 0x02)) { // bit 1 = 0 -> 12-hour
+                i32 is_pm = $i32 (t1.hours & 0x80);
+                t1.hours &= 0x7f;
+                if(is_pm && t1.hours != $u64 12) t1.hours += $u64 12;
+                else if(!is_pm && t1.hours == $u64 12) t1.hours = $u64 0;
+            }
+
+            // compute full year
+            if(century1 == $u64 0) {      // century register missing
+                century1 = $u64 20;       // assume 20xx
+            }
+            t1.year = century1 * $u64 100 + t1.year;
+
+            break;
+        }
+    }
+    
+    return t1;
 }

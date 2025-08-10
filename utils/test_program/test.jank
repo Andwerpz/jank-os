@@ -1,6 +1,7 @@
 #include <jstring>;
 #include <string>;
 #include <iostream>;
+#include <time>;
 
 i32 main() {                                                                                          
 
@@ -13,6 +14,9 @@ i32 main() {
     cout << "        88  ,adPPPPP88  88       88  8888[     Y8,        ,8P          `8b" << "\n";     
     cout << "88,   ,d88  88,    ,88  88       88  88``Yba,   Y8a.    .a8P   Y8a     a8P" << "\n";     
     cout << " `Y8888P`   ``8bbdP`Y8  88       88  88   `Y8a   ``Y8888Y``     `Y88888P` " << "\n";
+    cout << "\n";
+
+    cout << "Current epoch time : " << get_sys_time_sec() << "\n";
     cout << "\n";
 
     while(1) {
