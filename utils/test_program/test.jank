@@ -16,7 +16,7 @@ i32 main() {
     cout << " `Y8888P`   ``8bbdP`Y8  88       88  88   `Y8a   ``Y8888Y``     `Y88888P` " << "\n";
     cout << "\n";
 
-    cout << "Current epoch time : " << get_sys_time_sec() << "\n";
+    cout << "Current time UTC (?) : " << strftime() << "\n";
     cout << "\n";
 
     while(1) {
@@ -24,6 +24,10 @@ i32 main() {
         vector<string> cmd = cin.next_line().split(' ');
         if(cmd[0] == "quit") {
             break;
+        }
+        else if(cmd[0] == "time") {
+            cout << "Current epoch time : " << get_sys_time_sec() << "\n";
+            cout << "Current time UTC (?) : " << strftime() << "\n";
         }
         else {
             cout << "unknown command\n";
