@@ -71,7 +71,7 @@ struct ELF64_Sym {
 //takes in a byte buffer that represents an ELF file, maps it to the provided pagetable
 //entry point virtual address is returned through out_entry_off
 //returns 0 on success
-i32 load_elf(u8* buf, u64 size, u64* pt, u64& out_entry_off) {
+i32 load_elf(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
     sout << "Loading ELF ...\n";
 
     //check if there's even enough room for the ELF header

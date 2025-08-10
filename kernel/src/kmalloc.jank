@@ -10,7 +10,7 @@ void* malloc(u64 sz) {
     MEM_USED += sz;
 
     void* addr = $void* kheap_brk;
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
     for(u64 i = $u64 0; i < sz; i += PAGE_SIZE) {
         pt_map_page(kernel_pt, $void* (i + kheap_brk), palloc(), PTE_WRITEABLE);
     }
@@ -31,7 +31,7 @@ i32 free(void* addr, u64 sz) {
     }
     MEM_USED -= sz;
 
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
     for(u64 i = $u64 0; i < sz; i += PAGE_SIZE){
         void* vaddr = $void* ($u64 addr + i);
         i32 level = 0;

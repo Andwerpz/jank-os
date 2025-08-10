@@ -11,7 +11,7 @@ struct process {
     u64 kstack_bottom;      // 8
     u64 brk;                // 16
     u64 status;             // 24
-    u64* pt;                // 32
+    pagetable_t pt;         // 32
     i32 exit_status;        // 40
     file_descriptor*[64] fd_table;  //empty fds will be nullptr
     process* parent;        // nullptr indicates this is created by the kernel
@@ -26,7 +26,7 @@ pid_t pid_ptr = $pid_t 1;
 [__GLOBAL_FIRST__] u64 PROCESS_CREATE_STACK     = $u64 1 << $u64 0;
 [__GLOBAL_FIRST__] u64 PROCESS_CREATE_FDTABLE   = $u64 1 << $u64 1;
 process* create_process(u64 flags) {
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
 
     process* proc = $process* malloc(sizeof(process));
     *proc := new process();
@@ -161,7 +161,7 @@ void make_process_ready(process* proc) {
 //the process will still exist in the scheduler as a zombie
 //TODO transfer children to init instead of this parents parent
 void kill_process(pid_t pid, i32 status) {
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
 
     //update process status
     process* proc = find_process(pid);
@@ -199,8 +199,8 @@ void kill_process(pid_t pid, i32 status) {
     }
 
     //free pagetable + underlying pages
-    pt_free_pagetable(proc->pt);
-    proc->pt = $u64* nullptr;
+    pt_free(proc->pt);
+    proc->pt = $pagetable_t nullptr;
 
     //free file descriptors
     for(u64 i = 0x0; i < PROCESS_MAX_FD; i++){
@@ -221,7 +221,7 @@ void remove_process(pid_t pid) {
     passert(proc->status == PROCESS_ZOMBIE, "remove_process() : process must be zombie");
 
     //dealloc kstack
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
     for(u64 i = 0x0; i < KSTACK_SIZE; i += PAGE_SIZE) {
         void* vaddr = $void* (proc->kstack_bottom + i);
         void* paddr = pt_translate(kernel_pt, vaddr);
@@ -234,34 +234,3 @@ void remove_process(pid_t pid) {
     free($void* proc, sizeof(process));
 }
 
-
-
-//copies all mappings from pt to out_pt that exist in the lower half
-//allocs new pages and copies the data over as well
-void pt_copy_lower_half(u64* pt, u64* out_pt, u64 vaddr, u64 level) {
-    for(u64 i = 0x0; i < $u64 512; i++){
-        if(level == 0x3 && i == $u64 256) break; 
-
-        u64 cvaddr = vaddr | (i << ($u64 12 + $u64 9 * level));
-        u64 pte = pt[i];    
-        if(!(pte & PTE_PRESENT)) continue;
-        u64* npt = pte_get_addr(pte);
-
-        //if this is not a leaf, copy subtree
-        if(level) pt_copy_lower_half(npt, out_pt, cvaddr, level - 0x1);
-
-        //if this is a leaf, copy mapping
-        if(!level) {
-            u64 flags = pte_get_permission_flags(pte);
-            void* paddr = $void* pte_get_addr(pte);
-            void* npaddr = palloc();
-
-            pt_map_page(out_pt, $void* cvaddr, npaddr, flags);
-            memcpy(npaddr, paddr, PAGE_SIZE);
-        }
-    }
-}
-
-void pt_copy_lower_half(u64* pt, u64* out_pt) {
-    pt_copy_lower_half(pt, out_pt, 0x0, 0x3);
-}

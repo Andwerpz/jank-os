@@ -63,7 +63,7 @@ struct TSS {
 // https://wiki.osdev.org/Global_Descriptor_Table
 i32 init_gdt() {
     serial_println("start init gdt");
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
 
     //map page for GDT
     pt_map_page(kernel_pt, $void* GDT_PAGE, palloc(), PTE_WRITEABLE);

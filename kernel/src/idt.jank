@@ -22,7 +22,7 @@ struct IDTEntry {
 
 i32 init_idt() {
     serial_println("start init idt");
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
 
     //map page for IDT
     pt_map_page(kernel_pt, $void* IDT_PAGE, palloc(), PTE_WRITEABLE);

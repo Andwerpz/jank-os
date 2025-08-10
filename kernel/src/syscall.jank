@@ -21,7 +21,7 @@ i32 init_syscall() {
     wrmsr(EFER_MSR, efer);
 
     //setup GS_BASE
-    u64* kernel_pt = pt_get_current();
+    pagetable_t kernel_pt = pt_get_current();
     pt_map_page(kernel_pt, $void* GSDATA_PAGE, palloc(), PTE_WRITEABLE);
 
     GSData* gs_data = $GSData* GSDATA_PAGE;
@@ -34,7 +34,7 @@ i32 init_syscall() {
 
 //returns 0 on success, negative on failure
 //expects kernel_pt to be active
-i32 copy_to_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
+i32 copy_to_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
     u64 uptr = $u64 ubuf;
     uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
     u64 ubuf_end = $u64 ubuf + amt;
@@ -68,7 +68,7 @@ i32 copy_to_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
 
 //returns 0 on success, negative on failure
 //expects kernel_pt to be active
-i32 copy_from_user(u64* user_pt, u8* kbuf, u8* ubuf, u64 amt) {
+i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
     u64 uptr = $u64 ubuf;
     uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
     u64 ubuf_end = $u64 ubuf + amt;
@@ -227,7 +227,7 @@ u64 syscall_handler() {
     asm!("movq %r9, -56(%rbp)");
 
     if(0) {
-        u64* user_pt = pt_get_current();
+        pagetable_t user_pt = pt_get_current();
         pt_switch_to_kernel();
         sout << "SYSCALL : " << sys_id << "\n";
         pt_switch(user_pt);
@@ -256,7 +256,7 @@ u64 syscall_handler() {
 //on failure, returns some negative error code
 //currently only supports CLOCK_REALTIME
 u64 sys_clock_gettime(u64 clock_id, timespec* ts) {
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     passert(clock_id == CLOCK_REALTIME, "sys_clock_gettime() : currently only support CLOCK_REALTIME");
@@ -279,7 +279,7 @@ u64 sys_clock_gettime(u64 clock_id, timespec* ts) {
 //if WNOHANG was specified and no child was WAIT'd, returns 0
 //on failure some negative error code is returned
 pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     passert(rusage == nullptr, "sys_wait4() : no support for rusage");
@@ -311,7 +311,7 @@ pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
 
 i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
     // switch to kernel pt
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     process* proc = get_cur_proc();
@@ -350,7 +350,7 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
 
 i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     // switch to kernel pt
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     process* proc = get_cur_proc();
@@ -391,7 +391,7 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
 
 i32 sys_close(i32 fd_ind) {
     // switch to kernel_pt
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     process* proc = get_cur_proc();
@@ -438,7 +438,7 @@ pid_t sys_getpid() {
 //in the child, fork returns with 0
 pid_t sys_fork() {
     // switch to kernel_pt
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     // create child process
@@ -469,7 +469,7 @@ u64 sys_sched_yield() {
 
 void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 offset) {
     // switch to kernel_pt
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     process* proc = get_cur_proc();
@@ -489,7 +489,6 @@ void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 o
     // alloc mem
     void* vaddr = $void* proc->brk;
     for(u64 i = 0x0; i < len; i += PAGE_SIZE) {
-        // void pt_alloc_and_map_page(u64* pt, void* vaddr, u64 leaf_flags)
         pt_alloc_and_map_page(user_pt, $void* ($u64 vaddr + i), map_flags | PTE_USER);
     }
     proc->brk += len;
@@ -502,14 +501,10 @@ void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 o
 
 i32 sys_munmap(void* addr, u64 len) {
     // switch to kernel_pt
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     if($u64 addr % PAGE_SIZE != 0x0 || len % PAGE_SIZE != 0x0) return -1;
-    // void pt_unmap_page(u64* pt, void* vaddr)
-    // void pfree(void* page)
-    // i32 pt_is_vaddr_mapped(u64* pt, void* vaddr)
-    // void* pt_translate(u64* pt, void* vaddr)
     for(u64 i = 0x0; i < len; i += PAGE_SIZE) {
         void* curr_vaddr = $void* ($u64 addr + i);
         if(!pt_is_vaddr_mapped(user_pt, curr_vaddr)) panic("sys_munmap: double free");
@@ -525,7 +520,7 @@ i32 sys_munmap(void* addr, u64 len) {
 }
 
 u64 sys_serial_write(u8* buf, u64 amt) {
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
     for(u64 i = 0x0; i < amt; i++) serial_print(buf[i]);
     pt_switch(user_pt);
@@ -533,7 +528,7 @@ u64 sys_serial_write(u8* buf, u64 amt) {
 }
 
 u64 sys_serial_read(u8* buf, u64 amt) {
-    u64* user_pt = pt_get_current();
+    pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
     for(u64 i = 0x0; i < amt; i++) buf[i] = read_serial();
     pt_switch(user_pt);

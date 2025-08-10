@@ -89,7 +89,7 @@ void tests() {
     }
 
     if(1) {
-        u64* kernel_pt = pt_get_current();
+        pagetable_t kernel_pt = pt_get_current();
         void* fb_phys = pt_translate(kernel_pt, $void* BOOTBOOT_FB);
         serial_print("FB PHYS : ");
         serial_println(fb_phys);
@@ -102,7 +102,7 @@ void tests() {
         u64 tlow  = 0x0000000007fe0000;
         u64 thigh = 0x0000000007fe0000;
 
-        u64* kernel_pt = pt_get_current();
+        pagetable_t kernel_pt = pt_get_current();
         serial_print("kernel pt addr : ");
         serial_println(kernel_pt);
 
@@ -113,7 +113,7 @@ void tests() {
 
     //check if all MMAP_FREE pages can be touched and are actually mapped
     if(0) {
-        u64* kernel_pt = pt_get_current();
+        pagetable_t kernel_pt = pt_get_current();
         BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
         MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
         u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
@@ -137,7 +137,7 @@ void tests() {
 
     //check if we can map new pages
     if(0) {
-        u64* kernel_pt = pt_get_current();
+        pagetable_t kernel_pt = pt_get_current();
         u64 low  = 0x0000000100000000;
         u64 high = 0x0000000100100000;
         for(u64 i = low; i < high; i += PAGE_SIZE) {

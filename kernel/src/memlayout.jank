@@ -2,7 +2,7 @@
 [__GLOBAL_FIRST__] u64 PAGE_SIZE = $u64 4096;
 
 struct GSData {
-    u64* kernel_pt;                     //0
+    pagetable_t kernel_pt;              //0
     void* saved_stack;                  //8 : for saving the process stack during syscalls
     u64 cur_proc_kstack_top;            //16 : set in the scheduler
 }
