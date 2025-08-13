@@ -8,6 +8,7 @@
 [__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;   //if set, user will be able to access
 [__GLOBAL_FIRST__] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
 [__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag, only valid on leaf PTEs?
+[__GLOBAL_FIRST__] u64 PTE_PCD        = $u64 1 << $u64 4;  // Cache Disable
 
 void enable_nx() {
     //check if nx is supported

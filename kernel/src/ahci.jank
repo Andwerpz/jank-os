@@ -19,7 +19,8 @@ struct ahci_hba {
     u8  bus;
     u8  device;
     u8  function;
-    u64 abar; // AHCI Base Address Register :O
+    u64 abar_paddr; // AHCI Base Address Register :O
+    u64 abar_vaddr;
 }
 
 u32 pci_read(u8 bus, u8 device, u8 function, u8 offset) {
@@ -67,9 +68,14 @@ i32 scan_for_ahci(ahci_hba* hba) {
                     if(bar_type == $u8 0x2) {
                         sout << "64 bit ABAR" << "\n";
                     } else {
-                        hba->abar = $u64 (bar5 & $u32 0xfffffff0);
+                        hba->abar_paddr = $u64 (bar5 & $u32 0xfffffff0);
                         sout << "32 bit ABAR" << "\n";
                     }
+
+                    pt_map_page(pt_get_current(), $void* AHCI_ABAR_PAGE, $void* hba->abar_paddr, PTE_WRITEABLE | PTE_PCD);
+                    pt_map_page(pt_get_current(), $void* (AHCI_ABAR_PAGE + PAGE_SIZE), $void* (hba->abar_paddr + PAGE_SIZE), PTE_WRITEABLE | PTE_PCD);
+                    hba->abar_vaddr = AHCI_ABAR_PAGE;
+                    
                     return 0;
                 }
             }
@@ -133,12 +139,12 @@ struct HBA_MEM {
 }
 
 void hba_info(ahci_hba* hba) {
-    HBA_MEM* h = $HBA_MEM* hba->abar;
+    HBA_MEM* h = $HBA_MEM* hba->abar_vaddr;
 
     sout << "HBA Info:\n";
     sout << "bus : device : function\n";
     sout << $i32 hba->bus << ":" << $i32 hba->device << ":" << $i32 hba->function << "\n";
-    sout << "abar: " << $void* hba->abar << "\n";
+    sout << "abar: " << $void* h << "\n";
 
     u32 version = h->vs;
     u16 major = $u16 ((version >> $u32 16) & $u32 0xffff);
@@ -194,16 +200,129 @@ void start_cmd(HBA_PORT* p) {
 	p->cmd |= HBA_PxCMD_ST; // set ST
 }
 
+struct HBA_CMD_HEADER {
+	// DW0
+    u32 DW0;
+	// uint8_t  cfl:5;      // Command FIS length in DWORDS, 2 ~ 16
+	// uint8_t  a:1;        // ATAPI
+	// uint8_t  w:1;        // Write, 1: H2D, 0: D2H
+	// uint8_t  p:1;        // Prefetchable
+
+	// uint8_t  r:1;        // Reset
+	// uint8_t  b:1;        // BIST
+	// uint8_t  c:1;        // Clear busy upon R_OK
+	// uint8_t  rsv0:1;     // Reserved
+	// uint8_t  pmp:4;      // Port multiplier port
+
+	// uint16_t prdtl;      // Physical region descriptor table length in entries
+
+	// DW1
+	u32 prdbc;              // Physical region descriptor byte count transferred
+
+	// DW2, 3
+	u32 ctba;               // Command table descriptor base address
+	u32 ctbau;              // Command table descriptor base address upper 32 bits
+
+	// DW4 - 7
+	u32[4] rsv1;            // Reserved
+}
+
 void rebase_port(HBA_PORT* p, i32 port_num) {
     stop_cmd(p);
+
+    // clb and fb will fit on one page.    
+    void* p_base = palloc();
+    memset(p_base, 0, PAGE_SIZE);
+
+	p->clb = $u32 ($u64 p_base & 0xffffffff);
+	p->clbu = $u32 (($u64 p_base >> $u64 32) & 0xffffffff);
+
+	p->fb = $u32 (($u64 p_base + $u64 1024) & 0xffffffff);
+	p->fbu = $u32 ((($u64 p_base + $u64 1024) >> $u64 32) & 0xffffffff);
     
-    // TODO
+    void* temp = palloc();
+    memset(temp, 0, PAGE_SIZE);
+	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
+    for(i32 i = 0; i < 32; i++) {
+        if($u64 i * sizeof(HBA_CMD_HEADER) >= PAGE_SIZE) {
+            temp = palloc();
+            memset(temp, 0, PAGE_SIZE);
+        }
+
+        u64 addr = $u64 temp + ($u64 i * sizeof(HBA_CMD_HEADER));
+
+        cmdheader[i].DW0 |= ($u32 8 << $u32 16);
+		cmdheader[i].ctba = $u32 (addr & 0xffffffff);
+		cmdheader[i].ctbau = $u32 ((addr >> $u64 32) & 0xffffffff);
+    }
 
     start_cmd(p);
 }
 
-// TODO
-// map abar to vaddr
-// PCD, is the 'Cache Disable' bit. If the bit is set, the page will not be cached. Otherwise, it will be. ADD CONSTANT TO PGTBL
-// pt_map_page calc size and map
-// palloc 3 pages, assign clb,fb,ctba
+// https://wiki.osdev.org/AHCI#Example_-_Read_hard_disk_sectors
+[__GLOBAL_FIRST__] u32 ATA_DEV_BUSY     = $u32 0x80;
+[__GLOBAL_FIRST__] u32 ATA_DEV_DRQ      = $u32 0x08;
+
+// Find a free command list slot
+i32 find_cmdslot(HBA_PORT* p) {
+	// If not set in SACT and CI, the slot is free
+	u32 slots = (p->sact | p->ci);
+	for(i32 i = 0; i < 32; i++) {
+		if ((slots & $u32 1) == $u32 0)
+			return i;
+		slots >>= $u32 1;
+	}
+	sout << "Cannot find free command list entry\n";
+	return -1;
+}
+
+struct FIS_REG_H2D {
+	// DWORD 0
+	u8          fis_type;   // FIS_TYPE_REG_H2D
+
+    u8          pm_n_stuff; // I dont have a name for this
+	// uint8_t  pmport:4;   // Port multiplier
+	// uint8_t  rsv0:3;     // Reserved
+	// uint8_t  c:1;        // 1: Command, 0: Control
+
+	u8          command;    // Command register
+	u8          featurel;   // Feature register, 7:0
+	
+	// DWORD 1
+	u8          lba0;       // LBA low register, 7:0
+	u8          lba1;       // LBA mid register, 15:8
+	u8          lba2;       // LBA high register, 23:16
+	u8          device;     // Device register
+
+	// DWORD 2
+	u8          lba3;       // LBA register, 31:24
+	u8          lba4;       // LBA register, 39:32
+	u8          lba5;       // LBA register, 47:40
+	u8          featureh;   // Feature register, 15:8
+
+	// DWORD 3
+	u8          countl;     // Count register, 7:0
+	u8          counth;     // Count register, 15:8
+	u8          icc;        // Isochronous command completion
+	u8          control;    // Control register
+
+	// DWORD 4
+	u8[4]       rsv1;       // Reserved
+}
+
+i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
+    p->is = $u32 -1; // clear pending interrupt bits
+	i32 spin = 0; // Spin lock timeout counter
+	i32 slot = find_cmdslot(p);
+	if(slot == -1) return -1;
+
+	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
+	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
+	cmdheader->DW0 |= $u32 (sizeof(FIS_REG_H2D) / sizeof(u32)) & $u32 0x1f;  // Command FIS size (cfl)
+	cmdheader->DW0 &= $u32 (~0x20); // Read from device (w)
+
+	// cmdheader->DW0 = (uint16_t)((count-1) >> 4) + 1; // PRDT entries count (prdtl)
+	// HBA_CMD_TBL *cmdtbl = (HBA_CMD_TBL*)(cmdheader->ctba);
+	// memset(cmdtbl, 0, sizeof(HBA_CMD_TBL) +
+ 	// (cmdheader->prdtl-1)*sizeof(HBA_PRDT_ENTRY));
+}
