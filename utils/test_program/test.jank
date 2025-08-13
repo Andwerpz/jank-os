@@ -29,6 +29,11 @@ i32 main() {
             cout << "Current epoch time : " << get_sys_time_sec() << "\n";
             cout << "Current time UTC (?) : " << strftime() << "\n";
         }
+        else if(cmd[0] == "yield") {
+            cout << "BEFORE YIELD\n";
+            sys_sched_yield();
+            cout << "AFTER YIELD (YAY)\n";
+        }
         else {
             cout << "unknown command\n";
         }

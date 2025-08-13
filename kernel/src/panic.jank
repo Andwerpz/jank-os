@@ -9,6 +9,10 @@ void panic(u8* msg) {
     }
 }
 
+void panic() {
+    panic("panic");
+}
+
 //'panic assert'
 void passert(i32 val, u8* msg) {
     if(!val) panic(msg);

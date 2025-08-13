@@ -32,6 +32,7 @@ normal: disk
 
 telnet: disk
 	qemu-system-x86_64 \
+	-d int,cpu_reset \
     -no-reboot \
     -serial telnet:localhost:4321,server,nowait \
     -device ich9-ahci,id=ahci \

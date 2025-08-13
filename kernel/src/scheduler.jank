@@ -20,6 +20,8 @@ struct trapframe {
     u64 rip;        // 128
     u64 rflags;     // 136
     u64 pt;         // 144
+    u64 cs;         // 152
+    u64 ss;         // 160
 }
 
 void print_trapframe(trapframe* tf) {
@@ -42,13 +44,15 @@ void print_trapframe(trapframe* tf) {
     sout << "%rip   : " << $void* tf->rip << "\n";
     sout << "rflags : " << $void* tf->rflags << "\n";
     sout << "pt     : " << $void* tf->pt << "\n";
+    sout << "cs     : " << $void* tf->cs << "\n";
+    sout << "ss     : " << $void* tf->ss << "\n";
 }
 
 //we shouldn't store processes anywhere else. 
 vector<process*> all_processes;
 
 deque<pid_t> process_queue; 
-pid_t current_process;
+pid_t current_process = $pid_t 0;
 
 //on success, returns a pointer to a process
 //on failure, returns nullptr
@@ -78,12 +82,13 @@ void erase_process(pid_t pid) {
 }
 
 process* get_cur_proc() {
-    process* proc = find_process(current_process);
+    process* proc = find_process(get_cur_pid());
     passert(proc != nullptr, "get_cur_proc() : failed to find current process");
     return proc;
 }
 
 pid_t get_cur_pid() {
+    passert(current_process != $pid_t 0, "get_cur_pid() : current_process is 0??");
     return current_process;
 }
 
@@ -135,70 +140,153 @@ void init_scheduler() {
 void scheduler() {
     //look for next process to run
     process* proc = schedule_next_process();
+    passert(proc->status == PROCESS_READY, "scheduler() : should only schedule ready processes");
     current_process = proc->pid;
     u64 proc_trapframe_off = proc->kstack_bottom + KSTACK_TRAPFRAME;    // -16(%rbp)
 
     //set process state to RUNNING
     proc->status = PROCESS_RUNNING;
 
+    trapframe* tf = $trapframe* proc_trapframe_off;
+    // print_trapframe(tf);
+
     //so syscalls know where this is
     GSData* gs_data = $GSData* GSDATA_PAGE;
     gs_data->cur_proc_kstack_top = proc->kstack_bottom + KSTACK_TOP;
 
-    //swapgs
-    asm!("swapgs");
+    //need to do different stuff if we're returning to user or kernel mode
+    if(tf->cs == 0x23) {
+        //returning to user mode
+        //swap to user GS
+        asm!("swapgs");             
 
-    //context switch to process and run it
-    asm!("movq -16(%rbp), %rax");
+        //load trapframe
+        asm!("movq -16(%rbp), %rax");   //%rax now holds trapframe base
 
-    //iretq information
-    asm!("pushq $0x1B");        // SS
-    asm!("pushq 56(%rax)");     // %rsp
-    asm!("pushq 136(%rax)");    // rflags
-    asm!("pushq $0x23");        // CS
-    asm!("pushq 128(%rax)");    // %rip
+        //iretq information
+        asm!("pushq 160(%rax)");    // SS
+        asm!("pushq 56(%rax)");     // %rsp
+        asm!("pushq 136(%rax)");    // rflags
+        asm!("pushq 152(%rax)");    // CS
+        asm!("pushq 128(%rax)");    // %rip
 
-    //push registers
-    asm!("pushq 0(%rax)");      // %rax
-    asm!("pushq 8(%rax)");      // %rbx
-    asm!("pushq 16(%rax)");     // %rcx
-    asm!("pushq 24(%rax)");     // %rdx
-    asm!("pushq 32(%rax)");     // %rsi
-    asm!("pushq 40(%rax)");     // %rdi
-    asm!("pushq 48(%rax)");     // %rbp
-                                // skip %rsp
-    asm!("pushq 64(%rax)");     // %r8
-    asm!("pushq 72(%rax)");     // %r9
-    asm!("pushq 80(%rax)");     // %r10
-    asm!("pushq 88(%rax)");     // %r11
-    asm!("pushq 96(%rax)");     // %r12
-    asm!("pushq 104(%rax)");    // %r13
-    asm!("pushq 112(%rax)");    // %r14
-    asm!("pushq 120(%rax)");    // %r15
-    asm!("pushq 144(%rax)");    // %cr3
+        //push registers
+        asm!("pushq 0(%rax)");      // %rax
+        asm!("pushq 8(%rax)");      // %rbx
+        asm!("pushq 16(%rax)");     // %rcx
+        asm!("pushq 24(%rax)");     // %rdx
+        asm!("pushq 32(%rax)");     // %rsi
+        asm!("pushq 40(%rax)");     // %rdi
+        asm!("pushq 48(%rax)");     // %rbp
+                                    // skip %rsp
+        asm!("pushq 64(%rax)");     // %r8
+        asm!("pushq 72(%rax)");     // %r9
+        asm!("pushq 80(%rax)");     // %r10
+        asm!("pushq 88(%rax)");     // %r11
+        asm!("pushq 96(%rax)");     // %r12
+        asm!("pushq 104(%rax)");    // %r13
+        asm!("pushq 112(%rax)");    // %r14
+        asm!("pushq 120(%rax)");    // %r15
+        asm!("pushq 144(%rax)");    // %cr3
 
-    //pop registers
-    asm!("popq %rax");
-    asm!("movq %rax, %cr3");
+        //pop registers
+        asm!("popq %rax");
+        asm!("movq %rax, %cr3");
 
-    asm!("popq %r15");
-    asm!("popq %r14");
-    asm!("popq %r13");
-    asm!("popq %r12");
-    asm!("popq %r11");
-    asm!("popq %r10");
-    asm!("popq %r9");
-    asm!("popq %r8");
-                                // skip %rsp
-    asm!("popq %rbp");
-    asm!("popq %rdi");
-    asm!("popq %rsi");
-    asm!("popq %rdx");
-    asm!("popq %rcx");
-    asm!("popq %rbx");
-    asm!("popq %rax");
+        asm!("popq %r15");
+        asm!("popq %r14");
+        asm!("popq %r13");
+        asm!("popq %r12");
+        asm!("popq %r11");
+        asm!("popq %r10");
+        asm!("popq %r9");
+        asm!("popq %r8");
+                                    // skip %rsp
+        asm!("popq %rbp");
+        asm!("popq %rdi");
+        asm!("popq %rsi");
+        asm!("popq %rdx");
+        asm!("popq %rcx");
+        asm!("popq %rbx");
+        asm!("popq %rax");
 
-    asm!("iretq");
+        asm!("iretq");
+    }
+    else if(tf->cs == 0x08) {
+        //returning to kernel mode          
+        //load trapframe
+        asm!("movq -16(%rbp), %rax");   //%rax now holds trapframe base
+
+        //swap to destination stack
+        asm!("movq 56(%rax), %rsp");
+
+        //iretq information
+        asm!("pushq 136(%rax)");    // rflags
+        asm!("pushq 152(%rax)");    // CS
+        asm!("pushq 128(%rax)");    // %rip
+
+        //push registers
+        asm!("pushq 0(%rax)");      // %rax
+        asm!("pushq 8(%rax)");      // %rbx
+        asm!("pushq 16(%rax)");     // %rcx
+        asm!("pushq 24(%rax)");     // %rdx
+        asm!("pushq 32(%rax)");     // %rsi
+        asm!("pushq 40(%rax)");     // %rdi
+        asm!("pushq 48(%rax)");     // %rbp
+                                    // skip %rsp
+        asm!("pushq 64(%rax)");     // %r8
+        asm!("pushq 72(%rax)");     // %r9
+        asm!("pushq 80(%rax)");     // %r10
+        asm!("pushq 88(%rax)");     // %r11
+        asm!("pushq 96(%rax)");     // %r12
+        asm!("pushq 104(%rax)");    // %r13
+        asm!("pushq 112(%rax)");    // %r14
+        asm!("pushq 120(%rax)");    // %r15
+        asm!("pushq 144(%rax)");    // %cr3
+
+        //pop registers
+        asm!("popq %rax");
+        asm!("movq %rax, %cr3");
+
+        asm!("popq %r15");
+        asm!("popq %r14");
+        asm!("popq %r13");
+        asm!("popq %r12");
+        asm!("popq %r11");
+        asm!("popq %r10");
+        asm!("popq %r9");
+        asm!("popq %r8");
+                                    // skip %rsp
+        asm!("popq %rbp");
+        asm!("popq %rdi");
+        asm!("popq %rsi");
+        asm!("popq %rdx");
+        asm!("popq %rcx");
+        asm!("popq %rbx");
+        asm!("popq %rax");
+
+        asm!("iretq");
+    }
+    else {
+        panic("scheduler() : invalid CS");
+    }
+}
+
+//ends the current process's time slice, goes to the scheduler
+void yield() {
+    passert(irq_disable_count == 0x0, "yield() : interrupts should be enabled");
+    asm!("int $0x20");
+}
+
+void update_cur_proc_status() {
+    process* proc = get_cur_proc();
+    if(proc->status == PROCESS_RUNNING) proc->status = PROCESS_READY;
+    else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;
+    else panic("get_next_status() : unrecognized runtime status");
+}
+
+void debug_print() {
+    sout << "debug print\n";
 }
 
 //TSS should make it so that this uses the kernel stack
@@ -206,15 +294,40 @@ void scheduler() {
 void timer_interrupt_handler() {
     asm!("timer_interrupt_entry:"); //don't want stack frame messing stuff up
 
-    //we should've come from user mode
     //cpu will have pushed these things onto the stack:
-    // SS
-    // %rsp
+    // SS       : from user mode only
+    // %rsp     : from user mode only
     // RFLAGS
     // CS
     // %rip
-    //when we add preemption to syscalls, need to account for different stack contents
 
+    //check if we are coming from kernel mode
+    //we know that at least this is on the stack:
+    // RFLAGS
+    // CS
+    // %rip
+    asm!("pushq %rax");             // save %rax
+    asm!("movq 16(%rsp), %rax");    // CS should be at +16 after pushing %rax
+    asm!("test $3, %al");           // mask out 0b11
+    asm!("jnz .from_user"); 
+    
+    //if we're coming from kernel mode, redo the things that are pushed
+    //so we can handle it as if we came from user mode
+    asm!("pushq $0x10");            // SS
+    asm!("lea 40(%rsp), %rax");     // there are 5 things pushed after the execution %rsp
+    asm!("pushq %rax");             // %rsp
+    asm!("pushq 40(%rsp)");         // RFLAGS
+    asm!("pushq 40(%rsp)");         // CS
+    asm!("pushq 40(%rsp)");         // %rip
+    asm!("movq 40(%rsp), %rax");    // restore %rax
+    asm!("jmp .register_save");
+
+    //coming from user mode
+    asm!(".from_user:");
+    asm!("popq %rax");              // restore %rax
+    asm!("swapgs");                 // swap to kernel GS 
+
+    asm!(".register_save:");
     //push registers onto stack
     asm!("pushq %rax");
     asm!("pushq %rbx");
@@ -237,18 +350,18 @@ void timer_interrupt_handler() {
     asm!("pushq %rax");
 
     //setup kernel execution context
-    asm!("swapgs");                                 //swap to kernel GS 
-    asm!("movq %gs:0, %rax");                       //swap to kernel pagetable
+    asm!("movq %gs:0, %rax");       //swap to kernel pagetable
     asm!("mov %rax, %cr3");
+
+    //update current process's status
+    asm!("call update_cur_proc_status");
 
     //get current process
     asm!("call get_cur_proc");      //%rax now holds pointer to current process
-    asm!("movq PROCESS_READY(%rip), %rbx");
-    asm!("movq %rbx, 24(%rax)");    //change state of current process to READY
 
     //put trapframe addr into %rax
     asm!("movq 8(%rax), %rax");     //%rax now holds proc->kstack_bottom
-    asm!("movq KSTACK_TRAPFRAME(%rip), %rbx");
+    asm!("movq KSTACK_TRAPFRAME(%rip), %rbx"); 
     asm!("add %rbx, %rax");         //%rax now holds trapframe addr
 
     //write to trapframe
@@ -271,10 +384,10 @@ void timer_interrupt_handler() {
     asm!("popq 0(%rax)");       // %rax
 
     asm!("popq 128(%rax)");     // %rip 
-    asm!("add $8, %rsp");       // CS
+    asm!("popq 152(%rax)");     // CS
     asm!("popq 136(%rax)");     // RFLAGS
     asm!("popq 56(%rax)");      // %rsp
-    asm!("add $8, %rsp");       // SS
+    asm!("popq 160(%rax)");     // SS
 
     //send EOI
     asm!("movb $0x20, %al");

@@ -123,7 +123,7 @@ i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
 trapframe* get_user_trapframe() {
     trapframe* ret;
     asm!("movq %gs:16, %rax");  //%rax now holds top of process kstack
-    asm!("sub $176, %rax");     //176 = 152 + 24
+    asm!("sub $192, %rax");     //192 = 168 + 24
     asm!("movq %rax, -8(%rbp)");
     return ret;
 }   
@@ -131,6 +131,8 @@ trapframe* get_user_trapframe() {
 //for now, this is just using the user stack to save the execution context
 [__GLOBAL_FIRST__] extern u8 syscall_handler_entry;
 void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", but we shouldn't use it
+    //this assumes we come from user mode
+
     //cpu should put this stuff in these registers:
     //%rsp : user %rsp
     //%r11 : user RFLAGS
@@ -149,7 +151,7 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("pushq %rcx");     //user RIP
 
     //push trapframe (make sure trapframe is correct size)
-    asm!("sub $152, %rsp");
+    asm!("sub $168, %rsp");
     asm!("movq %rcx,  128(%rsp)");  //%rip
 
     asm!("movq %rax,  0(%rsp)");
@@ -173,6 +175,8 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("movq %r11,  136(%rsp)");
     asm!("movq %cr3, %rcx");
     asm!("movq %rcx,  144(%rsp)");
+    asm!("movq $0x1B, 152(%rsp)");  //user mode selectors
+    asm!("movq $0x23, 160(%rsp)");  
 
     //call higher level syscall handler
     asm!("call syscall_handler");
@@ -197,6 +201,8 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("add $8, %rsp");   //skip %rip
     asm!("add $8, %rsp");   //skip RFLAGS
     asm!("add $8, %rsp");   //assume we're currently using user_pt
+    asm!("add $8, %rsp");   //skip CS
+    asm!("add $8, %rsp");   //skip SS
 
     //pop sysret info
     asm!("popq %rcx");  //user RIP
@@ -233,23 +239,28 @@ u64 syscall_handler() {
         pt_switch(user_pt);
     }
 
-    if(sys_id == SYS_READ) return $u64 sys_read($i32 arg1, $u8* arg2, arg3);
-    else if(sys_id == SYS_WRITE) return $u64 sys_write($i32 arg1, $u8* arg2, arg3);
-    else if(sys_id == SYS_CLOSE) return $u64 sys_close($i32 arg1);
-    else if(sys_id == SYS_EXIT) return sys_exit($i32 arg1);
-    else if(sys_id == SYS_SCHED_YIELD) return sys_sched_yield();
-    else if(sys_id == SYS_MMAP) return $u64 sys_mmap($void* arg1, $u64 arg2, $u64 arg3, $u64 arg4, $i32 arg5, $u64 arg6);
-    else if(sys_id == SYS_MUNMAP) return $u64 sys_munmap($void* arg1, $u64 arg2);
-    else if(sys_id == SYS_GETPID) return $u64 sys_getpid();
-    else if(sys_id == SYS_FORK) return $u64 sys_fork();
-    else if(sys_id == SYS_WAIT4) return $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
-    else if(sys_id == SYS_CLOCK_GETTIME) return $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
+    //asm!("sti");      //enable timer interrupts
 
-    else if(sys_id == SYS_SERIAL_WRITE) return sys_serial_write($u8* arg1, arg2);
-    else if(sys_id == SYS_SERIAL_READ) return sys_serial_read($u8* arg1, arg2);
+    u64 ans;
+    if(sys_id == SYS_READ)                  ans = $u64 sys_read($i32 arg1, $u8* arg2, arg3);
+    else if(sys_id == SYS_WRITE)            ans = $u64 sys_write($i32 arg1, $u8* arg2, arg3);
+    else if(sys_id == SYS_CLOSE)            ans = $u64 sys_close($i32 arg1);
+    else if(sys_id == SYS_EXIT)             ans = $u64 sys_exit($i32 arg1);
+    else if(sys_id == SYS_SCHED_YIELD)      ans = $u64 sys_sched_yield();
+    else if(sys_id == SYS_MMAP)             ans = $u64 sys_mmap($void* arg1, $u64 arg2, $u64 arg3, $u64 arg4, $i32 arg5, $u64 arg6);
+    else if(sys_id == SYS_MUNMAP)           ans = $u64 sys_munmap($void* arg1, $u64 arg2);
+    else if(sys_id == SYS_GETPID)           ans = $u64 sys_getpid();
+    else if(sys_id == SYS_FORK)             ans = $u64 sys_fork();
+    else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
+    else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
 
-    panic("unrecognized sys_id");
-    return $u64 -1;
+    else if(sys_id == SYS_SERIAL_WRITE)     ans = $u64 sys_serial_write($u8* arg1, arg2);
+    else if(sys_id == SYS_SERIAL_READ)      ans = $u64 sys_serial_read($u8* arg1, arg2);
+    else panic("unrecognized sys_id");
+
+    //asm!("cli");      //disable timer interrupts
+
+    return $u64 ans;
 }
 
 //on success, populates ts with the current time in the requested clock and returns 0
@@ -459,11 +470,12 @@ pid_t sys_fork() {
 
 //current process is yielding control to the scheduler
 u64 sys_sched_yield() {
-    panic("sys_sched_yield() : need to implement syscall preemption");
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
     
-    //trigger timer interrupt
-    asm!("int $0x20");
+    yield();
 
+    pt_switch(user_pt);
     return 0x0;
 }
 

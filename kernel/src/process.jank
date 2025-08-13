@@ -4,17 +4,18 @@
 [__GLOBAL_FIRST__] u64 PROCESS_RUNNING      = 0x2;
 [__GLOBAL_FIRST__] u64 PROCESS_ZOMBIE       = 0x3;
 [__GLOBAL_FIRST__] u64 PROCESS_IDLE         = 0x4;
+[__GLOBAL_FIRST__] u64 PROCESS_BLOCKED      = 0x5;
 
 [__GLOBAL_FIRST__] u64 PROCESS_MAX_FD = $u64 64;
 struct process {
-    pid_t pid;              // 0
-    u64 kstack_bottom;      // 8
-    u64 brk;                // 16
-    u64 status;             // 24
-    pagetable_t pt;         // 32
-    i32 exit_status;        // 40
-    file_descriptor*[64] fd_table;  //empty fds will be nullptr
-    process* parent;        // nullptr indicates this is created by the kernel
+    pid_t pid;                      // 0
+    u64 kstack_bottom;              // 8
+    u64 brk;                        // 16
+    u64 status;                     // 24
+    pagetable_t pt;                 // 32
+    i32 exit_status;                // 40
+    file_descriptor*[64] fd_table;  // empty fds will be nullptr
+    process* parent;                // nullptr indicates this is created by the kernel
     vector<process*> children;
 }
 
@@ -85,6 +86,8 @@ process* create_process(u64 flags) {
     tf->rsp = USER_STACK_TOP;
     tf->rflags = 0x202;     //enable timer interrupt
     tf->pt = $u64 proc->pt;
+    tf->cs = 0x23;          //user mode selectors
+    tf->ss = 0x1b;
 
     //add to process list
     all_processes.push_back(proc);
