@@ -6,6 +6,7 @@ void init_ahci() {
     scan_for_ahci(hba);
     HBA_PORT* p = hba_setup(hba);
     test_ahci_read(p);
+    test_ahci_write(p);
 }
 
 // https://wiki.osdev.org/PCI#Configuration_Space_Access_Mechanism_#1
@@ -476,4 +477,135 @@ void test_ahci_read(HBA_PORT* p) {
     }
 
     pfree(buffer_paddr);
+}
+
+i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
+    p->is = $u32 -1; // clear pending interrupt bits
+	i32 spin = 0; // Spin lock timeout counter
+	i32 slot = find_cmdslot(p);
+	if(slot == -1) return 0;
+
+	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
+	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
+
+	cmdheader->DW0 &= $u32 ~0x1f;  // Command FIS size (cfl)
+	cmdheader->DW0 |= $u32 (0x1f & (sizeof(FIS_REG_H2D) / sizeof(u32)));  // Command FIS size (cfl)
+	
+    cmdheader->DW0 |= $u32 0x40; // Write to device (w)
+
+	cmdheader->DW0 &= $u32 ~0xffff0000; // PRDT entries count (prdtl)
+	cmdheader->DW0 |= $u32 (0xffff0000 & $u64 ((((count - $u32 1) >> $u32 4) + $u32 1) << $u32 16) ); // PRDT entries count (prdtl)
+
+	HBA_CMD_TBL* cmdtbl = $HBA_CMD_TBL* ($u64 cmdheader->ctba | ($u64 cmdheader->ctbau << $u64 32));
+	memset($void* cmdtbl, 0, sizeof(HBA_CMD_TBL) + ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1) * sizeof(HBA_PRDT_ENTRY));
+
+	// 8K bytes (16 sectors) per PRDT
+    u64 i = 0x0;
+	for (; i < ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1); i++) {
+		cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+
+		cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
+		cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 (8*1024-1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
+
+		cmdtbl->prdt_entry[i].DW3 |= $u32 0x80000000;
+
+		buf = $u16* ($u64 buf + $u64 (4*1024));	// 4K words
+		count -= $u32 16;	// 16 sectors
+	}
+    // Last entry
+	cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+    cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
+    cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 ((count << $u32 9) - $u32 1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
+
+    cmdtbl->prdt_entry[i].DW3 |= $u32 0x80000000;
+
+	// Setup command
+	FIS_REG_H2D* cmdfis = $FIS_REG_H2D* @cmdtbl->cfis;
+
+	cmdfis->fis_type = FIS_TYPE_REG_H2D;
+	cmdfis->pm_n_stuff |= $u8 0x80;	// Command (c)
+	cmdfis->command = ATA_CMD_WRITE_DMA_EX;
+
+	cmdfis->lba0 = $u8 startl;
+	cmdfis->lba1 = $u8 (startl >> $u32 8);
+	cmdfis->lba2 = $u8 (startl >> $u32 16);
+	cmdfis->device = $u8 (1 << 6); // LBA mode
+
+	cmdfis->lba3 = $u8 (startl >> $u32 24);
+	cmdfis->lba4 = $u8 starth;
+	cmdfis->lba5 = $u8 (starth >> $u32 8);
+
+	cmdfis->countl = $u8 (count & $u32 0xff);
+	cmdfis->counth = $u8 ((count >> $u32 8) & $u32 0xff);
+
+	// The below loop waits until the port is no longer busy before issuing a new command
+	while((p->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && $u32 (spin < 1000000)) {
+		spin++;
+	}
+	if(spin == 1000000) {
+		sout << "Port is hung\n";
+		return 0;
+	}
+
+	p->ci = $u32 1 << $u32 slot;	// Issue command
+
+	// Wait for completion
+	while(1) {
+		// In some longer duration reads, it may be helpful to spin on the DPS bit 
+		// in the PxIS port field as well (1 << 5)
+		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
+			break;
+		if (p->is & HBA_PxIS_TFES) { // Task file error
+			sout << "Read disk error\n";
+			return 0;
+		}
+	}
+
+	// Check again
+	if (p->is & HBA_PxIS_TFES) {
+		sout << "Read disk error\n";
+		return 0;
+	}
+
+	return 1;
+}
+
+void test_ahci_write(HBA_PORT* p) {
+    sout << "Testing AHCI write on port\n";
+
+    void* write_buffer = palloc();
+    memset(write_buffer, 0, PAGE_SIZE);
+    u8* test_string = "jello, am i mutted?\n";
+    memcpy(write_buffer, $void* test_string, sizeof(u8) * (strlen(test_string) + 0x1));
+    sout << "Attempting to write: " << $u8* write_buffer << "\n"; 
+
+    // test write to some large sector? (128mb image -> 250000 sectors?)
+    i32 success = ahci_write(p, $u32 100000, $u32 0, $u32 1, $u16* write_buffer);
+    if (!success) {
+        sout << "Write command failed!\n";
+        pfree(write_buffer);
+        return;
+    }
+
+    sout << "Write command succeeded. Verifying by reading same sector\n";
+
+    void* read_buffer = palloc();
+    success = ahci_read(p, $u32 100000, $u32 0, $u32 1, $u16* read_buffer);
+    if(!success) {
+        sout << "Read command failed!\n";
+        pfree(read_buffer);
+        return;
+    }
+    
+    sout << "Read command succeeded. Checking for match\n";
+
+    sout << $u8* read_buffer << "\n";
+    if (memcmp(write_buffer, read_buffer, $u64 512) == 0) {
+        sout << "SUCCESS! Data read back matches data written.\n";
+    } else {
+        sout << "FAILURE! Data read back does not match.\n";
+    }
+
+    pfree(write_buffer);
+    pfree(read_buffer);
 }
