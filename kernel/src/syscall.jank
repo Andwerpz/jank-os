@@ -124,7 +124,7 @@ trapframe* get_user_trapframe() {
     trapframe* ret;
     asm!("movq %gs:16, %rax");  //%rax now holds top of process kstack
     asm!("sub $192, %rax");     //192 = 168 + 24
-    asm!("movq %rax, -8(%rbp)");
+    asm!("movq %rax, {ret}");
     return ret;
 }   
 
@@ -224,13 +224,13 @@ u64 syscall_handler() {
     u64 arg5;
     u64 arg6;
 
-    asm!("movq %rax, -8(%rbp)");
-    asm!("movq %rdi, -16(%rbp)");
-    asm!("movq %rsi, -24(%rbp)");
-    asm!("movq %rdx, -32(%rbp)");
-    asm!("movq %r10, -40(%rbp)");
-    asm!("movq %r8, -48(%rbp)");
-    asm!("movq %r9, -56(%rbp)");
+    asm!("movq %rax, {sys_id}");
+    asm!("movq %rdi, {arg1}");
+    asm!("movq %rsi, {arg2}");
+    asm!("movq %rdx, {arg3}");
+    asm!("movq %r10, {arg4}");
+    asm!("movq %r8,  {arg5}");
+    asm!("movq %r9,  {arg6}");
 
     if(0) {
         pagetable_t user_pt = pt_get_current();

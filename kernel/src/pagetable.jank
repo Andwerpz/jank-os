@@ -15,7 +15,7 @@ void enable_nx() {
     u64 x;
     asm!("mov $0x80000001, %eax");
     asm!("cpuid");
-    asm!("mov %edx, -8(%rbp)");
+    asm!("mov %edx, {x}");
     passert(x & $u64 (1 << 20), "enable_nx() : NX should be supported");
 
     //enable NX bit in EFER
@@ -59,12 +59,12 @@ pagetable_t pt_alloc_new() {
 pagetable_t pt_get_current() {
     pagetable_t ret;
     asm!("mov %cr3, %rax");
-    asm!("mov %rax, -8(%rbp)");
+    asm!("mov %rax, {ret}");
     return ret;
 }
 
 void pt_switch(pagetable_t npt) {
-    asm!("movq 16(%rbp), %rax");
+    asm!("movq {npt}, %rax");
     asm!("mov %rax, %cr3");
 }
 

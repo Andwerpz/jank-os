@@ -57,6 +57,6 @@ void idt_set_entry(i32 idx, u64 handler_addr, u16 selector, u8 ist, u8 type_attr
 }
 
 void idt_flush(IDTPointer* ptr) {
-    asm!("movq 16(%rbp), %rax");
+    asm!("movq {ptr}, %rax");
     asm!("lidt (%rax)");
 }

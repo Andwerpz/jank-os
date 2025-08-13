@@ -35,7 +35,7 @@
 void check_paging_enabled() {
     u64 cr0;
     asm!("mov %cr0, %rax");
-    asm!("mov %rax, -8(%rbp)");
+    asm!("mov %rax, {cr0}");
     if(cr0 & ($u64 1 << $u64 31)) serial_println("paging enabled");
     else serial_println("paging disabled");
 }   
@@ -44,7 +44,7 @@ void check_syscall_enabled() {
     u64 x;
     asm!("mov $0x80000001, %eax");
     asm!("cpuid");
-    asm!("mov %edx, -8(%rbp)");
+    asm!("mov %edx, {x}");
     passert(x & $u64 (1 << 11), "syscall instruction should be supported");
 }
 

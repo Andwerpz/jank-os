@@ -142,7 +142,7 @@ void scheduler() {
     process* proc = schedule_next_process();
     passert(proc->status == PROCESS_READY, "scheduler() : should only schedule ready processes");
     current_process = proc->pid;
-    u64 proc_trapframe_off = proc->kstack_bottom + KSTACK_TRAPFRAME;    // -16(%rbp)
+    u64 proc_trapframe_off = proc->kstack_bottom + KSTACK_TRAPFRAME; 
 
     //set process state to RUNNING
     proc->status = PROCESS_RUNNING;
@@ -161,7 +161,7 @@ void scheduler() {
         asm!("swapgs");             
 
         //load trapframe
-        asm!("movq -16(%rbp), %rax");   //%rax now holds trapframe base
+        asm!("movq {proc_trapframe_off}, %rax");   //%rax now holds trapframe base
 
         //iretq information
         asm!("pushq 160(%rax)");    // SS
@@ -215,7 +215,7 @@ void scheduler() {
     else if(tf->cs == 0x08) {
         //returning to kernel mode          
         //load trapframe
-        asm!("movq -16(%rbp), %rax");   //%rax now holds trapframe base
+        asm!("movq {proc_trapframe_off}, %rax");   //%rax now holds trapframe base
 
         //swap to destination stack
         asm!("movq 56(%rax), %rsp");

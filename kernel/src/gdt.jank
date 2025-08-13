@@ -133,7 +133,7 @@ void gdt_set_system_entry(i32 idx, u64 base, u32 limit, u8 access, u8 flags, GDT
 
 void gdt_flush(GDTPointer* ptr) {
     //set new GDT
-    asm!("movq 16(%rbp), %rax");
+    asm!("movq {ptr}, %rax");
     asm!("lgdt (%rax)");
 
     //reload segment registers
