@@ -73,3 +73,20 @@ void irq_enable() {
     }
 }
 
+//prints 16 separated bytes on a line
+template<T>
+void hexdump(T* _buf, u64 amt_bytes) {
+    u8* buf = $u8* _buf;
+    for(u64 i = 0x1; i <= amt_bytes; i++){
+        u64 low = ($u64 buf[i - 0x1]) & 0xf;
+        u64 high = ($u64 buf[i - 0x1] >> $u64 4) & 0xf;
+        if(high < $u64 10) sout << ('0' + $u8 high);
+        else sout << ('a' + $u8 high - $u8 10);
+        if(low < $u64 10) sout << ('0' + $u8 low);
+        else sout << ('a' + $u8 low - $u8 10);
+        sout << " ";
+        if(i % 0x10 == 0x0) sout << "\n";
+    }
+    if(amt_bytes % 0x10) sout << "\n";
+}
+
