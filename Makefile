@@ -23,12 +23,13 @@ disk: initdir config/config.json
 
 normal: disk
 	qemu-system-x86_64 \
-    -d int,cpu_reset \
     -no-reboot \
     -serial stdio \
     -device ich9-ahci,id=ahci \
-    -drive file=build/jankos-disk.img,if=none,id=mydisk \
-    -device ide-hd,bus=ahci.0,drive=mydisk
+    -drive file=build/jankos-disk.img,if=none,id=bootdisk,format=raw \
+    -device ide-hd,bus=ahci.0,drive=bootdisk \
+    -drive file=test_drive.img,if=none,id=testdisk,format=raw \
+    -device ide-hd,bus=ahci.1,drive=testdisk
 
 telnet: disk
 	qemu-system-x86_64 \

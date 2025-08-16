@@ -1,0 +1,101 @@
+// https://wiki.osdev.org/Ext2
+
+struct ext2_super_block {
+    // Base Superblock Fields
+    u32 inodes_count;               // Total number of inodes in file system 
+    u32 blocks_count;               // Total number of blocks in file system
+    u32 reserved_blocks_count;      // Number of blocks reserved for superuser (see offset 80)
+    u32 free_blocks_count;          // Total number of unallocated blocks
+    u32 free_inodes_count;          // Total number of unallocated inodes
+    u32 first_data_block;           // Block number of the block containing the superblock (also the starting block number, NOT always zero.) 
+    u32 log_block_size;             // log2 (block size) - 10. (In other words, the number to shift 1,024 to the left by to obtain the block size)
+    u32 log_frag_size;              // log2 (fragment size) - 10. (In other words, the number to shift 1,024 to the left by to obtain the fragment size) 
+    u32 blocks_per_group;           // Number of blocks in each block group
+    u32 frags_per_group;            // Number of fragments in each block group
+    u32 inodes_per_group;           // Number of inodes in each block group
+    u32 mtime;                      // Last mount time (in POSIX time)
+    u32 wtime;                      // Last written time (in POSIX time)
+    u16 mnt_count;                  // Number of times the volume has been mounted since its last consistency check (fsck)
+    u16 max_mnt_count;              // Number of mounts allowed before a consistency check (fsck) must be done
+    u16 magic;                      // Ext2 signature (0xef53), used to help confirm the presence of Ext2 on a volume
+    u16 state;                      // File system state (see below)
+    u16 errors;                     // What to do when an error is detected (see below)
+    u16 minor_rev_level;            // Minor portion of version (combine with Major portion below to construct full version field) 
+    u32 last_checked;               // POSIX time of last consistency check (fsck)
+    u32 check_interval;             // Interval (in POSIX time) between forced consistency checks (fsck)
+    u32 creator_os;                 // Operating system ID from which the filesystem on this volume was created (see below)
+    u32 major_rev_level;            // Major portion of version (combine with Minor portion above to construct full version field)
+    u16 res_uid;                    // User ID that can use reserved blocks
+    u16 res_gid;                    // Group ID that can use reserved blocks
+
+    // Extended Superblock Fields
+    u32     first_inode;                // First non-reserved inode in file system. (In versions < 1.0, this is fixed as 11)
+    u16     inode_size;                 // Size of each inode structure in bytes. (In versions < 1.0, this is fixed as 128)
+    u16     block_group;                // Block group that this superblock is part of (if backup copy) 
+    u32     feature_optional;           // Optional features present (features that are not required to read or write, but usually result in a performance increase. see below)
+    u32     feature_required;           // Required features present (features that are required to be supported to read or write. see below)
+    u32     feature_unsupported;        // Features that if not supported, the volume must be mounted read-only see below)
+    u8[16]  fs_id;                      // File system ID (what is output by blkid)
+    u8[16]  volume_name;                // Volume name (C-style string: characters terminated by a 0 byte)
+    u8[64]  last_mounted;               // Path volume was last mounted to (C-style string: characters terminated by a 0 byte)
+    u32     compression_algos;          // Compression algorithms used (see Required features above)
+    u8      prealloc_file;              // Number of blocks to preallocate for files
+    u8      prealloc_dir;               // Number of blocks to preallocate for files
+    u8[2]   unused;                     // (Unused)
+    u8[16]  journal_id;                 // Journal ID (same style as the File system ID above)
+    u32     journal_inode;              // Journal inode
+    u32     journal_device;             // Journal device
+    u32     orphan_inode_head;          // Head of orphan inode list
+    u8[788] padding;                    // (Unused)
+}
+
+struct ext2_group_descriptor {
+    u32         block_bitmap;               // Block address of block usage bitmap
+    u32         inode_bitmap;               // Block address of inode usage bitmap
+    u32         inode_table;                // Starting block address of inode table
+    u16         free_blocks_count;          // Number of unallocated blocks in group
+    u16         free_inodes_count;          // Number of unallocated inodes in group
+    u16         used_dirs_count;            // Number of directories in group
+    u8[14]      padding;                    // (Unused)
+}
+
+struct ext2_inode {
+    u16         mode;                   // Type and Permissions (see below)
+    u16         uid;                    // User ID
+    u32         size;                   // Lower 32 bits of size in bytes
+    u32         atime;                  // Last Access Time (in POSIX time)
+    u32         ctime;                  // Creation Time (in POSIX time)
+    u32         mtime;                  // Last Modification time (in POSIX time) 
+    u32         dtime;                  // Deletion time (in POSIX time)
+    u16         gid;                    // Group ID 
+    u16         links_count;            // Count of hard links (directory entries) to this inode. When this reaches 0, the data blocks are marked as unallocated.
+    u32         sectors;                // Count of disk sectors (not Ext2 blocks) in use by this inode, not counting the actual inode structure nor directory entries linking to the inode. 
+    u32         flags;                  // Flags (see below)
+    u32         ossv1;                  // Operating System Specific value #1
+    u32[12]     direct_block_ptr;       // Direct Block Pointer 0-11
+    u32         singly_ind_block_ptr;   // Singly Indirect Block Pointer (Points to a block that is a list of block pointers to data)
+    u32         doubly_ind_block_ptr;   // Doubly Indirect Block Pointer (Points to a block that is a list of block pointers to Singly Indirect Blocks)
+    u32         triply_ind_block_ptr;   // Triply Indirect Block Pointer (Points to a block that is a list of block pointers to Doubly Indirect Blocks)
+    u32         generation;             // Generation number (Primarily used for NFS)
+    u32         file_acl;               // In Ext2 version 0, this field is reserved. In version >= 1, Extended attribute block (File ACL).
+    u32         dir_acl;                // In Ext2 version 0, this field is reserved. In version >= 1, Upper 32 bits of file size (if feature bit set) if it's a file, Directory ACL if it's a directory
+    u32         fragment_block_addr;    // Block address of fragment
+    u8[12]      ossv2;                  // Operating System Specific Value #2
+}
+
+struct ext2_dir_entry {
+    u32     inode;          // Inode
+    u16     size;           // Total size of this entry (Including all subfields)
+    u8      name_len;       // Name Length least-significant 8 bits
+    u8      file_type;      // Type indicator (only if the feature bit for "directory entries have file type byte" is set, else this is the most-significant 8 bits of the Name Length) 
+    u8[24]  name;           // Name characters
+}
+
+// I will use a block size of 1024
+[__GLOBAL_FIRST__] u64 SECTOR_SIZE  = $u64 512;
+[__GLOBAL_FIRST__] u64 BLOCK_SIZE   = $u64 1024;
+
+u64 block_to_sector(u64 block) {
+    return (block * BLOCK_SIZE) / SECTOR_SIZE;
+}
+

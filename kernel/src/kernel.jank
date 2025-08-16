@@ -21,6 +21,7 @@
 #include "file.jank";
 #include "process.jank";
 #include "ahci.jank";
+#include "ext2fs.jank";
 #include "acpi.jank";
 #include "mutex.jank";
 
