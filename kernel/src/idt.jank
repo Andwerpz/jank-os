@@ -60,3 +60,28 @@ void idt_flush(IDTPointer* ptr) {
     asm!("movq {ptr}, %rax");
     asm!("lidt (%rax)");
 }
+
+//just here to inject some assembly
+void interrupt_entry_stubs() {
+
+    //we need to make sure these things are pushed onto stack before jumping to context handler
+    // SS           : from user mode only
+    // %rsp         : from user mode only
+    // RFLAGS
+    // CS
+    // %rip
+    // error code   : if interrupt doesn't push this itself, this should be 0
+    // trap id      : equal to idt entry index
+
+    //timer interrupt doesn't push error code
+    asm!("timer_interrupt_entry_stub:");
+    asm!("pushq $0");
+    asm!("pushq $0x20");    
+
+}
+
+//this should save context to current active process kernel trapframe
+//pass that as argument to dedicated interrupt handler. 
+void interrupt_handler() {
+    
+}

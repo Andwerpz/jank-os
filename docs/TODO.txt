@@ -1,5 +1,8 @@
 Andrew
- - make syscalls preemptible
+ - make syscalls preemptible (kind of working)
+ - create standard interrupt entry point 
+   - for each IDT entry, have a separate stub that pushes error code and trap number to stack before jumping to common context save code
+   - 
 
 Steven
  - create filesystem

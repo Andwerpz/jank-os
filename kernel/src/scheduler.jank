@@ -295,11 +295,13 @@ void timer_interrupt_handler() {
     asm!("timer_interrupt_entry:"); //don't want stack frame messing stuff up
 
     //cpu will have pushed these things onto the stack:
-    // SS       : from user mode only
-    // %rsp     : from user mode only
+    // SS           : from user mode only
+    // %rsp         : from user mode only
     // RFLAGS
     // CS
     // %rip
+    // error code   : only for some interrupts
+    // trap id      : after we've changed around IDT
 
     //check if we are coming from kernel mode
     //we know that at least this is on the stack:
@@ -392,6 +394,8 @@ void timer_interrupt_handler() {
     //send EOI
     asm!("movb $0x20, %al");
     asm!("outb %al, $0x20");
+
+    //here we should jump to actual interrupt handlers depending on trap id
 
     //jump to scheduler
     asm!("jmp scheduler");
