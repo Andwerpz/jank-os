@@ -81,13 +81,13 @@ void erase_process(pid_t pid) {
     all_processes.erase(ind);
 }
 
-process* get_cur_proc() {
+export process* get_cur_proc() {
     process* proc = find_process(get_cur_pid());
     passert(proc != nullptr, "get_cur_proc() : failed to find current process");
     return proc;
 }
 
-pid_t get_cur_pid() {
+export pid_t get_cur_pid() {
     passert(current_process != $pid_t 0, "get_cur_pid() : current_process is 0??");
     return current_process;
 }
@@ -137,7 +137,7 @@ void init_scheduler() {
 //this should choose a process to run then jump to that process
 //this should not have to cleanup, the saved execution context should make it so that 
 //  any stuff leftover is treated as trash memory. 
-void scheduler() {
+export void scheduler() {
     //look for next process to run
     process* proc = schedule_next_process();
     passert(proc->status == PROCESS_READY, "scheduler() : should only schedule ready processes");
@@ -278,7 +278,7 @@ void yield() {
     asm!("int $0x20");
 }
 
-void update_cur_proc_status() {
+export void update_cur_proc_status() {
     process* proc = get_cur_proc();
     if(proc->status == PROCESS_RUNNING) proc->status = PROCESS_READY;
     else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;

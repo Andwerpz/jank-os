@@ -215,7 +215,7 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
 
 //this should generate label 'syscall_handler:'
 //when adding syscall preemption, interrupt flag should be enabled/disabled in here
-u64 syscall_handler() {
+export u64 syscall_handler() {
     u64 sys_id;
     u64 arg1;
     u64 arg2;

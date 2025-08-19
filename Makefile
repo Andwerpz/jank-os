@@ -3,7 +3,7 @@ jankos:
 	@mkdir build build/kernel 2>/dev/null | true
 	@cp -r config/boot build 2>/dev/null | true
 	ld -r -b binary -o build/kernel/font.o kernel/font.psf
-	jjc kernel/src/kernel.jank -S -o build/kernel/kernel.s -k
+	jjc kernel/src/kernel.jank -S -o build/kernel/kernel.s -k -time
 	x86_64-elf-gcc -ffreestanding -mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -c build/kernel/kernel.s -o build/kernel/kernel.o
 	x86_64-elf-gcc -ffreestanding -T kernel/link.ld build/kernel/kernel.o build/kernel/font.o -o build/boot/kernel.out -nostdlib
 
