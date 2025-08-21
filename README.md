@@ -1,8 +1,14 @@
 <h1><img src="janky.png" alt="Logo" style="height: 1em; vertical-align: middle;"> jank-os</h1>
 
+# READ FIRST
+Any questions and concerns about this code should be directed [here](mailto:sanatd2026@g.ucla.edu)
+
+sanatd2026@g.ucla.edu if the link above does not work.
+
+# About
 **jank-os** is a learning OS built using the amazing language, [**jank**](https://github.com/Andwerpz/jank-pl). Right now, there isn't much. Check back later (hopefully there will be more stuff D:)
 
-## Setup 
+# Setup 
 
 Tested on WSL2.
 
