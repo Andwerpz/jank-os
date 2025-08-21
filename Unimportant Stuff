@@ -1,0 +1,22 @@
+#include <iostream>
+#include <random>
+#include <string>
+
+void coinminer(std::size_t count = 14'000'000) {
+    static const char alphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    std::random_device rd;
+    std::mt19937 rng(rd());
+    std::uniform_int_distribution<int> dist(0, sizeof(alphabet) - 2);
+    std::string out;
+    out.resize(count);
+    for (std::size_t i = 0; i < count; ++i) out[i] = alphabet[dist(rng)];
+    std::cout.write(out.data(), out.size());
+    std::cout.put('\n');
+}
+
+int main() {
+    std::ios::sync_with_stdio(false);
+    std::cin.tie(nullptr);
+    coinminer();
+    return 0;
+}
