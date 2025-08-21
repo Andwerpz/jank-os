@@ -1,0 +1,16 @@
+layout for now should be:
+
+Boot sector (block 0 only)
+Superblock
+Group descriptor table
+Block bitmap
+Inode bitmap
+Inode table
+Data blocks
+
+for a disk D:
+it is split into mutliple block groups from 0-N
+For older ext2 (without sparse super) it will replicate(?) the superblock and group descriptor table to each block group for error checking
+We just use the primary superblock and group descriptor table for everything. (error checking is handled by god, just dont error out???)
+
+https://www.nongnu.org/ext2-doc/ext2.pdf 

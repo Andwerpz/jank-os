@@ -1,3 +1,6 @@
+#include "ahci.jank";
+#include <string>;
+
 // https://wiki.osdev.org/Ext2
 
 struct ext2_super_block {
@@ -49,6 +52,35 @@ struct ext2_super_block {
     u8[788] padding;                    // (Unused)
 }
 
+[__GLOBAL_FIRST__] u16 FS_STATE_CLEAN       = $u16 1; // File system is clean
+[__GLOBAL_FIRST__] u16 FS_STATE_ERROR       = $u16 2; // File system has errors
+
+[__GLOBAL_FIRST__] u16 FS_ERROR_IGNORE      = $u16 1; // Ignore the error (continue on)
+[__GLOBAL_FIRST__] u16 FS_ERROR_RO          = $u16 2; // Remount file system as read-only
+[__GLOBAL_FIRST__] u16 FS_ERROR_PANIC       = $u16 3; // Kernel panic
+
+[__GLOBAL_FIRST__] u32 OS_ID_LINUX          = $u32 0; // Linux
+[__GLOBAL_FIRST__] u32 OS_ID_GNU_HURD       = $u32 1; // GNU HURD
+[__GLOBAL_FIRST__] u32 OS_ID_MASIX          = $u32 2; // MASIX (an operating system developed by Remy Card, one of the developers of ext2)
+[__GLOBAL_FIRST__] u32 OS_ID_FREEBSD        = $u32 3; // FreeBSD
+[__GLOBAL_FIRST__] u32 OS_ID_OTHER          = $u32 4; // Other "Lites" (BSD4.4-Lite derivatives such as NetBSD, OpenBSD, XNU/Darwin, etc.)
+
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_PREALLOC               = $u32 0x0001; // Preallocate some number of (contiguous?) blocks (see byte 205 in the superblock) to a directory when creating a new one (to reduce fragmentation?)
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_AFS                    = $u32 0x0002; // AFS server inodes exist
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_JOURNAL                = $u32 0x0004; // File system has a journal (Ext3)
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_EXTENDED_ATT           = $u32 0x0008; // Inodes have extended attributes
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_RESIZE                 = $u32 0x0010; // File system can resize itself for larger partitions
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_HASH_IDX               = $u32 0x0020; // Directories use hash index 
+
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_COMPRESSION            = $u32 0x0001; // Compression is used
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_DIR_TYPE_FIELD         = $u32 0x0002; // Directory entries contain a type field
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_REPLAY_JOURNAL         = $u32 0x0004; // File system needs to replay its journal
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_JOURNAL_DEV            = $u32 0x0008; // File system uses a journal device 
+
+[__GLOBAL_FIRST__] u32 RO_FEAT_FLAG_SPARSE                  = $u32 0x0001; // Sparse superblocks and group descriptor tables
+[__GLOBAL_FIRST__] u32 RO_FEAT_FLAG_64_FILE_SIZE            = $u32 0x0002; // File system uses a 64-bit file size
+[__GLOBAL_FIRST__] u32 RO_FEAT_FLAG_BIN_TREE                = $u32 0x0004; // Directory contents are stored in the form of a Binary Tree
+
 struct ext2_group_descriptor {
     u32         block_bitmap;               // Block address of block usage bitmap
     u32         inode_bitmap;               // Block address of inode usage bitmap
@@ -83,6 +115,27 @@ struct ext2_inode {
     u8[12]      ossv2;                  // Operating System Specific Value #2
 }
 
+[__GLOBAL_FIRST__] u16 INODE_TYPE_FIFO          = $u16 0x1000; // FIFO
+[__GLOBAL_FIRST__] u16 INODE_TYPE_CHAR_DEV      = $u16 0x2000; // Character device
+[__GLOBAL_FIRST__] u16 INODE_TYPE_DIR           = $u16 0x4000; // Directory
+[__GLOBAL_FIRST__] u16 INODE_TYPE_BLOCK_DEV     = $u16 0x6000; // Block device
+[__GLOBAL_FIRST__] u16 INODE_TYPE_FILE          = $u16 0x8000; // Regular file
+[__GLOBAL_FIRST__] u16 INODE_TYPE_SYM_LINK      = $u16 0xA000; // Symbolic link
+[__GLOBAL_FIRST__] u16 INODE_TYPE_UNIX_SOCK     = $u16 0xC000; // Unix socket
+
+[__GLOBAL_FIRST__] u16 INODE_PERM_O_X           = $u16 0x001; // Other-execute permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_O_W           = $u16 0x002; // Other-write permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_O_R           = $u16 0x004; // Other-read permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_G_X           = $u16 0x008; // Group-execute permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_G_W           = $u16 0x010; // Group-write permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_G_R           = $u16 0x020; // Group-read permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_U_X           = $u16 0x040; // User-execute permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_U_W           = $u16 0x080; // User-write permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_U_R           = $u16 0x100; // User-read permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_STICKY        = $u16 0x200; // Sticky Bit
+[__GLOBAL_FIRST__] u16 INODE_PERM_SET_GID       = $u16 0x400; // Set group ID
+[__GLOBAL_FIRST__] u16 INODE_PERM_SET_UID       = $u16 0x800; // Set user ID 
+
 struct ext2_dir_entry {
     u32     inode;          // Inode
     u16     size;           // Total size of this entry (Including all subfields)
@@ -91,11 +144,466 @@ struct ext2_dir_entry {
     u8[24]  name;           // Name characters
 }
 
-// I will use a block size of 1024
-[__GLOBAL_FIRST__] u64 SECTOR_SIZE  = $u64 512;
-[__GLOBAL_FIRST__] u64 BLOCK_SIZE   = $u64 1024;
-
-u64 block_to_sector(u64 block) {
-    return (block * BLOCK_SIZE) / SECTOR_SIZE;
+void print_super_block(ext2_super_block* sb) {
+    sout << "=== SUPER BLOCK ===\n";
+    sout << "Inodes Count: "                << sb->inodes_count << "\n";
+    sout << "Blocks Count: "                << sb->blocks_count << "\n";
+    sout << "Reserved Blocks Count: "       << sb->reserved_blocks_count << "\n";
+    sout << "Free Blocks Count: "           << sb->free_blocks_count << "\n";
+    sout << "Free Inodes Count: "           << sb->free_inodes_count << "\n";
+    sout << "First Data Block: "            << sb->first_data_block << "\n";
+    sout << "Log Block Size: "              << sb->log_block_size << "\n";
+    sout << "Log Frag Size: "               << sb->log_frag_size << "\n";
+    sout << "Blocks Per Group: "            << sb->blocks_per_group << "\n";
+    sout << "Frags Per Group: "             << sb->frags_per_group << "\n";
+    sout << "Inodes Per Group: "            << sb->inodes_per_group << "\n";
+    sout << "Last Mount Time: "             << sb->mtime << "\n";
+    sout << "Last Written Time: "           << sb->wtime << "\n";
+    sout << "Mount Count: "                 << sb->mnt_count << "\n";
+    sout << "Max Mounts Before Check: "     << sb->max_mnt_count << "\n";
+    sout << "Magic: "                       << $void* $u64 sb->magic << "\n";
+    sout << "File System State: "           << sb->state << "\n";
+    sout << "Error Handling Method: "       << sb->errors << "\n";
+    sout << "Minor Rev Level: "             << sb->minor_rev_level << "\n";
+    sout << "Last Checked: "                << sb->last_checked << "\n";
+    sout << "Check Interval: "              << sb->check_interval << "\n";
+    sout << "Creator OS: "                  << sb->creator_os << "\n";
+    sout << "Major Rev Level: "             << sb->major_rev_level << "\n";
+    sout << "First Inode: "                 << sb->first_inode << "\n";
+    sout << "Inode Size: "                  << sb->inode_size << "\n";
+    sout << "Block Group: "                 << sb->block_group << "\n";
+    sout << "Feature Optional: "            << $void* $u64 sb->feature_optional << "\n";
+    sout << "Feature Required: "            << $void* $u64 sb->feature_required << "\n";
+    sout << "Feature Unsupported: "         << $void* $u64 sb->feature_unsupported << "\n";
+    sout << "File System ID: "              << $u8* @sb->fs_id << "\n";
+    sout << "Volume Name: "                 << $u8* @sb->volume_name << "\n";
+    sout << "Last Mounted: "                << $u8* @sb->last_mounted << "\n";
+    sout << "Compression Algorithms: "      << $void* $u64 sb->compression_algos << "\n";
+    sout << "Prealloc File: "               << sb->prealloc_file << "\n";
+    sout << "Prealloc Dir: "                << sb->prealloc_dir << "\n";
+    sout << "Journal ID: "                  << $u8* @sb->journal_id << "\n";
+    sout << "Joutnal Inode: "               << sb->journal_inode << "\n";
+    sout << "Journal Device: "              << sb->journal_device << "\n";
+    sout << "Orphan Inode Head: "           << sb->orphan_inode_head << "\n";
+    sout << "========================\n\n";
 }
 
+void print_group_descriptor(ext2_group_descriptor* gd) {
+    sout << "=== GROUP DESCRIPTOR ===\n";
+    sout << "Block Bitmap: "                << gd->block_bitmap << "\n";
+    sout << "Inode Bitmap: "                << gd->inode_bitmap << "\n";
+    sout << "Inode Table: "                 << gd->inode_table << "\n";
+    sout << "Free Blocks Count: "           << gd->free_blocks_count << "\n";
+    sout << "Free Inodes Count: "           << gd->free_inodes_count << "\n";
+    sout << "Used Dirs Count: "             << gd->used_dirs_count << "\n";
+    sout << "========================\n\n";
+}
+
+void print_inode(ext2_inode* inode) {
+    sout << "=== INODE ===\n";
+    sout << "Mode: "                        << $void* $u64 inode->mode << "\n";
+    sout << "UID: "                         << inode->uid << "\n";
+    sout << "Size: "                        << inode->size << "\n";
+    sout << "Access Time: "                 << inode->atime << "\n";
+    sout << "Create Time: "                 << inode->ctime << "\n";
+    sout << "Modify Time: "                 << inode->mtime << "\n";
+    sout << "Deletion Time: "               << inode->dtime << "\n";
+    sout << "GID: "                         << inode->gid << "\n";
+    sout << "Links Count: "                 << inode->links_count << "\n";
+    sout << "Sectors: "                     << inode->sectors << "\n";
+    sout << "Flags: "                       << $void* $u64 inode->flags << "\n";
+    sout << "OS Specific 1: "               << $void* $u64 inode->ossv1 << "\n";
+    sout << "Blocks (Direct Pointers): ";
+    for (i32 i = 0; i < 12; i++) {
+        sout << inode->direct_block_ptr[i] << " ";
+    }
+    sout << "\n";
+    sout << "Singly Indirect: "             << inode->singly_ind_block_ptr << "\n";
+    sout << "Doubly Indirect: "             << inode->doubly_ind_block_ptr << "\n";
+    sout << "Triply Indirect: "             << inode->triply_ind_block_ptr << "\n";
+    sout << "Generation: "                  << inode->generation << "\n";
+    sout << "File ACL: "                    << inode->file_acl << "\n";
+    sout << "Dir ACL: "                     << inode->dir_acl << "\n";
+    sout << "Fragment Block Addr: "         << inode->fragment_block_addr << "\n";
+    sout << "========================\n\n";
+}
+
+void print_dir_entry(ext2_dir_entry* dir) {
+    sout << "=== DIRECTORY ENTRY ===\n";
+    sout << "Inode: "                       << dir->inode << "\n";
+    sout << "Size: "                        << dir->size << "\n";
+    sout << "Name Length: "                 << dir->name_len << "\n";
+    sout << "File Type: "                   << dir->file_type << "\n";
+    sout << "Name: "                        << $u8* @dir->name << "\n";
+    sout << "========================\n\n";
+}
+
+// For now, ill only support 512 sector drives. 4k wont work teehee
+[__GLOBAL_FIRST__] u32 SECTOR_SIZE      = $u32 512;
+// For now, ill only support 1024 block size. hehe
+[__GLOBAL_FIRST__] u32 BLOCK_SIZE       = $u32 1024;
+
+[__GLOBAL_FIRST__] u16 EXT2_SB_MAGIC    = $u16 0xef53;
+
+u32 sector_to_block(u32 sectors) {
+    return (sectors * SECTOR_SIZE) / BLOCK_SIZE;
+}
+
+u32 block_to_sector(u32 blocks) {
+    return (blocks * BLOCK_SIZE) / SECTOR_SIZE;
+}
+
+// starth (higher half lba) set to 0 for now, until we get bigger drives lol
+i32 read_block(HBA_PORT* p, u32 block_number, void* buf) {
+    return ahci_read(p, block_to_sector(block_number), $u32 0, block_to_sector($u32 1), $u16* buf);
+}
+
+// starth (higher half lba) set to 0 for now, until we get bigger drives lol
+i32 write_block(HBA_PORT* p, u32 block_number, void* buf) {
+    return ahci_write(p, block_to_sector(block_number), $u32 0, block_to_sector($u32 1), $u16* buf);
+}
+
+struct ext2_fs {
+    HBA_PORT*           p;
+    ext2_super_block*   sb;
+}
+
+ext2_fs* ext2_mount(HBA_PORT* p) {
+    // Read super block
+    void* buf = palloc();
+    memset(buf, 0, PAGE_SIZE);
+    i32 ok = read_block(p, $u32 1, buf);
+    if(!ok) {
+        sout << "Block read failed\n";
+        pfree(buf);
+        return $ext2_fs* 0x0;
+    }
+
+    ext2_super_block* sb = $ext2_super_block* buf;
+
+    if(sb->magic != EXT2_SB_MAGIC) {
+        sout << "Invalid Ext2 Magic, exiting mount\n";
+        pfree(buf);
+        return $ext2_fs* 0x0;
+    }
+
+    if($u32 1024 << sb->log_block_size != $u32 1024) {
+        sout << "Unsupported block size, exiting mount\n";
+        pfree(buf);
+        return $ext2_fs* 0x0;
+    }
+
+    if(sb->major_rev_level != $u32 0) {
+        sout << "Unsupported version, exiting mount\n";
+        pfree(buf);
+        return $ext2_fs* 0x0;
+    }
+
+    ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
+    fs->p = p;
+    fs->sb = sb;
+    
+    return fs;
+}
+
+ext2_inode* ext2_read_inode(ext2_fs* fs, u32 inode_num) {
+    if(inode_num == $u32 0 || inode_num > fs->sb->inodes_count) {
+        sout << "Invalid inode number: " << inode_num << "\n";
+        return $ext2_inode* 0x0;
+    }
+
+    // inodes 1 indexed
+    u32 group = (inode_num - $u32 1) / fs->sb->inodes_per_group;
+    u32 index = (inode_num - $u32 1) % fs->sb->inodes_per_group;
+
+    void* buf = palloc();
+    memset(buf, 0, PAGE_SIZE);
+    i32 ok = read_block(fs->p, $u32 2, buf); // gdt is block 2, refer to notes in docs.
+    if(!ok) {
+        sout << "Reading group descriptor table failed, returning\n";
+        pfree(buf);
+        return $ext2_inode* 0x0;
+    }
+
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 buf + ($u64 group * sizeof(ext2_group_descriptor))); // index into correct gd entry in gdt
+
+    u32 inode_offset = index * $u32 fs->sb->inode_size;
+    u32 block = gd->inode_table + (inode_offset / BLOCK_SIZE);
+    u32 offset_in_block = inode_offset % BLOCK_SIZE;
+
+    memset(buf, 0, PAGE_SIZE);
+    ok = read_block(fs->p, block, buf);
+    if(!ok) {
+        sout << "Inode table read failed @ block " << block << "\n";
+        pfree(buf);
+        return $ext2_inode* 0x0;
+    }
+
+    ext2_inode* inode = $ext2_inode* palloc();
+    memcpy($void* inode, $void* ($u64 buf + $u64 offset_in_block), sizeof(ext2_inode));
+    pfree(buf);
+
+    return inode;
+}
+
+u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index) {
+    // direct
+    if(file_block_index < $u32 12) {
+        return inode->direct_block_ptr[file_block_index];
+    }
+    file_block_index -= $u32 12;
+    
+    // singly
+    if(file_block_index < $u32 256) {
+        void* buf = palloc();
+        read_block(fs->p, inode->singly_ind_block_ptr, buf);
+        u32* blocks = $u32* buf;
+        u32 block = blocks[file_block_index];
+        pfree(buf);
+        return block; 
+    }
+    file_block_index -= $u32 256;
+
+    // doubly
+    if(file_block_index < $u32 (256*256)) {
+        void* buf_l0 = palloc();
+        read_block(fs->p, inode->doubly_ind_block_ptr, buf_l0);
+        u32* l0 = $u32* buf_l0;
+
+        u32 l0_index = file_block_index / $u32 256;
+        u32 l1_index = file_block_index % $u32 256;
+
+        void* buf_l1 = palloc();
+        read_block(fs->p, l0[l0_index], buf_l1);
+        u32* l1= $u32* buf_l1;
+
+        u32 block = l1[l1_index];
+
+        pfree($void* buf_l1);
+        pfree($void* buf_l0);
+        return block;
+    }
+    file_block_index -= $u32 (256*256);
+
+    // triply
+    if(file_block_index < $u32 (256*256*256)) {
+        void* buf_l0 = palloc();
+        read_block(fs->p, inode->triply_ind_block_ptr, buf_l0);
+        u32* l0 = $u32* buf_l0;
+
+        u32 l0_index = file_block_index / $u32 (256*256);
+        u32 rem = file_block_index % $u32 (256*256);
+        u32 l1_index = rem / $u32 256;
+        u32 l2_index = rem % $u32 256;
+
+        void* buf_l1 = palloc();
+        read_block(fs->p, l0[l0_index], buf_l1);
+        u32* l1= $u32* buf_l1;
+
+        void* buf_l2 = palloc();
+        read_block(fs->p, l1[l1_index], buf_l2);
+        u32* l2 = $u32* buf_l2;
+
+        u32 block = l2[l2_index];
+
+        pfree($void* buf_l2);
+        pfree($void* buf_l1);
+        pfree($void* buf_l0);
+        return block;
+    }
+
+    // this out of bound, file exceeds the limit (right now its is 256*256*256*1024 = 16GiB)
+    return $u32 0;
+}
+
+void ext2_read_dir(ext2_fs* fs, u32 inode_num) {
+    ext2_inode* inode = ext2_read_inode(fs, inode_num);
+    print_inode(inode);
+    if((inode->mode & $u16 0xf000) != INODE_TYPE_DIR) {
+        sout << "Inode " << inode_num << " is not a dir\n";
+        pfree($void* inode);
+        return;
+    }
+
+    void* buf = palloc();
+    memset(buf, 0, PAGE_SIZE);
+
+    u32 block_count = (inode->size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
+
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, inode, i);
+        if(block_num == $u32 0) break;
+
+        read_block(fs->p, block_num, buf);
+        
+        u32 offset = $u32 0;
+        while (offset < BLOCK_SIZE) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            if(dir->inode != $u32 0) {
+                print_dir_entry(dir);
+            }
+            if(dir->size == $u16 0) {
+                break;
+            }
+            offset = offset + $u32 dir->size;
+        }
+    }
+
+    pfree(buf);
+    pfree($void* inode);
+}
+
+ext2_inode* ext2_lookup_path(ext2_fs* fs, string path) {
+    if(path == "/") {
+        return ext2_read_inode(fs, $u32 2);
+    }
+
+    vector<string> parts = path.split('/');
+    ext2_inode* curr = ext2_read_inode(fs, $u32 2); // root inode
+
+    for(u64 i = 0x0; i < parts.size(); i++) {
+        sout << parts[i] << "\n";
+
+        void* buf = palloc();
+        i32 found = 0;
+
+        u32 block_count = (curr->size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
+
+        for(u32 j = $u32 0; j < block_count; j++) {
+            u32 block_num = ext2_traverse_block_map(fs, curr, j);
+            if(block_num == $u32 0) break;
+
+            read_block(fs->p, block_num, buf);
+
+            u32 offset = $u32 0;
+            while(offset < BLOCK_SIZE && !found) {
+                ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+                if(dir->inode != $u32 0 && parts[i] == $u8* @dir->name) {
+                    pfree($void* curr);
+                    curr = ext2_read_inode(fs, dir->inode);
+                    found = 1;
+                }
+                if(dir->size == $u16 0) {
+                    break;
+                }
+                offset = offset + $u32 dir->size;
+            }
+
+        }
+
+        pfree(buf);
+        if(!found) {
+            pfree($void* curr);
+            return $ext2_inode* 0x0;
+        }
+    }
+    return curr;
+}
+
+void* ext2_read_file(ext2_fs* fs, ext2_inode* inode) {
+    u32 size = inode->size;
+    void* file_buf = malloc($u64 size);
+
+    u32 block_count = (size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
+
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, inode, i);
+        if(block_num == $u32 0) break;
+
+        void* buf = palloc();
+        memset(buf, 0, PAGE_SIZE);
+        read_block(fs->p, block_num, buf);
+
+        memcpy($void* ($u64 file_buf + $u64 (i * BLOCK_SIZE)), buf, $u64 BLOCK_SIZE);
+
+        pfree(buf);
+    }
+
+    return file_buf;
+}
+
+void ext2_print_tree(ext2_fs* fs, u32 inode_num, u32 depth) {
+    ext2_inode* inode = ext2_read_inode(fs, inode_num);
+
+    if((inode->mode & $u16 0xf000) != INODE_TYPE_DIR) {
+        pfree($void* inode);
+        return;
+    }
+
+    void* buf = palloc();
+    u32 block_count = (inode->size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
+
+
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, inode, i);
+        if(block_num == $u32 0) break;
+
+        read_block(fs->p, block_num, buf);
+
+
+        u32 offset = $u32 0;
+        while(offset < BLOCK_SIZE) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            u8* name = $u8* @dir->name;
+            if(dir->inode != $u32 0) {
+                if(!strcmp(name, ".") && !strcmp(name, "..")) {
+                    for(u32 indent = $u32 0; indent < depth; indent++) sout << "  ";
+                    sout << name << "\n";
+
+                    ext2_inode* child = ext2_read_inode(fs, dir->inode);
+                    if((child->mode & $u16 0xf000) == INODE_TYPE_DIR) {
+                        pfree($void* child);
+                        ext2_print_tree(fs, dir->inode, depth + $u32 1);
+                    } else {
+                        pfree($void* child);
+                    }
+                }
+            }
+
+            if(dir->size == $u16 0) break;
+            offset += $u32 dir->size;
+        }
+    }
+
+    pfree(buf);
+    pfree($void* inode);
+}
+
+i32 initialize_disk(HBA_PORT* p) {
+    ext2_fs* fs = ext2_mount(p);
+    if($u64 fs == 0x0) {
+        sout << "Disk mount failed\n";
+        return 0;
+    }
+
+    sout << "=== PRINTING FS TREE ===\n";
+    ext2_print_tree(fs, $u32 2, $u32 0);
+
+    string lookup = new string("/shalom/jammo.txt");
+    ext2_inode* res = ext2_lookup_path(fs, lookup);
+    if($u64 res == 0x0) {
+        sout << "Inode: " << lookup << " does not exist\n";
+    } else {
+        print_inode(res);
+        ext2_read_dir(fs, $u32 13);
+    }
+
+    // string file_name = new string("/bello.sh");
+    string file_name = new string("/shalom/jammo.txt");
+    ext2_inode* file = ext2_lookup_path(fs, file_name);
+    if($u64 file == 0x0) {
+        sout << "Inode: " << file_name << " does not exist\n";
+    } else {
+        void* buf = ext2_read_file(fs, file);
+        sout << "Contents of: " << file_name << "\n"; 
+        sout << $u8* buf << "\n";
+        free(buf, $u64 file->size);
+    }
+
+    pfree($void* fs->sb);
+    free($void* fs, sizeof(ext2_fs));
+
+    // outw($u16 0x604, $u16 0x2000);
+
+    return 1;
+}
