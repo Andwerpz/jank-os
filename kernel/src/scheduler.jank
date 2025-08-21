@@ -170,9 +170,8 @@ void scheduler(trapframe* tf) {
     if(proc->status == PROCESS_RUNNING) proc->status = PROCESS_READY;
     else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;
     else {
-        sout << "Unrecognized status : " << proc->
+        sout << "Unrecognized status : " << proc->status << "\n";
         panic("get_next_status() : unrecognized runtime status");
-
     }
 
     //save trapframe
