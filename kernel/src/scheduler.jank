@@ -1,4 +1,31 @@
 
+// ===========================================================
+// Notes on kernel stacks, traps, and interrupts
+// ===========================================================
+
+// Each process has its own persistent kernel stack
+// - Allocated at process creation, freed at process exit
+// - Stack top pointer stored in PCB and loaded into TSS.rsp0 at context switch
+
+// Exceptions (faults/traps):
+// - CPU transitions CPL=3->0 and switches to current process kernel stack
+// - CPU pushes hardware trapframe (RIP, CS, RFLAGS, RSP, SS, error code)
+// - Handler runs on process kernel stack
+// - Handler either:
+//   (a) fixes the fault and returns via iretq using trapframe on stack
+//   (b) kills the process and never returns
+// - No trapframe is copied to PCB
+
+// Interrupts:
+// - If arriving in user mode: CPU switches to kernel stack (rsp0) and pushes frame
+// - If arriving in kernel mode: CPU pushes frame on *current* kernel stack (no switch)
+// - Interrupt handler may preempt exception/syscall handler
+// - Before moving to scheduler, handler must copy trapframe into process kstack
+
+//interrupts can preempt exceptions, exceptions will continue to function as their trapframes are 
+//stored on the kstack. 
+
+//also, make sure that interrupts are disabled while in the scheduler
 
 struct trapframe {
     u64 rax;        // 0
@@ -22,9 +49,11 @@ struct trapframe {
     u64 pt;         // 144
     u64 cs;         // 152
     u64 ss;         // 160
+
+    u64[10] buf;    // for debugging
 }
 
-void print_trapframe(trapframe* tf) {
+export void print_trapframe(trapframe* tf) {
     sout << "%rax   : " << $void* tf->rax << "\n";
     sout << "%rbx   : " << $void* tf->rbx << "\n";
     sout << "%rcx   : " << $void* tf->rcx << "\n";
@@ -46,6 +75,8 @@ void print_trapframe(trapframe* tf) {
     sout << "pt     : " << $void* tf->pt << "\n";
     sout << "cs     : " << $void* tf->cs << "\n";
     sout << "ss     : " << $void* tf->ss << "\n";
+
+    for(i32 i = 0; i < 10; i++) sout << "buf : " << $void* tf->buf[i] << "\n";
 }
 
 //we shouldn't store processes anywhere else. 
@@ -131,13 +162,34 @@ void init_scheduler() {
     scheduler();
 }
 
+//saves the provided trapframe into current process's kstack, then calls the actual scheduler
+void scheduler(trapframe* tf) {
+    process* proc = get_cur_proc();
+
+    //update status
+    if(proc->status == PROCESS_RUNNING) proc->status = PROCESS_READY;
+    else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;
+    else {
+        sout << "Unrecognized status : " << proc->
+        panic("get_next_status() : unrecognized runtime status");
+
+    }
+
+    //save trapframe
+    trapframe* ptf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
+    memcpy($void* ptf, $void* tf, sizeof(trapframe));
+
+    //go to scheduler
+    scheduler();
+}   
+
 //before jumping here, should make it so that %rsp points to a stack that we can safely
 //  put garbage on. you can use the kernel stack for this
 //this expects kernel pagetables to be active as we'll want to access kernel heap structures
 //this should choose a process to run then jump to that process
 //this should not have to cleanup, the saved execution context should make it so that 
 //  any stuff leftover is treated as trash memory. 
-export void scheduler() {
+void scheduler() {
     //look for next process to run
     process* proc = schedule_next_process();
     passert(proc->status == PROCESS_READY, "scheduler() : should only schedule ready processes");
@@ -154,6 +206,15 @@ export void scheduler() {
     GSData* gs_data = $GSData* GSDATA_PAGE;
     gs_data->cur_proc_kstack_top = proc->kstack_bottom + KSTACK_TOP;
 
+    //so interrupts from user->kernel mode go to process specific stack
+    tss_set_rsp0(proc->kstack_bottom + KSTACK_TOP);
+
+    //return to process
+    iret_to_process(tf);
+}
+
+//assumes the trapframe given corresponds to the current process
+void iret_to_process(trapframe* tf) {
     //need to do different stuff if we're returning to user or kernel mode
     if(tf->cs == 0x23) {
         //returning to user mode
@@ -161,7 +222,7 @@ export void scheduler() {
         asm!("swapgs");             
 
         //load trapframe
-        asm!("movq {proc_trapframe_off}, %rax");   //%rax now holds trapframe base
+        asm!("movq {tf}, %rax");    //%rax now holds trapframe base
 
         //iretq information
         asm!("pushq 160(%rax)");    // SS
@@ -215,7 +276,7 @@ export void scheduler() {
     else if(tf->cs == 0x08) {
         //returning to kernel mode          
         //load trapframe
-        asm!("movq {proc_trapframe_off}, %rax");   //%rax now holds trapframe base
+        asm!("movq {tf}, %rax");   //%rax now holds trapframe base
 
         //swap to destination stack
         asm!("movq 56(%rax), %rsp");
@@ -268,7 +329,8 @@ export void scheduler() {
         asm!("iretq");
     }
     else {
-        panic("scheduler() : invalid CS");
+        print_trapframe(tf);
+        panic("iret_to_process() : invalid CS");
     }
 }
 
@@ -278,125 +340,6 @@ void yield() {
     asm!("int $0x20");
 }
 
-export void update_cur_proc_status() {
-    process* proc = get_cur_proc();
-    if(proc->status == PROCESS_RUNNING) proc->status = PROCESS_READY;
-    else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;
-    else panic("get_next_status() : unrecognized runtime status");
-}
-
 void debug_print() {
     sout << "debug print\n";
-}
-
-//TSS should make it so that this uses the kernel stack
-[__GLOBAL_FIRST__] extern u8 timer_interrupt_entry;
-void timer_interrupt_handler() {
-    asm!("timer_interrupt_entry:"); //don't want stack frame messing stuff up
-
-    //cpu will have pushed these things onto the stack:
-    // SS           : from user mode only
-    // %rsp         : from user mode only
-    // RFLAGS
-    // CS
-    // %rip
-    // error code   : only for some interrupts
-    // trap id      : after we've changed around IDT
-
-    //check if we are coming from kernel mode
-    //we know that at least this is on the stack:
-    // RFLAGS
-    // CS
-    // %rip
-    asm!("pushq %rax");             // save %rax
-    asm!("movq 16(%rsp), %rax");    // CS should be at +16 after pushing %rax
-    asm!("test $3, %al");           // mask out 0b11
-    asm!("jnz .from_user"); 
-    
-    //if we're coming from kernel mode, redo the things that are pushed
-    //so we can handle it as if we came from user mode
-    asm!("pushq $0x10");            // SS
-    asm!("lea 40(%rsp), %rax");     // there are 5 things pushed after the execution %rsp
-    asm!("pushq %rax");             // %rsp
-    asm!("pushq 40(%rsp)");         // RFLAGS
-    asm!("pushq 40(%rsp)");         // CS
-    asm!("pushq 40(%rsp)");         // %rip
-    asm!("movq 40(%rsp), %rax");    // restore %rax
-    asm!("jmp .register_save");
-
-    //coming from user mode
-    asm!(".from_user:");
-    asm!("popq %rax");              // restore %rax
-    asm!("swapgs");                 // swap to kernel GS 
-
-    asm!(".register_save:");
-    //push registers onto stack
-    asm!("pushq %rax");
-    asm!("pushq %rbx");
-    asm!("pushq %rcx");
-    asm!("pushq %rdx");
-    asm!("pushq %rsi");
-    asm!("pushq %rdi");
-    asm!("pushq %rbp");
-                                // skip %rsp
-    asm!("pushq %r8");
-    asm!("pushq %r9");
-    asm!("pushq %r10");
-    asm!("pushq %r11");
-    asm!("pushq %r12");
-    asm!("pushq %r13");
-    asm!("pushq %r14");
-    asm!("pushq %r15");
-
-    asm!("mov %cr3, %rax");
-    asm!("pushq %rax");
-
-    //setup kernel execution context
-    asm!("movq %gs:0, %rax");       //swap to kernel pagetable
-    asm!("mov %rax, %cr3");
-
-    //update current process's status
-    asm!("call update_cur_proc_status");
-
-    //get current process
-    asm!("call get_cur_proc");      //%rax now holds pointer to current process
-
-    //put trapframe addr into %rax
-    asm!("movq 8(%rax), %rax");     //%rax now holds proc->kstack_bottom
-    asm!("movq KSTACK_TRAPFRAME(%rip), %rbx"); 
-    asm!("add %rbx, %rax");         //%rax now holds trapframe addr
-
-    //write to trapframe
-    asm!("popq 144(%rax)");     // %cr3
-    asm!("popq 120(%rax)");     // %r15
-    asm!("popq 112(%rax)");     // %r14
-    asm!("popq 104(%rax)");     // %r13
-    asm!("popq 96(%rax)");      // %r12
-    asm!("popq 88(%rax)");      // %r11
-    asm!("popq 80(%rax)");      // %r10
-    asm!("popq 72(%rax)");      // %r9
-    asm!("popq 64(%rax)");      // %r8
-                                // skip %rsp
-    asm!("popq 48(%rax)");      // %rbp
-    asm!("popq 40(%rax)");      // %rdi
-    asm!("popq 32(%rax)");      // %rsi
-    asm!("popq 24(%rax)");      // %rdx
-    asm!("popq 16(%rax)");      // %rcx
-    asm!("popq 8(%rax)");       // %rbx
-    asm!("popq 0(%rax)");       // %rax
-
-    asm!("popq 128(%rax)");     // %rip 
-    asm!("popq 152(%rax)");     // CS
-    asm!("popq 136(%rax)");     // RFLAGS
-    asm!("popq 56(%rax)");      // %rsp
-    asm!("popq 160(%rax)");     // SS
-
-    //send EOI
-    asm!("movb $0x20, %al");
-    asm!("outb %al, $0x20");
-
-    //here we should jump to actual interrupt handlers depending on trap id
-
-    //jump to scheduler
-    asm!("jmp scheduler");
 }

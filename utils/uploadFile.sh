@@ -14,15 +14,15 @@ send_file() {
 
     {
         printf "load "
-        sleep 0.3
+        sleep 0.1
         printf "%s " "$(basename "$file")"
-        sleep 0.3
+        sleep 0.1
         printf "%s " "$size"
-        sleep 0.3
+        sleep 0.1
         xxd -p "$file" | tr -d '\n'
-        sleep 0.3
+        sleep 0.1
         printf "\r"
-        sleep 1.0
+        sleep 0.1
     } | nc -N localhost "$PORT"
 }
 

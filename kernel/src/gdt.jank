@@ -108,6 +108,13 @@ i32 init_gdt() {
     return 0;
 }
 
+//sets stack entry point for interrupts from user -> kernel mode
+//should be set every time we schedule a new process
+void tss_set_rsp0(u64 addr) {
+    TSS* tss = $TSS* TSS_PAGE;
+    tss->rsp0 = addr;
+}
+
 void gdt_set_entry(i32 idx, u32 base, u32 limit, u8 access, u8 flags, GDTSegmentDescriptor* gdt) {
     gdt[idx].base_low     = $u16 (base & $u32 0xffff);
     gdt[idx].base_middle  = $u8 ((base >> $u32 16) & $u32 0xff);
