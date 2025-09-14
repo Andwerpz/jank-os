@@ -4,12 +4,15 @@
 
 i32 main() {
 
+    cout << "RUNNING FORKTEST\n";
+
     for(i32 i = 0; i < 5; i++){
         sys_fork();
     }
 
-    u64 pid = sys_getpid();
+    i64 pid = sys_getpid();
     string out = "PID : " + to_string(pid) + "\n";
     cout << out;
 
+    return 0;
 }

@@ -56,7 +56,7 @@ u32 inl(u16 port) {
 [__GLOBAL_FIRST__] u64 irq_saved_rflags;
 
 void irq_disable() {
-    if(irq_disable_count == 0x0) {
+    if(irq_disable_count == 0x0) {  //this should be multiprocess safe?
         asm!("pushfq");     //need to push RFLAGS before cli to save actual RFLAGS
         asm!("cli");        //do cli before popq to make global variable safe
         asm!("popq irq_saved_rflags(%rip)");

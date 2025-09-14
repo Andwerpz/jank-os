@@ -3,5 +3,6 @@
 *.s
 *.out
 .vscode
+drive_testing/*
 
 !kernel/trampoline.s

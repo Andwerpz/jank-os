@@ -238,29 +238,22 @@ void print_dir_entry(ext2_dir_entry* dir) {
     sout << "========================\n\n";
 }
 
-// For now, ill only support 512 sector drives. 4k wont work teehee
-[__GLOBAL_FIRST__] u32 SECTOR_SIZE      = $u32 512;
 // For now, ill only support 1024 block size. hehe
-[__GLOBAL_FIRST__] u32 BLOCK_SIZE       = $u32 1024;
+[__GLOBAL_FIRST__] u32 EXT2_BLOCK_SIZE = $u32 1024;
+[__GLOBAL_FIRST__] u16 EXT2_SB_MAGIC = $u16 0xef53;
 
-[__GLOBAL_FIRST__] u16 EXT2_SB_MAGIC    = $u16 0xef53;
-
-u32 sector_to_block(u32 sectors) {
-    return (sectors * SECTOR_SIZE) / BLOCK_SIZE;
-}
-
-u32 block_to_sector(u32 blocks) {
-    return (blocks * BLOCK_SIZE) / SECTOR_SIZE;
+u32 ext2_block_to_sector(u32 blocks) {
+    return (blocks * EXT2_BLOCK_SIZE) / AHCI_SECTOR_SIZE;
 }
 
 // starth (higher half lba) set to 0 for now, until we get bigger drives lol
-i32 read_block(HBA_PORT* p, u32 block_number, void* buf) {
-    return ahci_read(p, block_to_sector(block_number), $u32 0, block_to_sector($u32 1), $u16* buf);
+i32 ext2_read_block(HBA_PORT* p, u32 block_number, void* buf) {
+    return ahci_read(p, ext2_block_to_sector(block_number), $u32 0, ext2_block_to_sector($u32 1), $u16* buf);
 }
 
 // starth (higher half lba) set to 0 for now, until we get bigger drives lol
-i32 write_block(HBA_PORT* p, u32 block_number, void* buf) {
-    return ahci_write(p, block_to_sector(block_number), $u32 0, block_to_sector($u32 1), $u16* buf);
+i32 ext2_write_block(HBA_PORT* p, u32 block_number, void* buf) {
+    return ahci_write(p, ext2_block_to_sector(block_number), $u32 0, ext2_block_to_sector($u32 1), $u16* buf);
 }
 
 struct ext2_fs {
@@ -272,8 +265,7 @@ ext2_fs* ext2_mount(HBA_PORT* p) {
     // Read super block
     void* buf = palloc();
     memset(buf, 0, PAGE_SIZE);
-    i32 ok = read_block(p, $u32 1, buf);
-    if(!ok) {
+    if(ext2_read_block(p, $u32 1, buf)) {
         sout << "Block read failed\n";
         pfree(buf);
         return $ext2_fs* 0x0;
@@ -306,10 +298,11 @@ ext2_fs* ext2_mount(HBA_PORT* p) {
     return fs;
 }
 
-ext2_inode* ext2_read_inode(ext2_fs* fs, u32 inode_num) {
+//loads an inode from disk into memory
+i32 ext2_read_inode(ext2_fs* fs, u32 inode_num, ext2_inode* res) {
     if(inode_num == $u32 0 || inode_num > fs->sb->inodes_count) {
         sout << "Invalid inode number: " << inode_num << "\n";
-        return $ext2_inode* 0x0;
+        return 1;
     }
 
     // inodes 1 indexed
@@ -318,34 +311,33 @@ ext2_inode* ext2_read_inode(ext2_fs* fs, u32 inode_num) {
 
     void* buf = palloc();
     memset(buf, 0, PAGE_SIZE);
-    i32 ok = read_block(fs->p, $u32 2, buf); // gdt is block 2, refer to notes in docs.
-    if(!ok) {
+    if(ext2_read_block(fs->p, $u32 2, buf)) {    // gdt is block 2, refer to notes in docs.
         sout << "Reading group descriptor table failed, returning\n";
         pfree(buf);
-        return $ext2_inode* 0x0;
+        return 1;
     }
 
-    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 buf + ($u64 group * sizeof(ext2_group_descriptor))); // index into correct gd entry in gdt
+    // index into correct gd entry in gdt
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 buf + ($u64 group * sizeof(ext2_group_descriptor))); 
 
     u32 inode_offset = index * $u32 fs->sb->inode_size;
-    u32 block = gd->inode_table + (inode_offset / BLOCK_SIZE);
-    u32 offset_in_block = inode_offset % BLOCK_SIZE;
+    u32 block = gd->inode_table + (inode_offset / EXT2_BLOCK_SIZE);
+    u32 offset_in_block = inode_offset % EXT2_BLOCK_SIZE;
 
     memset(buf, 0, PAGE_SIZE);
-    ok = read_block(fs->p, block, buf);
-    if(!ok) {
+    if(ext2_read_block(fs->p, block, buf)) {
         sout << "Inode table read failed @ block " << block << "\n";
         pfree(buf);
-        return $ext2_inode* 0x0;
+        return 1;
     }
 
-    ext2_inode* inode = $ext2_inode* palloc();
-    memcpy($void* inode, $void* ($u64 buf + $u64 offset_in_block), sizeof(ext2_inode));
+    memcpy($void* res, $void* ($u64 buf + $u64 offset_in_block), sizeof(ext2_inode));
     pfree(buf);
 
-    return inode;
+    return 0;
 }
 
+//gets block number within file
 u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index) {
     // direct
     if(file_block_index < $u32 12) {
@@ -356,7 +348,7 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
     // singly
     if(file_block_index < $u32 256) {
         void* buf = palloc();
-        read_block(fs->p, inode->singly_ind_block_ptr, buf);
+        ext2_read_block(fs->p, inode->singly_ind_block_ptr, buf);
         u32* blocks = $u32* buf;
         u32 block = blocks[file_block_index];
         pfree(buf);
@@ -367,14 +359,14 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
     // doubly
     if(file_block_index < $u32 (256*256)) {
         void* buf_l0 = palloc();
-        read_block(fs->p, inode->doubly_ind_block_ptr, buf_l0);
+        ext2_read_block(fs->p, inode->doubly_ind_block_ptr, buf_l0);
         u32* l0 = $u32* buf_l0;
 
         u32 l0_index = file_block_index / $u32 256;
         u32 l1_index = file_block_index % $u32 256;
 
         void* buf_l1 = palloc();
-        read_block(fs->p, l0[l0_index], buf_l1);
+        ext2_read_block(fs->p, l0[l0_index], buf_l1);
         u32* l1= $u32* buf_l1;
 
         u32 block = l1[l1_index];
@@ -388,7 +380,7 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
     // triply
     if(file_block_index < $u32 (256*256*256)) {
         void* buf_l0 = palloc();
-        read_block(fs->p, inode->triply_ind_block_ptr, buf_l0);
+        ext2_read_block(fs->p, inode->triply_ind_block_ptr, buf_l0);
         u32* l0 = $u32* buf_l0;
 
         u32 l0_index = file_block_index / $u32 (256*256);
@@ -397,11 +389,11 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
         u32 l2_index = rem % $u32 256;
 
         void* buf_l1 = palloc();
-        read_block(fs->p, l0[l0_index], buf_l1);
+        ext2_read_block(fs->p, l0[l0_index], buf_l1);
         u32* l1= $u32* buf_l1;
 
         void* buf_l2 = palloc();
-        read_block(fs->p, l1[l1_index], buf_l2);
+        ext2_read_block(fs->p, l1[l1_index], buf_l2);
         u32* l2 = $u32* buf_l2;
 
         u32 block = l2[l2_index];
@@ -417,7 +409,11 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
 }
 
 void ext2_read_dir(ext2_fs* fs, u32 inode_num) {
-    ext2_inode* inode = ext2_read_inode(fs, inode_num);
+    ext2_inode* inode;
+    if(ext2_read_inode(fs, inode_num, inode)) {
+        sout << "Failed to read inode\n";
+        return;
+    }
     print_inode(inode);
     if((inode->mode & $u16 0xf000) != INODE_TYPE_DIR) {
         sout << "Inode " << inode_num << " is not a dir\n";
@@ -428,16 +424,16 @@ void ext2_read_dir(ext2_fs* fs, u32 inode_num) {
     void* buf = palloc();
     memset(buf, 0, PAGE_SIZE);
 
-    u32 block_count = (inode->size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
+    u32 block_count = (inode->size + EXT2_BLOCK_SIZE - $u32 1) / EXT2_BLOCK_SIZE;
 
     for(u32 i = $u32 0; i < block_count; i++) {
         u32 block_num = ext2_traverse_block_map(fs, inode, i);
         if(block_num == $u32 0) break;
 
-        read_block(fs->p, block_num, buf);
+        ext2_read_block(fs->p, block_num, buf);
         
         u32 offset = $u32 0;
-        while (offset < BLOCK_SIZE) {
+        while (offset < EXT2_BLOCK_SIZE) {
             ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
             if(dir->inode != $u32 0) {
                 print_dir_entry(dir);
@@ -453,34 +449,61 @@ void ext2_read_dir(ext2_fs* fs, u32 inode_num) {
     pfree($void* inode);
 }
 
-ext2_inode* ext2_lookup_path(ext2_fs* fs, string path) {
-    if(path == "/") {
-        return ext2_read_inode(fs, $u32 2);
+//assumes given node houses ext2 inode
+i32 ext2_lookup(inode& _node, string child, inode& res) {
+    ext2_inode* node = $ext2_inode* _node.node;
+    ext2_fs* fs = $ext2_fs* _node.super;
+
+    void* buf = palloc();
+    u32 block_count = (node->size + EXT2_BLOCK_SIZE - $u32 1) / EXT2_BLOCK_SIZE;
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, node, i);
+        if(block_num == $u32 0) break;
+        ext2_read_block(fs->p, block_num, buf);
+        
+        u32 offset = $u32 0;
+        while(offset < EXT2_BLOCK_SIZE) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            if(dir->size == $u16 0) break;  //no more entries
+            if(dir->inode != $u32 0 && child == new string($u8* @dir->name, $u64 dir->name_len)) {
+                pfree(buf);
+                res.node_sz = sizeof(ext2_inode);
+                ext2_read_inode(fs, dir->inode, $ext2_inode* res.node);
+                res.lookup = #<ext2_lookup(inode&, string, inode&)>;
+                return 0;
+            }
+            offset = offset + $u32 dir->size;
+        }
     }
 
+    pfree(buf);
+    return 1;
+}
+
+ext2_inode* ext2_lookup_path(ext2_fs* fs, string path) {
     vector<string> parts = path.split('/');
-    ext2_inode* curr = ext2_read_inode(fs, $u32 2); // root inode
+    ext2_inode* curr = $ext2_inode* malloc(sizeof(ext2_inode));
+    ext2_read_inode(fs, $u32 2, curr); // root inode
+
+    sout << "ext2_lookup_path : " << path << "\n";
 
     for(u64 i = 0x0; i < parts.size(); i++) {
-        sout << parts[i] << "\n";
-
         void* buf = palloc();
         i32 found = 0;
 
-        u32 block_count = (curr->size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
+        u32 block_count = (curr->size + EXT2_BLOCK_SIZE - $u32 1) / EXT2_BLOCK_SIZE;
 
         for(u32 j = $u32 0; j < block_count; j++) {
             u32 block_num = ext2_traverse_block_map(fs, curr, j);
             if(block_num == $u32 0) break;
 
-            read_block(fs->p, block_num, buf);
+            ext2_read_block(fs->p, block_num, buf);
 
             u32 offset = $u32 0;
-            while(offset < BLOCK_SIZE && !found) {
+            while(offset < EXT2_BLOCK_SIZE && !found) {
                 ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
                 if(dir->inode != $u32 0 && parts[i] == $u8* @dir->name) {
-                    pfree($void* curr);
-                    curr = ext2_read_inode(fs, dir->inode);
+                    ext2_read_inode(fs, dir->inode, curr);
                     found = 1;
                 }
                 if(dir->size == $u16 0) {
@@ -488,12 +511,11 @@ ext2_inode* ext2_lookup_path(ext2_fs* fs, string path) {
                 }
                 offset = offset + $u32 dir->size;
             }
-
         }
 
         pfree(buf);
         if(!found) {
-            pfree($void* curr);
+            free($void* curr, sizeof(ext2_inode));
             return $ext2_inode* 0x0;
         }
     }
@@ -504,7 +526,7 @@ void* ext2_read_file(ext2_fs* fs, ext2_inode* inode) {
     u32 size = inode->size;
     void* file_buf = malloc($u64 size);
 
-    u32 block_count = (size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
+    u32 block_count = (size + EXT2_BLOCK_SIZE - $u32 1) / EXT2_BLOCK_SIZE;
 
     for(u32 i = $u32 0; i < block_count; i++) {
         u32 block_num = ext2_traverse_block_map(fs, inode, i);
@@ -512,9 +534,9 @@ void* ext2_read_file(ext2_fs* fs, ext2_inode* inode) {
 
         void* buf = palloc();
         memset(buf, 0, PAGE_SIZE);
-        read_block(fs->p, block_num, buf);
+        ext2_read_block(fs->p, block_num, buf);
 
-        memcpy($void* ($u64 file_buf + $u64 (i * BLOCK_SIZE)), buf, $u64 BLOCK_SIZE);
+        memcpy($void* ($u64 file_buf + $u64 (i * EXT2_BLOCK_SIZE)), buf, $u64 EXT2_BLOCK_SIZE);
 
         pfree(buf);
     }
@@ -523,40 +545,38 @@ void* ext2_read_file(ext2_fs* fs, ext2_inode* inode) {
 }
 
 void ext2_print_tree(ext2_fs* fs, u32 inode_num, u32 depth) {
-    ext2_inode* inode = ext2_read_inode(fs, inode_num);
+    ext2_inode* inode = $ext2_inode* malloc(sizeof(ext2_inode));
+    ext2_read_inode(fs, inode_num, inode);
 
     if((inode->mode & $u16 0xf000) != INODE_TYPE_DIR) {
-        pfree($void* inode);
+        free($void* inode, sizeof(ext2_inode));
         return;
     }
 
     void* buf = palloc();
-    u32 block_count = (inode->size + BLOCK_SIZE - $u32 1) / BLOCK_SIZE;
-
+    u32 block_count = (inode->size + EXT2_BLOCK_SIZE - $u32 1) / EXT2_BLOCK_SIZE;
 
     for(u32 i = $u32 0; i < block_count; i++) {
         u32 block_num = ext2_traverse_block_map(fs, inode, i);
         if(block_num == $u32 0) break;
 
-        read_block(fs->p, block_num, buf);
-
+        ext2_read_block(fs->p, block_num, buf);
 
         u32 offset = $u32 0;
-        while(offset < BLOCK_SIZE) {
+        while(offset < EXT2_BLOCK_SIZE) {
             ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
-            u8* name = $u8* @dir->name;
+            string name = new string($u8* @dir->name, $u64 dir->name_len);
             if(dir->inode != $u32 0) {
-                if(!strcmp(name, ".") && !strcmp(name, "..")) {
+                if(!(name == ".") && !(name == "..")) {
                     for(u32 indent = $u32 0; indent < depth; indent++) sout << "  ";
                     sout << name << "\n";
 
-                    ext2_inode* child = ext2_read_inode(fs, dir->inode);
+                    ext2_inode* child = $ext2_inode* malloc(sizeof(ext2_inode));
+                    ext2_read_inode(fs, dir->inode, child);
                     if((child->mode & $u16 0xf000) == INODE_TYPE_DIR) {
-                        pfree($void* child);
                         ext2_print_tree(fs, dir->inode, depth + $u32 1);
-                    } else {
-                        pfree($void* child);
                     }
+                    free($void* child, sizeof(ext2_inode));
                 }
             }
 
@@ -566,7 +586,7 @@ void ext2_print_tree(ext2_fs* fs, u32 inode_num, u32 depth) {
     }
 
     pfree(buf);
-    pfree($void* inode);
+    free($void* inode, sizeof(ext2_inode));
 }
 
 i32 initialize_disk(HBA_PORT* p) {
@@ -579,7 +599,7 @@ i32 initialize_disk(HBA_PORT* p) {
     sout << "=== PRINTING FS TREE ===\n";
     ext2_print_tree(fs, $u32 2, $u32 0);
 
-    string lookup = new string("/shalom/jammo.txt");
+    string lookup = new string("/shell.jank");
     ext2_inode* res = ext2_lookup_path(fs, lookup);
     if($u64 res == 0x0) {
         sout << "Inode: " << lookup << " does not exist\n";
@@ -589,7 +609,7 @@ i32 initialize_disk(HBA_PORT* p) {
     }
 
     // string file_name = new string("/bello.sh");
-    string file_name = new string("/shalom/jammo.txt");
+    string file_name = new string("/shell.jank");
     ext2_inode* file = ext2_lookup_path(fs, file_name);
     if($u64 file == 0x0) {
         sout << "Inode: " << file_name << " does not exist\n";

@@ -3,9 +3,10 @@
 
 i32 main() {
 
-    //bruh
+    //exec user shell
 
     //shouldn't return
-    assert(0, "init shouldn't return");
+    assert(0, "init shouldn\'t return");
+    
     return 0;
 }

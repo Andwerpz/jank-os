@@ -1,0 +1,14 @@
+uhh, follow these guidelines or something and your code will be more safe (?)
+ 
+when writing in the kernel, try to prefix any functions, globals, structs, with the filename that it 
+comes from if you find that it doesn't make sense to be prefixed, it should probably go in utils.jank
+
+a function should never alloc and return a heap pointer, instead you should pass a preallocated pointer
+into the function. This makes it so that allocs and deallocs of the same memory happen within the same 
+context. 
+
+if you want to allocate some heap memory, try to use malloc. It's acceptable to directly use the physical
+allocator occasionally (function local temporary storage is the main example). Make extra sure that you 
+always pfree() afterwards.
+
+if you need to return a status code, always return i32 and 0 on success. 

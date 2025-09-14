@@ -43,6 +43,9 @@
 
 [__GLOBAL_FIRST__] u32 HBA_PxIS_TFES = $u32 1 << $u32 30;
 
+// For now, ill only support 512 sector drives. 4k wont work teehee
+[__GLOBAL_FIRST__] u32 AHCI_SECTOR_SIZE = $u32 512;
+
 struct ahci_hba {
     u8  bus;
     u8  device;
@@ -353,11 +356,12 @@ i32 find_cmdslot(HBA_PORT* p) {
 	return -1;
 }
 
+// startl + (starth << 32) is start sector address?
 i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
     p->is = $u32 -1; // clear pending interrupt bits
 	i32 spin = 0; // Spin lock timeout counter
 	i32 slot = find_cmdslot(p);
-	if(slot == -1) return 0;
+	if(slot == -1) return 1;
 
 	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
 	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
@@ -418,7 +422,7 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 	}
 	if(spin == 1000000) {
 		sout << "Port is hung\n";
-		return 0;
+		return 1;
 	}
 
 	p->ci = $u32 1 << $u32 slot;	// Issue command
@@ -431,24 +435,24 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
 			sout << "Read disk error\n";
-			return 0;
+			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
 		sout << "Read disk error\n";
-		return 0;
+		return 1;
 	}
 
-	return 1;
+	return 0;
 }
 
 i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
     p->is = $u32 -1; // clear pending interrupt bits
 	i32 spin = 0; // Spin lock timeout counter
 	i32 slot = find_cmdslot(p);
-	if(slot == -1) return 0;
+	if(slot == -1) return 1;
 
 	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
 	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
@@ -509,7 +513,7 @@ i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 	}
 	if(spin == 1000000) {
 		sout << "Port is hung\n";
-		return 0;
+		return 1;
 	}
 
 	p->ci = $u32 1 << $u32 slot;	// Issue command
@@ -522,24 +526,24 @@ i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
 			sout << "Read disk error\n";
-			return 0;
+			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
 		sout << "Read disk error\n";
-		return 0;
+		return 1;
 	}
 
-	return 1;
+	return 0;
 }
 
 i32 ahci_identify(HBA_PORT* p, u16* buf) {
     p->is = $u32 -1; // clear pending interrupt bits
 	i32 spin = 0; // Spin lock timeout counter
 	i32 slot = find_cmdslot(p);
-	if(slot == -1) return 0;
+	if(slot == -1) return 1;
 
 	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
 	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
@@ -574,7 +578,7 @@ i32 ahci_identify(HBA_PORT* p, u16* buf) {
 	}
 	if(spin == 1000000) {
 		sout << "Port is hung\n";
-		return 0;
+		return 1;
 	}
 
 	p->ci = $u32 1 << $u32 slot;	// Issue command
@@ -587,17 +591,17 @@ i32 ahci_identify(HBA_PORT* p, u16* buf) {
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
 			sout << "Read disk error\n";
-			return 0;
+			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
 		sout << "Read disk error\n";
-		return 0;
+		return 1;
 	}
 
-	return 1;
+	return 0;
 }
 
 void print_drive_info(HBA_PORT* p) {
@@ -632,7 +636,7 @@ void print_drive_info(HBA_PORT* p) {
     sout << "Serial: " << $u8* @serial << "\n";
     
     u64 total_sectors = *($u64* @identify_data[100]);
-    u64 total_bytes = total_sectors * $u64 SECTOR_SIZE;
+    u64 total_bytes = total_sectors * $u64 AHCI_SECTOR_SIZE;
     
     sout << "Sectors: " << total_sectors << "\n";
 	sout << "Size: " << total_bytes / $u64 (1024 * 1024) << " MiB\n";

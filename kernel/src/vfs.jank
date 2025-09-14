@@ -1,0 +1,137 @@
+#include <pair>;
+
+// Virtual File System
+//in-memory filesystem that mounts other filesystems onto itself. 
+
+//assumptions about mounted filesystems:
+// - must be able to answer the question "given this node, find this child"
+// - directories are mappings from string -> inode number
+
+//wrapper class for all nodes
+struct inode {
+    //fs specific
+    i32 is_virtual;
+    u64 node_sz;
+    void* node;     //if is not virtual, needs to be dealloced
+    void* super;    //global context
+    fn<i32(inode&, string, inode&)> lookup;
+
+    inode(void* _node, fn<i32(inode&, string, inode&)> _lookup) {
+        this.is_virtual = 0;
+        this.node = _node;
+        this.super = nullptr;
+        this.lookup = _lookup;
+    }
+
+    inode(void* _node, void* _super, fn<i32(inode&, string, inode&)> _lookup) {
+        this.is_virtual = 0;
+        this.node = _node;
+        this.super = _super;
+        this.lookup = _lookup;
+    }
+}
+
+//virtual nodes
+struct vfs_inode {
+    u8[4] magic;  // "JVFS" : jank vfs
+    vfs_inode* parent;
+    vector<pair<string, vfs_inode*>> children;
+
+    i32 is_mount_root;
+    void* mount_node;
+    fn<i32(inode&, string, inode&)> mount_lookup;
+
+    vfs_inode() {
+        this.init_magic();
+        this.children.push_back(new pair<string, vfs_inode*>(new string("."), @this));
+    }
+
+    vfs_inode(vfs_inode* parent) {
+        this.init_magic();
+        this.children.push_back(new pair<string, vfs_inode*>(new string("."), @this));
+        this.children.push_back(new pair<string, vfs_inode*>(new string(".."), this.parent));
+        this.parent = parent;
+    }
+
+    void init_magic() {
+        this.magic[0] = 'J';
+        this.magic[1] = 'V';
+        this.magic[2] = 'F';
+        this.magic[3] = 'S';
+    }
+
+    void add_child(string name, vfs_inode* child) {
+        passert(!this.is_mount_root, "vfs_inode::add_child() : cannot add children to mount directories");
+        passert($void* child->parent == nullptr, "vfs_inode::add_child() : child must have no parent");
+        this.children.push_back(new pair<string, vfs_inode*>(name, child));
+        child->parent = @this;
+        child->children.push_back(new pair<string, vfs_inode*>(new string(".."), @this));
+    }
+
+    void mount(void* _mount_node, fn<i32(inode&, string, inode&)> _mount_lookup) {
+        passert(this.children.size() == 0x0, "vfs_inode::mount() : should only mount to empty directories");
+        this.is_mount_root = 1;
+        this.mount_node = _mount_node;
+        this.mount_lookup = _mount_lookup;
+    }
+}
+
+vfs_inode* VFS_ROOT;
+
+void init_vfs() {
+    VFS_ROOT = $vfs_inode* malloc(sizeof(vfs_inode));
+    *VFS_ROOT := new vfs_inode();
+}
+
+i32 vfs_lookup(inode& _node, string child, inode& res) {
+    vfs_inode* node = $vfs_inode* _node.node;
+    if(node->magic[0] != 'J' || node->magic[1] != 'V' || node->magic[2] != 'F' || node->magic[3] != 'S') {
+        panic("vfs_lookup() : node magic not good");
+    }
+
+    for(u64 i = 0x0; i < node->children.size(); i++) { 
+        if(node->children[i].first == child) {
+            res.is_virtual = 1;
+            res.node_sz = sizeof(vfs_inode);
+            res.node = $void* node->children[i].second;
+            res.lookup = #<vfs_lookup(inode&, string, inode&)>;
+            return 0;
+        }
+    }
+
+    //failed to find child
+    return 1;
+}
+
+//should walk the filesystem to the inode specified by path
+//if create flag is set, will create virtual nodes if nodes do not exist
+//returns 0 on success, 1 on failure
+i32 vfs_walk(string path, i32 create, inode& res) {
+    vector<string> parts = path.split('/');
+    inode prev = new inode($void* VFS_ROOT, #<vfs_lookup(inode&, string, inode&)>);
+    for(u64 i = 0x0; i < parts.size(); i++) {
+        inode next = new inode();
+        if(prev.lookup#(prev, parts[i], next)) {
+            //walk failed
+            return 1;
+        }
+
+        //if not virtual, dealloc prev
+        if(!prev.is_virtual) free(prev.node, prev.node_sz);
+
+        prev = next;
+    }
+    res = prev;
+    return 0;
+}
+
+//0 on success, 1 on failure
+i32 vfs_mount(string path, void* root_node, fn<inode*(inode*, string, inode*)> lookup) {
+    //TODO
+
+    return 0;
+}
+
+
+
+

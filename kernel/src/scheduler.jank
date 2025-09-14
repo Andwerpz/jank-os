@@ -148,20 +148,6 @@ process* schedule_next_process() {
     return $process* nullptr;
 }
 
-//once we call this, the initial kernel startup phase has finished
-//this function should never return. 
-void init_scheduler() {
-    sout << "start init scheduler\n";   
-
-    //initialize shell process 
-
-    //point %rsp to top of kernel stack
-    asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
-
-    //startup the scheduler
-    scheduler();
-}
-
 //saves the provided trapframe into current process's kstack, then calls the actual scheduler
 void scheduler(trapframe* tf) {
     process* proc = get_cur_proc();
@@ -339,6 +325,19 @@ void yield() {
     asm!("int $0x20");
 }
 
-void debug_print() {
-    sout << "debug print\n";
+//once we call this, the initial kernel startup phase has finished
+//this function should never return. 
+void init_scheduler() {
+    sout << "start init scheduler\n";   
+
+    //TODO initialize init process
+
+    //initialize shell process 
+    //need VFS
+
+    //point %rsp to top of kernel stack
+    asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
+
+    //startup the scheduler
+    scheduler();
 }

@@ -14,3 +14,19 @@ For older ext2 (without sparse super) it will replicate(?) the superblock and gr
 We just use the primary superblock and group descriptor table for everything. (error checking is handled by god, just dont error out???)
 
 https://www.nongnu.org/ext2-doc/ext2.pdf 
+
+stick to implementing ext2 version < 1
+
+ - create formatted ext2 drive
+mkfs.ext2 -F -b 1024 -r 0 test_drive.img
+
+ - mount drive to folder
+mkdir drive_testing
+sudo mount -t ext2 -o loop test_drive.img drive_testing
+sudo chown -R $USER:$USER drive_testing
+
+ - to edit drive, need to have superuser permissions
+sudo su
+
+ - unmount drive from folder
+sudo umount drive_testing
