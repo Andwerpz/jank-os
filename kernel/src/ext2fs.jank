@@ -468,7 +468,9 @@ i32 ext2_lookup(inode& _node, string child, inode& res) {
             if(dir->inode != $u32 0 && child == new string($u8* @dir->name, $u64 dir->name_len)) {
                 pfree(buf);
                 res.node_sz = sizeof(ext2_inode);
+                res.node = $void* malloc(sizeof(ext2_inode));
                 ext2_read_inode(fs, dir->inode, $ext2_inode* res.node);
+                res.super = $void* fs;
                 res.lookup = #<ext2_lookup(inode&, string, inode&)>;
                 return 0;
             }
@@ -478,6 +480,18 @@ i32 ext2_lookup(inode& _node, string child, inode& res) {
 
     pfree(buf);
     return 1;
+}
+
+i32 ext2_get_root(vfs_inode* node, inode& res) {
+    ext2_fs* fs = $ext2_fs* node->mount_super;
+
+    res.node_sz = sizeof(ext2_inode);
+    res.node = $void* malloc(sizeof(ext2_inode));
+    ext2_read_inode(fs, $u32 2, $ext2_inode* res.node);  //root inode
+    res.super = $void* fs;
+    res.lookup = #<ext2_lookup(inode&, string, inode&)>;
+
+    return 0;
 }
 
 ext2_inode* ext2_lookup_path(ext2_fs* fs, string path) {

@@ -29,6 +29,13 @@ struct inode {
         this.super = _super;
         this.lookup = _lookup;
     }
+
+    void dealloc_nonvirtual() {
+        if(!this.is_virtual && this.node != nullptr) {
+            passert(this.node_sz != 0x0, "inode::dealloc_nonvirtual() : node_sz should be non-zero");
+            free(this.node, this.node_sz);
+        }
+    }
 }
 
 //virtual nodes
@@ -39,7 +46,8 @@ struct vfs_inode {
 
     i32 is_mount_root;
     void* mount_node;
-    fn<i32(inode&, string, inode&)> mount_lookup;
+    void* mount_super;
+    fn<i32(vfs_inode*, inode&)> mount_get_root; 
 
     vfs_inode() {
         this.init_magic();
@@ -60,6 +68,10 @@ struct vfs_inode {
         this.magic[3] = 'S';
     }
 
+    i32 check_magic() {
+        return this.magic[0] != 'J' || this.magic[1] != 'V' || this.magic[2] != 'F' || this.magic[3] != 'S';
+    }
+
     void add_child(string name, vfs_inode* child) {
         passert(!this.is_mount_root, "vfs_inode::add_child() : cannot add children to mount directories");
         passert($void* child->parent == nullptr, "vfs_inode::add_child() : child must have no parent");
@@ -68,11 +80,11 @@ struct vfs_inode {
         child->children.push_back(new pair<string, vfs_inode*>(new string(".."), @this));
     }
 
-    void mount(void* _mount_node, fn<i32(inode&, string, inode&)> _mount_lookup) {
+    void mount(void* _mount_super, fn<i32(vfs_inode*, inode&)> _mount_get_root) {
         passert(this.children.size() == 0x0, "vfs_inode::mount() : should only mount to empty directories");
         this.is_mount_root = 1;
-        this.mount_node = _mount_node;
-        this.mount_lookup = _mount_lookup;
+        this.mount_super = _mount_super;
+        this.mount_get_root = _mount_get_root;
     }
 }
 
@@ -108,20 +120,77 @@ i32 vfs_lookup(inode& _node, string child, inode& res) {
 //returns 0 on success, 1 on failure
 i32 vfs_walk(string path, i32 create, inode& res) {
     vector<string> parts = path.split('/');
-    inode prev = new inode($void* VFS_ROOT, #<vfs_lookup(inode&, string, inode&)>);
-    for(u64 i = 0x0; i < parts.size(); i++) {
-        inode next = new inode();
-        if(prev.lookup#(prev, parts[i], next)) {
-            //walk failed
-            return 1;
-        }
+    vector<inode> dir_stack;
 
-        //if not virtual, dealloc prev
-        if(!prev.is_virtual) free(prev.node, prev.node_sz);
-
-        prev = next;
+    if(VFS_ROOT->is_mount_root) {
+        inode root_node = new inode();
+        VFS_ROOT->mount_get_root#(VFS_ROOT, root_node);
+        dir_stack.push_back(root_node);
     }
-    res = prev;
+    else {
+        dir_stack.push_back(new inode($void* VFS_ROOT, #<vfs_lookup(inode&, string, inode&)>));
+    }
+    
+    for(u64 i = 0x0; i < parts.size(); i++) {
+        //look for next inode
+        if(parts[i] == "..") {
+            //check if we're trying to ascend past the root
+            if(dir_stack.size() == 0x1) { 
+                return 1;
+            }
+
+            //ascend
+            dir_stack[dir_stack.size() - 0x1].dealloc_nonvirtual();
+            dir_stack.pop_back();
+        }
+        else if(parts[i] == ".") {/* do nothing */}
+        else {
+            inode next = new inode();
+            inode& prev = dir_stack[dir_stack.size() - 0x1];
+            if(prev.lookup#(prev, parts[i], next)) {
+                if(create && prev.is_virtual) {
+                    //create new child here
+                    vfs_inode* node = $vfs_inode* prev.node;
+                    passert(!node->check_magic(), "vfs_walk() : vfs_node magic mismatch");
+                    passert(!node->is_mount_root, "vfs_walk() : should not create new virtual node on mount root");
+
+                    vfs_inode* child = $vfs_inode* malloc(sizeof(vfs_inode));
+                    *child := new vfs_inode();
+                    node->add_child(parts[i], child);
+
+                    next = new inode($void* child, #<vfs_lookup(inode&, string, inode&)>);
+                }
+                else {
+                    //walk failed
+                    for(u64 j = 0x0; j < dir_stack.size(); j++) {
+                        dir_stack[j].dealloc_nonvirtual();
+                    }
+                    return 1;
+                }
+            }
+
+            //if this is mount point, replace this node with root node of mounted fs
+            if(next.is_virtual) {
+                vfs_inode* node = $vfs_inode* next.node;
+                passert(!node->check_magic(), "vfs_walk() : vfs_node magic mismatch");
+                if(node->is_mount_root) {
+                    inode root_node = new inode();
+                    node->mount_get_root#(node, root_node);
+                    next = root_node;
+                }
+            }
+
+            //add to dir stack
+            dir_stack.push_back(next);
+        }
+    }
+
+    //dealloc all non-virtual except for res
+    for(u64 i = 0x0; i < dir_stack.size() - 0x1; i++) {
+        dir_stack[i].dealloc_nonvirtual();
+    }
+    res = dir_stack[dir_stack.size() - 0x1];
+    
     return 0;
 }
 
