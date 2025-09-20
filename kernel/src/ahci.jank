@@ -608,8 +608,7 @@ void print_drive_info(HBA_PORT* p) {
     void* buffer = palloc();
     memset(buffer, 0, PAGE_SIZE);
 
-    i32 success = ahci_identify(p, $u16* buffer);
-	if(!success) {
+	if(ahci_identify(p, $u16* buffer)) {
 		sout << "Identify command failed!\n";
 		pfree(buffer);
 		return;
@@ -649,8 +648,7 @@ u64 get_drive_size(HBA_PORT* p) {
     void* buffer = palloc();
     memset(buffer, 0, PAGE_SIZE);
 
-    i32 success = ahci_identify(p, $u16* buffer);
-	if(!success) {
+	if(ahci_identify(p, $u16* buffer)) {
 		sout << "Identify command failed!\n";
 		pfree(buffer);
 		return 0x0;
@@ -746,19 +744,15 @@ void init_ahci() {
 	for(u64 i = 0x0; i < ahci_hbas.size(); i++) {
 		vector<HBA_PORT*> hba_ports;
 		hba_setup(ahci_hbas[i], hba_ports);
-		if(hba_ports.size() == 0x0) {
-			sout << "no ports implemented on hba " << i << "\n";
-			continue;
-		}
-		
+
 		sout << "found " << hba_ports.size() << " ports implemented on hba " << i << "\n"; 
 		for(u64 j = 0x0; j < hba_ports.size(); j++) {
 			print_drive_info(hba_ports[j]);
-			if(j == 0x1) {
-				initialize_disk(hba_ports[j]);
-			}
-			// test_ahci_read(hba_ports[j]);
-			// test_ahci_write(hba_ports[j]);
+            ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
+            if(!ext2_mount(hba_ports[j], fs)) {
+                sout << "found ext2 filesystem\n";
+                vfs_mount(new string("/"), $void* fs, #<ext2_get_root(vfs_dentry*, vfs_inode&)>);
+            }
 		}
 	}
 }

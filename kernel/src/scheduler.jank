@@ -75,8 +75,6 @@ export void print_trapframe(trapframe* tf) {
     sout << "pt     : " << $void* tf->pt << "\n";
     sout << "cs     : " << $void* tf->cs << "\n";
     sout << "ss     : " << $void* tf->ss << "\n";
-
-    for(i32 i = 0; i < 10; i++) sout << "buf : " << $void* tf->buf[i] << "\n";
 }
 
 //we shouldn't store processes anywhere else. 
@@ -333,7 +331,15 @@ void init_scheduler() {
     //TODO initialize init process
 
     //initialize shell process 
-    //need VFS
+    {
+        string path = new string("shell");
+        u64 size;
+        vfs_get_size(path, size);
+        u8* buf = $u8* malloc(size);
+        u64 read_amt;
+        vfs_read_file(path, buf, size, 0x0, read_amt);
+        create_process(buf, size);
+    }
 
     //point %rsp to top of kernel stack
     asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");

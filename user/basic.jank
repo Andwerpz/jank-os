@@ -1,0 +1,10 @@
+#include <jstring>;
+#include <string>;
+#include <iostream>;
+
+i32 main() {
+
+    cout << "bello bello\n";
+
+    return 0;
+}

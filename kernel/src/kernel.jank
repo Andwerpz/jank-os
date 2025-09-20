@@ -197,13 +197,44 @@ void shutdown_qemu() {
     panic("shutdown failed");
 }   
 
+void vfs_tests() {
+    sout << "=== PRINTING FS TREE ===\n";
+    vfs_print_tree(new string("/"));
+
+    sout << "=== READ SHELL.JANK ===\n";
+    while(1) {
+        string path = new string("shell.jank");
+        u64 size;
+        if(vfs_get_size(path, size)) {
+            sout << "get_size failed\n";
+            break;
+        }
+        sout << "FILE SIZE : " << size << "\n";
+        u8* buf = $u8* malloc(size);
+        u64 read_amt;
+        if(vfs_read_file(path, buf, size, 0x0, read_amt)) {
+            sout << "file read failed\n";
+            break;
+        }
+        sout << "CONTENTS : \n";
+        sout << buf << "\n";
+        sout << "READ AMT : " << read_amt << "\n";
+        free($void* buf, size);
+
+        break;
+    }
+}
+
 i32 main() {
     init_acpi();
     init_serial_file_ops();
     init_vfs();
     init_ahci();
 
-    shutdown_qemu();
+    vfs_tests();
+
+    // shutdown_qemu();
+    // kernel_shell();
 
     //tests();    
 
