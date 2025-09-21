@@ -110,6 +110,7 @@ i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
 [__GLOBAL_FIRST__] u64 SYS_SCHED_YIELD      = $u64 24;
 [__GLOBAL_FIRST__] u64 SYS_GETPID           = $u64 39;
 [__GLOBAL_FIRST__] u64 SYS_FORK             = $u64 57;
+[__GLOBAL_FIRST__] u64 SYS_EXECVE           = $u64 59;
 [__GLOBAL_FIRST__] u64 SYS_EXIT             = $u64 60;
 [__GLOBAL_FIRST__] u64 SYS_WAIT4            = $u64 61;
 [__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
@@ -127,7 +128,7 @@ trapframe* get_user_trapframe() {
     return ret;
 }   
 
-//for now, this is just using the user stack to save the execution context
+//all this syscall code is happening on the process's kstack. 
 [__GLOBAL_FIRST__] extern u8 syscall_handler_entry;
 void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", but we shouldn't use it
     //this assumes we come from user mode
@@ -174,8 +175,8 @@ void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", b
     asm!("movq %r11,  136(%rsp)");
     asm!("movq %cr3, %rcx");
     asm!("movq %rcx,  144(%rsp)");
-    asm!("movq $0x1B, 152(%rsp)");  //user mode selectors
-    asm!("movq $0x23, 160(%rsp)");  
+    asm!("movq $0x23, 152(%rsp)");  //user mode selectors
+    asm!("movq $0x1B, 160(%rsp)");  
 
     //call higher level syscall handler
     asm!("call syscall_handler");
@@ -252,6 +253,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_FORK)             ans = $u64 sys_fork();
     else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
     else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
+    else if(sys_id == SYS_EXECVE)           ans = $u64 sys_execve($u8* arg1, $u8** arg2, $u8** arg3);
 
     else panic("unrecognized sys_id");
 
@@ -459,10 +461,117 @@ pid_t sys_fork() {
     trapframe* child_tf = $trapframe* (child->kstack_bottom + KSTACK_TRAPFRAME);
     child_tf->rax = 0x0;
 
+    // sout << "FORK : \n";
+    // sout << "CHILD\n";
+    // print_trapframe(child_tf);
+    // sout << "PARENT\n";
+    // print_trapframe(parent_tf);
+
     // set user pt back
     pt_switch(user_pt);
 
     return retval;
+}
+
+//executes the program referrred to by path, replacing the current program. 
+//argv is a null terminated array of pointers to strings that are commandline arguments. 
+// by convention, the first string contains the filename to be executed
+//envp is a null terminated array of pointers to strings that are environment variables
+//if this succeeds, this should not return to the original process, should inject new trapframe
+i32 sys_execve(u8* path, u8** argv, u8** envp) {
+    sout << "EXEC START\n";
+
+    //for now, not supporting any commandline arguments or environment variables
+    if($void* argv != nullptr || $void* envp != nullptr) {
+        sout << "UNSUPPORTED COMMANDLINE STUFF\n";
+        return 1;
+    }
+
+    //copy pathname into kernel space
+    pagetable_t user_pt = pt_get_current();
+    u64 pathlen = strlen(path);
+    pt_switch_to_kernel();
+    u8* kpath = $u8* malloc(pathlen + 0x1);
+    copy_from_user(user_pt, kpath, path, pathlen);
+    string kpath_str = new string(kpath);
+    free($void* kpath, pathlen + 0x1);
+
+    //see if file exists at path
+    i32 is_file;
+    if(vfs_is_file(kpath_str, is_file)) {
+        //check failed
+        sout << "IS FILE CHECK FAILED\n";
+        pt_switch(user_pt);
+        return 1;
+    }
+    if(!is_file) {
+        //not a file
+        sout << "NOT A FILE\n";
+        pt_switch(user_pt);
+        return 1;
+    }
+
+    //read in file
+    u64 file_len;
+    if(vfs_get_size(kpath_str, file_len)) {
+        //getting size failed
+        sout << "GETTING FILE SIZE FAILED\n";
+        pt_switch(user_pt);
+        return 1;
+    }
+    u64 amt_read;
+    u8* file_buf = $u8* malloc(file_len);
+    if(vfs_read_file(kpath_str, file_buf, file_len, 0x0, amt_read)) {
+        //reading file failed
+        sout << "READ FILE FAILED\n";
+        free($void* file_buf, file_len);
+        pt_switch(user_pt);
+        return 1;
+    }
+    passert(amt_read == file_len, "sys_execve() : should always read entire file");
+
+    //start building new process user_pt
+    pagetable_t n_user_pt = pt_alloc_new();
+    process* proc = get_cur_proc();
+    process_pt_map_kernel(proc, n_user_pt);
+    process_pt_alloc_userspace(proc, n_user_pt, PROCESS_CREATE_STACK);
+    u64 entry_off;
+    i32 elf_status = elf_load(file_buf, file_len, n_user_pt, entry_off);
+    free($void* file_buf, file_len);
+    if(elf_status) {
+        //failed to load file as elf
+        sout << "FAILED TO LOAD ELF\n";
+        pt_switch(user_pt);
+        return 1;
+    }
+
+    //replace current process, no heading back now. 
+    //destroy old pt, replace with new one
+    process_pt_unmap_kernel(proc, user_pt);
+    pt_free(user_pt);
+    proc->pt = n_user_pt;
+
+    //new trapframe
+    trapframe* tf = $trapframe* malloc(sizeof(trapframe));
+    memset($void* tf, 0, sizeof(trapframe));
+    tf->rip = entry_off;
+    tf->rsp = USER_STACK_TOP;
+    tf->rflags = 0x202;     //enable timer interrupt
+    tf->pt = $u64 proc->pt;
+    tf->cs = 0x23;          //user mode selectors
+    tf->ss = 0x1b;
+    process_set_trapframe(proc, tf);
+    free($void* tf, sizeof(trapframe));
+
+    //set status to READY
+    proc->status = PROCESS_READY;
+
+    //jump to scheduler
+    sout << "EXEC SUCCESS\n";
+    scheduler();
+
+    panic("sys_execve() : should not return to syscall handler on success");
+    return 0;
 }
 
 //current process is yielding control to the scheduler

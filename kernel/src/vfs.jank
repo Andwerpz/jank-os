@@ -353,6 +353,19 @@ i32 vfs_get_children(string path, vector<string>& res) {
     return vfs_get_children(root, res);
 }
 
+i32 vfs_is_file(vfs_inode& node, i32& res) {
+    return node.ops->is_file#(node, res);
+}
+
+i32 vfs_is_file(string path, i32& res) {
+    vfs_inode root = new vfs_inode();
+    if(vfs_walk(path, 0, root)) {
+        root.dealloc_nonvirtual();
+        return 1;
+    }
+    return vfs_is_file(root, res);
+}
+
 i32 vfs_read_file(vfs_inode& node, u8* buf, u64 amt, u64 off, u64& res) {
     return node.ops->read_file#(node, buf, amt, off, res);
 }

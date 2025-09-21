@@ -49,8 +49,6 @@ struct trapframe {
     u64 pt;         // 144
     u64 cs;         // 152
     u64 ss;         // 160
-
-    u64[10] buf;    // for debugging
 }
 
 export void print_trapframe(trapframe* tf) {
@@ -100,6 +98,7 @@ process* find_process(pid_t pid) {
 //just removes process from scheduler
 //if it can't find the process, it panics
 void erase_process(pid_t pid) {
+    //remove from all_processes
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
         if(all_processes[i]->pid != pid) continue;
@@ -131,7 +130,11 @@ process* schedule_next_process() {
         process_queue.push_back(process_queue.pop_front());
 
         process* proc = find_process(pid);
-        passert(proc != nullptr, "schedule_next_process() : all processes in queue should exist");
+        if(proc == nullptr) {   
+            //process that's been erased already
+            process_queue.pop_back();
+            continue;
+        }   
 
         if(proc->status == PROCESS_READY) {
             return proc;
@@ -147,6 +150,7 @@ process* schedule_next_process() {
 }
 
 //saves the provided trapframe into current process's kstack, then calls the actual scheduler
+//note that this doesn't actually delete the provided trapframe
 void scheduler(trapframe* tf) {
     process* proc = get_cur_proc();
 
@@ -155,12 +159,11 @@ void scheduler(trapframe* tf) {
     else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;
     else {
         sout << "Unrecognized status : " << proc->status << "\n";
-        panic("get_next_status() : unrecognized runtime status");
+        panic("scheduler() : unrecognized runtime status");
     }
 
     //save trapframe
-    trapframe* ptf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
-    memcpy($void* ptf, $void* tf, sizeof(trapframe));
+    process_set_trapframe(proc, tf);
 
     //go to scheduler
     scheduler();
@@ -183,7 +186,12 @@ void scheduler() {
     proc->status = PROCESS_RUNNING;
 
     trapframe* tf = $trapframe* proc_trapframe_off;
+
+    // sout << "SCHEDULING PROCESS : " << proc->pid << " " << pt_get_current() << " " << proc->pt << " " << ($void* (proc->kstack_bottom + KSTACK_TOP)) << " " << process_queue.size() << "\n";
     // print_trapframe(tf);
+    // if(!pt_is_vaddr_mapped(proc->pt, $void* (proc->kstack_bottom + PAGE_SIZE))) {
+    //     panic("ahhhh");
+    // }
 
     //so syscalls know where this is
     GSData* gs_data = $GSData* GSDATA_PAGE;
@@ -198,6 +206,9 @@ void scheduler() {
 
 //assumes the trapframe given corresponds to the current process
 void iret_to_process(trapframe* tf) {
+    //use common stack that every process should have mapped
+    asm!("movq {BOOTBOOT_STACK_TOP}, %rsp");
+
     //need to do different stuff if we're returning to user or kernel mode
     if(tf->cs == 0x23) {
         //returning to user mode

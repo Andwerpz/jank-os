@@ -220,7 +220,12 @@ void page_fault_handler(trapframe* tf, u64 error_code) {
         scheduler();
     }
     else {              //kernel mode
-        sout << $void* error_code << "\n";
+        sout << "KERNEL MODE PAGE FAULT!!!\n";
+        sout << "ERROR CODE : " << $void* error_code << "\n";
+        u64 cr2;
+        asm!("mov %cr2, %rax");
+        asm!("movq %rax, {cr2}");
+        sout << "CR2 : " << ($void* cr2) << "\n";
         print_trapframe(tf);
         panic("KERNEL MODE PAGE FAULT!!!\n");
     }

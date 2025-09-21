@@ -19,11 +19,22 @@ disk: initdir config/config.json
 	@rm -rf build/initrd
 
 # test the disk image
-# debug flags: `-d int,cpu_reset -no-reboot`
+# debug flags: `-d int,cpu_reset`
 
 normal: disk
 	qemu-system-x86_64 \
     -no-reboot \
+    -serial stdio \
+    -device ich9-ahci,id=ahci \
+    -drive file=build/jankos-disk.img,if=none,id=bootdisk,format=raw \
+    -device ide-hd,bus=ahci.0,drive=bootdisk \
+    -drive file=test_drive.img,if=none,id=testdisk,format=raw \
+    -device ide-hd,bus=ahci.1,drive=testdisk
+
+debug: disk
+	qemu-system-x86_64 \
+    -no-reboot \
+	-d int,cpu_reset \
     -serial stdio \
     -device ich9-ahci,id=ahci \
     -drive file=build/jankos-disk.img,if=none,id=bootdisk,format=raw \

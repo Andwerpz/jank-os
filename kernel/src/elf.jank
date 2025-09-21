@@ -71,7 +71,7 @@ struct ELF64_Sym {
 //takes in a byte buffer that represents an ELF file, maps it to the provided pagetable
 //entry point virtual address is returned through out_entry_off
 //returns 0 on success
-i32 load_elf(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
+i32 elf_load(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
     sout << "Loading ELF ...\n";
 
     //check if there's even enough room for the ELF header
@@ -100,6 +100,8 @@ i32 load_elf(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
     //TODO load actual program header num if phnum == 0xffff
     passert(phnum != 0xffff, "need to load in actual program header num");
 
+    sout << "Entry point : " << ($void* elf_header->e_entry) << "\n";
+
     //go through program header table
     sout << "Program header count : " << elf_header->e_phnum << "\n";
     ELF64_Phdr* p_headers = $ELF64_Phdr* @(buf[elf_header->e_phoff]);
@@ -112,7 +114,7 @@ i32 load_elf(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
         u64 memsz = p_header->p_memsz;
         u64 align = p_header->p_align;
 
-        sout << "Program header : \n";
+        sout << "Program header " << i << " :\n";
         sout << "flags : " << flags << "\n";
         sout << "offset : " << $void* offset << "\n";
         sout << "vaddr : " << $void* vaddr << "\n";
@@ -128,18 +130,36 @@ i32 load_elf(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
         u64 pte_flags = PTE_USER | PTE_NX;
         if(flags & ELF_PF_X) pte_flags ^= PTE_NX;   //turn off PTE_NX if it's executable
         if(flags & ELF_PF_W) pte_flags ^= PTE_WRITEABLE;
-        passert(flags & ELF_PF_R, "load_elf() : segments should always be readable??");
+        passert(flags & ELF_PF_R, "elf_load() : segments should always be readable??");
 
-        for(u64 ptr = 0x0; ptr < memsz; ptr += PAGE_SIZE) {
-            void* paddr = palloc();
-            pt_map_page(pt, $void* (vaddr + ptr), paddr, pte_flags);
-            {
-                u64 out_flags;
-                void* out_paddr = pt_translate(pt, $void* (vaddr + ptr), out_flags);
-                sout << "elf map page : " << ($void* (vaddr + ptr)) << " " << paddr << " " << ($void* out_flags) << "\n";
+        //where we are in the current program segment
+        u64 ptr = 0x0;
+
+        //if vaddr is not page aligned, do first page specially
+        if(vaddr % PAGE_SIZE != 0x0) {
+            void* pg_vaddr = $void* (PAGE_SIZE * (vaddr / PAGE_SIZE));
+            void* paddr;
+            if(pt_is_vaddr_mapped(pt, pg_vaddr)) paddr = pt_translate(pt, pg_vaddr);
+            else {
+                paddr = palloc();
+                pt_map_page(pt, pg_vaddr, paddr, pte_flags);
+            }
+            u64 cpy_amt = min(PAGE_SIZE - (vaddr % PAGE_SIZE), filesz);
+            if(ptr < filesz) memcpy(paddr, $void* @(buf[0]), cpy_amt);
+            ptr += cpy_amt;
+        }
+
+        //do rest of pages
+        while(ptr < memsz) {
+            void* pg_vaddr = $void* (vaddr + ptr);
+            void* paddr;
+            if(pt_is_vaddr_mapped(pt, pg_vaddr)) paddr = pt_translate(pt, pg_vaddr);
+            else {
+                paddr = palloc();
+                pt_map_page(pt, pg_vaddr, paddr, pte_flags);
             }
             if(ptr < filesz) memcpy(paddr, $void* @(buf[offset + ptr]), min(PAGE_SIZE, filesz - ptr));
-
+            ptr += PAGE_SIZE;
         }
     }
 
