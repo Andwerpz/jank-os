@@ -47,6 +47,11 @@ serial_ostream& operator<<(serial_ostream& stream, string& s) {
     return stream;
 }
 
+serial_ostream& operator<<(serial_ostream& stream, string s) {
+    serial_print(s);
+    return stream;
+}
+
 template<T>
 serial_ostream& operator<<(serial_ostream& stream, T* p) {
     serial_print(p);
@@ -255,7 +260,7 @@ i32 serial_close(file_descriptor* fd) {
 
 void init_serial_file_ops() {
     FILE_OPS_SERIAL = $file_ops* malloc(sizeof(file_ops));
-    *FILE_OPS_SERIAL := new file_ops();
+    new (FILE_OPS_SERIAL) file_ops();
     FILE_OPS_SERIAL->op_read = #<serial_read(file_descriptor*, u8*, u64)>;
     FILE_OPS_SERIAL->op_write = #<serial_write(file_descriptor*, u8*, u64)>;
     FILE_OPS_SERIAL->op_lseek = #<serial_lseek(file_descriptor*, u64, i32)>;

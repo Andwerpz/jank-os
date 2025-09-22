@@ -209,6 +209,7 @@ void vfs_tests() {
             sout << "get_size failed\n";
             break;
         }
+        sout << "GET SIZE SUCCESS\n";
         sout << "FILE SIZE : " << size << "\n";
         u8* buf = $u8* malloc(size);
         u64 read_amt;
@@ -233,7 +234,7 @@ i32 main() {
 
     vfs_tests();
 
-    // shutdown_qemu();
+    shutdown_qemu();
     // kernel_shell();
 
     //tests();    

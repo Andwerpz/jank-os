@@ -32,7 +32,7 @@ struct file_descriptor {
 
 file_descriptor* create_serial_fd(u64 flags) {
     file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
-    *fd := new file_descriptor();
+    new (fd) file_descriptor();
 
     fd->type = FD_TYPE_SERIAL;
     fd->resource_ptr = nullptr;

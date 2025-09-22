@@ -17,6 +17,7 @@ struct process {
     file_descriptor*[64] fd_table;  // empty fds will be nullptr
     process* parent;                // nullptr indicates this is created by the kernel
     vector<process*> children;
+    //vfs_inode* cwd
 }
 
 u64 kstack_ptr = KSTACK_AREA_BOTTOM; //for now, just incrementally map new kstacks
@@ -104,7 +105,7 @@ process* create_process(u64 flags) {
     pagetable_t kernel_pt = pt_get_current();
 
     process* proc = $process* malloc(sizeof(process));
-    *proc := new process();
+    new (proc) process();
     proc->pt = pt_alloc_new();
     proc->pid = pid_ptr ++;
     proc->brk = USER_HEAP_BOTTOM;
@@ -171,6 +172,9 @@ process* create_process(u8* elf_buf, u64 size) {
 process* create_process(process* parent, trapframe* parent_tf) {
     process* child = create_process(0x0);
 
+    //make sure this process is alive
+    passert(parent->status != PROCESS_ZOMBIE, "create_process() : can only clone from alive process");
+
     //set child's parent 
     child->parent = parent;
 
@@ -180,6 +184,12 @@ process* create_process(process* parent, trapframe* parent_tf) {
     //copy process info
     child->brk = parent->brk;
     child->fd_table = parent->fd_table;
+
+    // //copy cwd
+    // passert($void* parent->cwd != nullptr, "create_process() : alive process should have set cwd");
+    // u64 cwd_len = strlen(parent->cwd) + 0x1;
+    // child->cwd = $u8* malloc(cwd_len);
+    // memcpy($void* parent->cwd, $void* child->cwd, cwd_len);
 
     //increment refcount of file descriptors
     for(u64 i = 0x0; i < PROCESS_MAX_FD; i++){
@@ -247,6 +257,11 @@ void kill_process(pid_t pid, i32 status) {
         fd_close(proc->fd_table[i]);
         proc->fd_table[i] = $file_descriptor* nullptr;
     }
+
+    // //free cwd
+    // passert($void* proc->cwd != nullptr, "kill_process() : alive processes should always have cwd set");
+    // free($void* proc->cwd, strlen(proc->cwd) + 0x1);
+    // proc->cwd = $u8* nullptr;
 }
 
 //this completely gets rid of the process from the scheduler

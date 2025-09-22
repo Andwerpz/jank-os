@@ -461,12 +461,6 @@ pid_t sys_fork() {
     trapframe* child_tf = $trapframe* (child->kstack_bottom + KSTACK_TRAPFRAME);
     child_tf->rax = 0x0;
 
-    // sout << "FORK : \n";
-    // sout << "CHILD\n";
-    // print_trapframe(child_tf);
-    // sout << "PARENT\n";
-    // print_trapframe(parent_tf);
-
     // set user pt back
     pt_switch(user_pt);
 

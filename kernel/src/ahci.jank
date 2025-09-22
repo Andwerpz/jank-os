@@ -525,14 +525,14 @@ i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
-			sout << "Read disk error\n";
+			sout << "Write disk error\n";
 			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
-		sout << "Read disk error\n";
+		sout << "Write disk error\n";
 		return 1;
 	}
 
@@ -590,14 +590,14 @@ i32 ahci_identify(HBA_PORT* p, u16* buf) {
 		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
-			sout << "Read disk error\n";
+			sout << "Identify disk error (task file error) \n";
 			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
-		sout << "Read disk error\n";
+		sout << "Identify disk error\n";
 		return 1;
 	}
 
@@ -747,11 +747,12 @@ void init_ahci() {
 
 		sout << "found " << hba_ports.size() << " ports implemented on hba " << i << "\n"; 
 		for(u64 j = 0x0; j < hba_ports.size(); j++) {
+            sout << "HBA PORT : " << hba_ports[j] << "\n";
 			print_drive_info(hba_ports[j]);
             ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
             if(!ext2_mount(hba_ports[j], fs)) {
                 sout << "found ext2 filesystem\n";
-                vfs_mount(new string("/"), $void* fs, #<ext2_get_root(vfs_dentry*, vfs_inode&)>);
+                vfs_mount(new string("/"), $void* fs, VFS_EXT2_OPS);
             }
 		}
 	}

@@ -40,20 +40,22 @@ i32 main() {
             u8 val = ptr[0];
         }
         else if(cmd[0] == "fork") {
+            cout << "before fork\n";
             pid_t pid = sys_fork();
             if(pid == $pid_t 0) {
                 cout << "child : " << pid << "\n";
                 return 0;
             }
             else {
-                cout << "parent : " << pid << "\n";
                 while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
                     //continue
                 }
+                cout << "parent : " << pid << "\n";
             }   
             cout << "done fork\n";
         }
         else if(cmd[0] == "exec") {
+            cout << "before exec\n";
             pid_t pid = sys_fork();
             if(pid == $pid_t 0) {   //child
                 sys_execve("basic", $u8** nullptr, $u8** nullptr);
@@ -61,7 +63,6 @@ i32 main() {
                 return 1;
             }
             else {  //parent
-                return 0;
                 while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
                     //continue
                 }
