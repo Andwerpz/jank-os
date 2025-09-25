@@ -113,6 +113,8 @@ i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
 [__GLOBAL_FIRST__] u64 SYS_EXECVE           = $u64 59;
 [__GLOBAL_FIRST__] u64 SYS_EXIT             = $u64 60;
 [__GLOBAL_FIRST__] u64 SYS_WAIT4            = $u64 61;
+[__GLOBAL_FIRST__] u64 SYS_GETCWD           = $u64 79;
+[__GLOBAL_FIRST__] u64 SYS_CHDIR            = $u64 80;
 [__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
 
 //jank syscalls
@@ -254,6 +256,8 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
     else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
     else if(sys_id == SYS_EXECVE)           ans = $u64 sys_execve($u8* arg1, $u8** arg2, $u8** arg3);
+    else if(sys_id == SYS_GETCWD)           ans = $u64 sys_getcwd($u8* arg1, $u64 arg2);
+    else if(sys_id == SYS_CHDIR)            ans = $u64 sys_chdir($u8* arg1);
 
     else panic("unrecognized sys_id");
 
@@ -535,6 +539,7 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     if(elf_status) {
         //failed to load file as elf
         sout << "FAILED TO LOAD ELF\n";
+        pt_free(n_user_pt);
         pt_switch(user_pt);
         return 1;
     }
@@ -630,3 +635,92 @@ i32 sys_munmap(void* addr, u64 len) {
 
     return 0;
 }
+
+//returns the calling process's CWD as a null terminated string. 
+//on success, writes to buf and returns length of pathname
+//on failure, returns nullptr
+//note that if size is too small, this could fail. 
+u64 sys_getcwd(u8* buf, u64 size) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //try to get pathname
+    process* proc = get_cur_proc();
+    string* pathname = $string* malloc(sizeof(string));
+    new (pathname) string();
+    if(vfs_get_pathname(proc->cwd, *pathname)) {
+        //getting pathname failed
+        pathname->~();
+        free($void* pathname, sizeof(string));
+        return 0x0;
+    }
+    u64 path_size = pathname->size();
+    
+    //check if buffer is big enough
+    if(path_size + 0x1 > size) {
+        //buffer not big enough
+        pathname->~();
+        free($void* pathname, sizeof(string));
+        return 0x0;
+    }
+
+    //copy string over to user buffer
+    copy_to_user(user_pt, pathname->jstr(), buf, path_size + 0x1);
+    pathname->~();
+    free($void* pathname, sizeof(string));
+
+    pt_switch(user_pt);
+    return path_size;
+}
+
+//changes the calling process's CWD to the one specified by path. 
+//if path starts with '/', it is treated as an absolute path, otherwise it's treated as relative from the current CWD
+//returns 0 on success.
+i32 sys_chdir(u8* path) {
+    //get length of path
+    u64 path_len = strlen(path);
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    //see if we can walk path
+    process* proc = get_cur_proc();
+    vfs_inode* ncwd;
+    i32 walk_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        walk_status = vfs_walk(new string(kpath), ncwd);
+    }
+    else {
+        //relative path
+        walk_status = vfs_walk(proc->cwd, new string(kpath), ncwd);
+    }
+    if(walk_status) {
+        //walk failed
+        free($void* kpath, path_len + 0x1);
+        pt_switch(user_pt);
+        return 1;
+    }
+    free($void* kpath, path_len + 0x1);
+
+    //make sure this is a directory
+    i32 is_directory;
+    if(vfs_is_directory(ncwd, is_directory) || !is_directory) {
+        //is_directory check failed
+        vfs_dec_refcnt(ncwd);
+        pt_switch(user_pt);
+        return 1;
+    }
+
+    //decrement refcount of current cwd, replace it with new cwd
+    vfs_dec_refcnt(proc->cwd);
+    proc->cwd = ncwd;
+
+    pt_switch(user_pt);
+    return 0;
+}   
+

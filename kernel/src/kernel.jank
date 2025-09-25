@@ -9,7 +9,6 @@
 #include "pma.jank";
 #include "pagetable.jank";
 #include "kmalloc.jank";
-#include "shell.jank";
 #include "globals.jank";
 #include "elf.jank";
 #include "gdt.jank";
@@ -186,11 +185,6 @@ void tests() {
     }
 }
 
-void kernel_shell() {
-    shell();
-    shutdown_qemu();
-}
-
 void shutdown_qemu() {
     //qemu shutdown signal
     outw($u16 0x604, $u16 0x2000);
@@ -203,7 +197,7 @@ void vfs_tests() {
 
     sout << "=== READ SHELL.JANK ===\n";
     while(1) {
-        string path = new string("shell.jank");
+        string path = new string("/sys/shell.jank");
         u64 size;
         if(vfs_get_size(path, size)) {
             sout << "get_size failed\n";
@@ -211,19 +205,33 @@ void vfs_tests() {
         }
         sout << "GET SIZE SUCCESS\n";
         sout << "FILE SIZE : " << size << "\n";
-        u8* buf = $u8* malloc(size);
-        u64 read_amt;
-        if(vfs_read_file(path, buf, size, 0x0, read_amt)) {
-            sout << "file read failed\n";
-            break;
+        //read file in small chunks
+        u64 chunk = $u64 17;
+        u8* buf = $u8* malloc(chunk + 0x1);
+        u64 ptr = 0x0;
+        while(ptr != size) {
+            u64 read_amt;
+            if(vfs_read_file(path, buf, chunk, ptr, read_amt)) {
+                sout << "\nfile read failed\n";
+                break;
+            }
+            ptr += read_amt;
+            buf[read_amt] = '\0';
+            sout << buf;
+            // sout << "PTR : " << ptr << " " << read_amt << "\n";
         }
-        sout << "CONTENTS : \n";
-        sout << buf << "\n";
-        sout << "READ AMT : " << read_amt << "\n";
-        free($void* buf, size);
+        sout << "\n";
+        free($void* buf, chunk + 0x1);
 
         break;
     }
+}
+
+//manually triggers a general protection fault
+void gp_handler_test() {
+    u8* bad_addr = $u8* 0x0f00000000000000; //non-canonical address
+    bad_addr[0] = 'a';
+    panic("gp_handler_test() : should not be here");
 }
 
 i32 main() {
@@ -234,7 +242,9 @@ i32 main() {
 
     vfs_tests();
 
-    shutdown_qemu();
+    // gp_handler_test();
+
+    // shutdown_qemu();
     // kernel_shell();
 
     //tests();    

@@ -435,7 +435,7 @@ i32 ext2_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
         return 1;
     }
 
-    new (res) vfs_inode(sizeof(ext2_inode), $void* node, $void* fs, VFS_EXT2_OPS);
+    new (res) vfs_inode(_node->name, sizeof(ext2_inode), $void* node, $void* fs, VFS_EXT2_OPS);
     return 0;
 }
 
@@ -473,7 +473,7 @@ i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
                     return 1;
                 }
 
-                new (res) vfs_inode(sizeof(ext2_inode), $void* next_node, $void* fs, VFS_EXT2_OPS);
+                new (res) vfs_inode(child, sizeof(ext2_inode), $void* next_node, $void* fs, VFS_EXT2_OPS);
                 pfree(buf);
                 return 0;
             }
@@ -525,6 +525,12 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
     ext2_fs* fs = $ext2_fs* _node->super;
 
     u32 size = node->size;
+
+    //clamp read to file size
+    if(off + amt > $u64 size) {
+        amt = max(0x0, $u64 size - off);
+    }
+
     void* tmp_buf = palloc();
     res = 0x0;
     u64 buf_ptr = 0x0;

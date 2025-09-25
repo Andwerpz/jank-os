@@ -1,0 +1,25 @@
+#include <jstring>;
+#include <string>;
+#include <iostream>;
+
+i32 main() {
+
+    cout << "RUNNING FORKTEST\n";
+    for(i32 i = 0; i < 5; i++){
+        sys_fork();
+        pid_t pid = sys_getpid();
+        if(pid) {   //parent
+            while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
+                //continue
+            }
+            cout << "PARENT\n";
+        }   
+        else {      //child
+            cout << "CHILD\n";
+            return 0;
+        }
+    }
+    cout << "DONE TEST\n";
+
+    return 0;
+}

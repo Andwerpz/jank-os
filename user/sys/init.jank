@@ -1,0 +1,25 @@
+#include <iostream>;
+#include <assert>;
+#include <wait>;
+
+i32 main() {
+
+    //exec user shell
+    pid_t pid = sys_fork();
+    if(pid == $pid_t 0) {   //child
+        sys_execve("/sys/shell", $u8** nullptr, $u8** nullptr);
+        cout << "exec shell failed\n";
+        return 1;
+    }
+    else {  //parent
+        while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
+            //continue
+        }
+        cout << "PARENT DONE WAIT\n";
+    }
+
+    //shouldn't return
+    assert(0, "init shouldn\'t return");
+    
+    return 0;
+}

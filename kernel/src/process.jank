@@ -15,9 +15,9 @@ struct process {
     pagetable_t pt;                 // 32
     i32 exit_status;                // 40
     file_descriptor*[64] fd_table;  // empty fds will be nullptr
-    process* parent;                // nullptr indicates this is created by the kernel
+    process* parent;                // nullptr indicates this is init process
     vector<process*> children;
-    //vfs_inode* cwd
+    vfs_inode* cwd;                 // current working directory
 }
 
 u64 kstack_ptr = KSTACK_AREA_BOTTOM; //for now, just incrementally map new kstacks
@@ -147,19 +147,46 @@ process* create_process(u64 flags) {
     return proc;
 }
 
-//create new process with ELF code
-process* create_process(u8* elf_buf, u64 size) {
+//create new process from file at path
+//assumes it points to valid ELF binary
+process* create_process(string path) {
     process* proc = create_process(PROCESS_CREATE_STACK | PROCESS_CREATE_FDTABLE);
 
-    //map elf 
+    //load file
+    u64 elf_size;
+    if(vfs_get_size(path, elf_size)) {
+        panic("create_process() : failed to get filesize");
+    }
+    u8* elf_buf = $u8* malloc(elf_size);
+    u64 read_amt;
+    if(vfs_read_file(path, elf_buf, elf_size, 0x0, read_amt)) {
+        panic("create_process() : failed to read file");
+    }
+    passert(read_amt == elf_size, "create_process() : should read entire binary");
+    
+    //map elf
     u64 entry_off;
-    if(elf_load(elf_buf, size, proc->pt, entry_off)) {
-        panic("failed to load elf");
+    if(elf_load(elf_buf, elf_size, proc->pt, entry_off)) {
+        panic("create_process() : failed to load elf");
     }
 
     //set entry point
     trapframe* tf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
     tf->rip = entry_off;
+
+    //set CWD. Need to go to file's parent directory
+    {
+        vfs_inode* file_dir;
+        if(vfs_walk(path, file_dir)) {
+            panic("create_process() : failed to walk to file dir");
+        }
+        vfs_inode* par_dir;
+        if(vfs_get_parent(file_dir, par_dir)) {
+            panic("create_process() : failed to get file parent dir");
+        }
+        vfs_dec_refcnt(file_dir);
+        proc->cwd = par_dir;
+    }
 
     //make ready
     make_process_ready(proc);
@@ -185,11 +212,10 @@ process* create_process(process* parent, trapframe* parent_tf) {
     child->brk = parent->brk;
     child->fd_table = parent->fd_table;
 
-    // //copy cwd
-    // passert($void* parent->cwd != nullptr, "create_process() : alive process should have set cwd");
-    // u64 cwd_len = strlen(parent->cwd) + 0x1;
-    // child->cwd = $u8* malloc(cwd_len);
-    // memcpy($void* parent->cwd, $void* child->cwd, cwd_len);
+    //copy CWD
+    passert($void* parent->cwd != nullptr, "create_process() : alive process should have CWD");
+    child->cwd = parent->cwd;
+    vfs_inc_refcnt(child->cwd);
 
     //increment refcount of file descriptors
     for(u64 i = 0x0; i < PROCESS_MAX_FD; i++){
@@ -258,10 +284,10 @@ void kill_process(pid_t pid, i32 status) {
         proc->fd_table[i] = $file_descriptor* nullptr;
     }
 
-    // //free cwd
-    // passert($void* proc->cwd != nullptr, "kill_process() : alive processes should always have cwd set");
-    // free($void* proc->cwd, strlen(proc->cwd) + 0x1);
-    // proc->cwd = $u8* nullptr;
+    //free cwd
+    passert($void* proc->cwd != nullptr, "kill_process() : alive process should always have CWD");
+    vfs_dec_refcnt(proc->cwd);
+    proc->cwd = $vfs_inode* nullptr;
 }
 
 //this completely gets rid of the process from the scheduler

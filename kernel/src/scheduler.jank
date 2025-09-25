@@ -339,18 +339,8 @@ void yield() {
 void init_scheduler() {
     sout << "start init scheduler\n";   
 
-    //TODO initialize init process
-
-    //initialize shell process 
-    {
-        string path = new string("shell");
-        u64 size;
-        vfs_get_size(path, size);
-        u8* buf = $u8* malloc(size);
-        u64 read_amt;
-        vfs_read_file(path, buf, size, 0x0, read_amt);
-        create_process(buf, size);
-    }
+    //initialize init process
+    create_process(new string("/sys/init"));
 
     //point %rsp to top of kernel stack
     asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");

@@ -3,6 +3,18 @@
 #include <iostream>;
 #include <time>;
 #include <wait>;
+#include <assert>;
+
+[__GLOBAL_FIRST__] u64 CWD_MAXLEN = $u64 4096;
+string getcwd() {
+    u8* buf = $u8* malloc(CWD_MAXLEN);
+    if(sys_getcwd(buf, CWD_MAXLEN) == 0x0) {
+        assert(0, "failed to get cwd");
+    }
+    string res = new string(buf);
+    free($void* buf, CWD_MAXLEN);
+    return res;
+}
 
 i32 main() {                                                                                          
 
@@ -21,10 +33,20 @@ i32 main() {
     cout << "\n";
 
     while(1) {
-        cout << "jankshell> ";
+        cout << getcwd() << "> ";
         vector<string> cmd = cin.next_line().split(' ');
         if(cmd[0] == "quit") {
             break;
+        }
+        else if(cmd[0] == "cd") {
+            if(cmd.size() != 0x2) {
+                cout << "Usage : cd <path>\n";
+            }
+            else {
+                if(sys_chdir(cmd[1].jstr())) {
+                    cout << "cd failed\n";
+                }
+            }
         }
         else if(cmd[0] == "time") {
             cout << "Current epoch time : " << get_sys_time_sec() << "\n";
@@ -58,7 +80,7 @@ i32 main() {
             cout << "before exec\n";
             pid_t pid = sys_fork();
             if(pid == $pid_t 0) {   //child
-                sys_execve("basic", $u8** nullptr, $u8** nullptr);
+                sys_execve("/tests/basic", $u8** nullptr, $u8** nullptr);
                 cout << "exec failed\n";
                 return 1;
             }
