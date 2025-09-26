@@ -277,10 +277,11 @@ i32 vfs_walk(vfs_inode* root, string path, i32 create, vfs_inode*& res) {
         if(vfs_lookup(cur, parts[i], create, next)) {
             //lookup failed, dealloc any temp nodes
             while(cur->subt_refcnt == 0x0) {
+                passert($void* cur->parent != nullptr, "vfs_walk() : temp node should always have parent");
+                vfs_inode* par = cur->parent;
                 cur->~();
                 free($void* cur, sizeof(vfs_inode));
-                passert($void* cur->parent != nullptr, "vfs_walk() : temp node should always have parent");
-                cur = cur->parent;
+                cur = par;
             }
             return 1;
         }

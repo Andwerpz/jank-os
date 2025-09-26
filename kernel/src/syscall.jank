@@ -323,6 +323,7 @@ pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
     return retval;
 }
 
+//reads amt bytes into buf at the file descriptor specified by ind
 i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
     // switch to kernel pt
     pagetable_t user_pt = pt_get_current();
@@ -362,6 +363,7 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
     return $i64 retval;
 }
 
+//writes amt bytes of buf to the file descriptor at ind. 
 i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     // switch to kernel pt
     pagetable_t user_pt = pt_get_current();
@@ -403,6 +405,7 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     return $i64 retval;
 }
 
+//closes the file descriptor at the specified index
 i32 sys_close(i32 fd_ind) {
     // switch to kernel_pt
     pagetable_t user_pt = pt_get_current();

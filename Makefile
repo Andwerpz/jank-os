@@ -18,20 +18,23 @@ disk: initdir config/config.json
 	cd build && ../mkbootimg config.json jankos-disk.img
 	@rm -rf build/initrd
 
-# test the disk image
+# create drive from ./user folder
+.PHONY: drive
+drive:
+	@sudo bash ./build_drive.sh
+
+normal: disk drive
+	qemu-system-x86_64 \
+    -no-reboot \
+    -serial stdio \
+    -device ich9-ahci,id=ahci \
+    -drive file=build/jankos-disk.img,if=none,id=bootdisk,format=raw \
+    -device ide-hd,bus=ahci.0,drive=bootdisk \
+    -drive file=drive.img,if=none,id=disk,format=raw \
+    -device ide-hd,bus=ahci.1,drive=disk
+
 # debug flags: `-d int,cpu_reset`
-
-normal: disk
-	qemu-system-x86_64 \
-    -no-reboot \
-    -serial stdio \
-    -device ich9-ahci,id=ahci \
-    -drive file=build/jankos-disk.img,if=none,id=bootdisk,format=raw \
-    -device ide-hd,bus=ahci.0,drive=bootdisk \
-    -drive file=test_drive.img,if=none,id=testdisk,format=raw \
-    -device ide-hd,bus=ahci.1,drive=testdisk
-
-debug: disk
+debug: disk drive
 	qemu-system-x86_64 \
     -no-reboot \
 	-d int,cpu_reset \
@@ -39,18 +42,10 @@ debug: disk
     -device ich9-ahci,id=ahci \
     -drive file=build/jankos-disk.img,if=none,id=bootdisk,format=raw \
     -device ide-hd,bus=ahci.0,drive=bootdisk \
-    -drive file=test_drive.img,if=none,id=testdisk,format=raw \
-    -device ide-hd,bus=ahci.1,drive=testdisk
-
-telnet: disk
-	qemu-system-x86_64 \
-	-d int,cpu_reset \
-    -no-reboot \
-    -serial telnet:localhost:4321,server,nowait \
-    -device ich9-ahci,id=ahci \
-    -drive file=build/jankos-disk.img,if=none,id=mydisk \
-    -device ide-hd,bus=ahci.0,drive=mydisk
+    -drive file=drive.img,if=none,id=disk,format=raw \
+    -device ide-hd,bus=ahci.1,drive=disk
 
 # clean up
 clean:
 	rm -rf build 2>/dev/null || true
+	rm drive.img 
