@@ -32,78 +32,11 @@ i32 init_syscall() {
     return 0;
 }
 
-//returns 0 on success, negative on failure
-//expects kernel_pt to be active
-i32 copy_to_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
-    u64 uptr = $u64 ubuf;
-    uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
-    u64 ubuf_end = $u64 ubuf + amt;
-    u64 kptr = 0x0;
-
-    while(uptr < ubuf_end) {
-        //make sure page is mapped
-        if(!pt_is_vaddr_mapped(user_pt, $void* uptr)) {
-            return -ERR_FAULT;
-        }
-
-        //check flags
-        u64 flags;
-        void* paddr = pt_translate(user_pt, $void* uptr, flags);
-        if(!(flags & PTE_WRITEABLE) || !(flags & PTE_USER)) {
-            return -ERR_FAULT;
-        }
-
-        //copy data
-        for(u64 i = 0x0; i < PAGE_SIZE; i++) {
-            u64 cptr = uptr + i;
-            if(cptr < $u64 ubuf || cptr >= ubuf_end) continue;
-            ($u8* paddr)[i] = kbuf[kptr ++];
-        }
-
-        uptr += PAGE_SIZE;
-    }
-
-    return 0;
-}
-
-//returns 0 on success, negative on failure
-//expects kernel_pt to be active
-i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
-    u64 uptr = $u64 ubuf;
-    uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
-    u64 ubuf_end = $u64 ubuf + amt;
-    u64 kptr = 0x0;
-
-    while(uptr < ubuf_end) {
-        //make sure page is mapped
-        if(!pt_is_vaddr_mapped(user_pt, $void* uptr)) {
-            return -ERR_FAULT;
-        }
-
-        //check flags
-        u64 flags;
-        void* paddr = pt_translate(user_pt, $void* uptr, flags);
-        if(!(flags & PTE_USER)) {
-            return -ERR_FAULT;
-        }
-
-        //copy data
-        for(u64 i = 0x0; i < PAGE_SIZE; i++) {
-            u64 cptr = uptr + i;
-            if(cptr < $u64 ubuf || cptr >= ubuf_end) continue;
-            kbuf[kptr ++] = ($u8* paddr)[i];
-        }
-
-        uptr += PAGE_SIZE;
-    }
-
-    return 0;
-}
-
 // -- SYSCALL IDENTIFIERS --
 //linux syscalls
 [__GLOBAL_FIRST__] u64 SYS_READ             = $u64 0;
 [__GLOBAL_FIRST__] u64 SYS_WRITE            = $u64 1;
+[__GLOBAL_FIRST__] u64 SYS_OPEN             = $u64 2;
 [__GLOBAL_FIRST__] u64 SYS_CLOSE            = $u64 3;
 [__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
 [__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
@@ -115,6 +48,7 @@ i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
 [__GLOBAL_FIRST__] u64 SYS_WAIT4            = $u64 61;
 [__GLOBAL_FIRST__] u64 SYS_GETCWD           = $u64 79;
 [__GLOBAL_FIRST__] u64 SYS_CHDIR            = $u64 80;
+[__GLOBAL_FIRST__] u64 SYS_GETDENTS64       = $u64 217;
 [__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
 
 //jank syscalls
@@ -246,6 +180,7 @@ export u64 syscall_handler() {
     u64 ans;
     if(sys_id == SYS_READ)                  ans = $u64 sys_read($i32 arg1, $u8* arg2, arg3);
     else if(sys_id == SYS_WRITE)            ans = $u64 sys_write($i32 arg1, $u8* arg2, arg3);
+    else if(sys_id == SYS_OPEN)             ans = $u64 sys_open($u8* arg1, $i32 arg2);
     else if(sys_id == SYS_CLOSE)            ans = $u64 sys_close($i32 arg1);
     else if(sys_id == SYS_EXIT)             ans = $u64 sys_exit($i32 arg1);
     else if(sys_id == SYS_SCHED_YIELD)      ans = $u64 sys_sched_yield();
@@ -258,8 +193,13 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_EXECVE)           ans = $u64 sys_execve($u8* arg1, $u8** arg2, $u8** arg3);
     else if(sys_id == SYS_GETCWD)           ans = $u64 sys_getcwd($u8* arg1, $u64 arg2);
     else if(sys_id == SYS_CHDIR)            ans = $u64 sys_chdir($u8* arg1);
+    else if(sys_id == SYS_GETDENTS64)       ans = $u64 sys_getdents64($i32 arg1, $u8* arg2, $u64 arg3);
 
-    else panic("unrecognized sys_id");
+    else {
+        pt_switch_to_kernel();
+        sout << "SYS ID : " << sys_id << "\n";
+        panic("syscall_handler() : unrecognized sys_id");
+    }
 
     //asm!("cli");      //disable timer interrupts
 
@@ -329,6 +269,12 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
     process* proc = get_cur_proc();
     file_descriptor* fd = proc->fd_table[fd_ind];
 
@@ -339,7 +285,7 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
     }
 
     // check if file descriptor has read flags
-    if(!(fd->flags == O_RDONLY || fd->flags == O_RDWR)) {
+    if(!((O_ACCMODE & $i32 fd->flags) == O_RDONLY || (O_ACCMODE & $i32 fd->flags) == O_RDWR)) {
         pt_switch(user_pt);
         return $i64 -ERR_BADF;
     }
@@ -363,11 +309,61 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
     return $i64 retval;
 }
 
+i64 sys_getdents64(i32 fd_ind, u8* buf, u64 amt) {
+    // switch to kernel pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file_descriptor* fd = proc->fd_table[fd_ind];
+
+    // check if file descriptor exists
+    if(fd == nullptr) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor has read flags
+    if(!((O_ACCMODE & $i32 fd->flags) == O_RDONLY || (O_ACCMODE & $i32 fd->flags) == O_RDWR)) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // do getdents
+    u8* kbuf = $u8* malloc(amt);
+    i64 retval = fd_getdents(fd, kbuf, amt);
+
+    // transfer data to user buffer
+    if(retval > $i64 0) {
+        i64 cpy_status = $i64 copy_to_user(user_pt, kbuf, buf, $u64 retval);
+        if(cpy_status < $i64 0) retval = cpy_status;
+    }
+
+    // free kbuf
+    free($void* kbuf, amt);
+
+    // return
+    pt_switch(user_pt);
+    return $i64 retval;
+}
+
 //writes amt bytes of buf to the file descriptor at ind. 
 i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     // switch to kernel pt
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
 
     process* proc = get_cur_proc();
     file_descriptor* fd = proc->fd_table[fd_ind];
@@ -379,7 +375,7 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     }
 
     // check if file descriptor has write flags
-    if(!(fd->flags == O_WRONLY || fd->flags == O_RDWR || fd->flags == O_APPEND)) {
+    if(!((O_ACCMODE & $i32 fd->flags) == O_WRONLY || (O_ACCMODE & $i32 fd->flags) == O_RDWR)) {
         pt_switch(user_pt);
         return $i64 -ERR_BADF;
     }
@@ -405,19 +401,80 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     return $i64 retval;
 }
 
+//creates a file descriptor on file with specified path
+//returns fd index on success, -1 on failure
+i32 sys_open(u8* path, i32 flags) {
+    u64 path_len = strlen(path);
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    //see if we can walk path
+    process* proc = get_cur_proc();
+    vfs_inode* walk_res;
+    i32 walk_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        walk_status = vfs_walk(new string(kpath), walk_res);
+    }
+    else {
+        //relative path
+        walk_status = vfs_walk(proc->cwd, new string(kpath), walk_res);
+    }
+    if(walk_status) {
+        //walk failed
+        free($void* kpath, path_len + 0x1);
+        pt_switch(user_pt);
+        return -1;
+    }
+    free($void* kpath, path_len + 0x1);
+
+    //allocate spot for new file descriptor
+    i32 fd_ind = -1;
+    for(i32 i = 0; i < $i32 PROCESS_MAX_FD; i++) {
+        if($void* proc->fd_table[i] == nullptr) {
+            fd_ind = i;
+            break;
+        }
+    }
+    if(fd_ind == -1) {
+        //no available slot for fd
+        vfs_dec_refcnt(walk_res);
+        pt_switch(user_pt);
+        return -1;
+    }
+
+    //create fd
+    proc->fd_table[fd_ind] = fd_create_vfs($u64 flags, walk_res);
+    
+    pt_switch(user_pt);
+    return fd_ind;
+}
+
 //closes the file descriptor at the specified index
 i32 sys_close(i32 fd_ind) {
     // switch to kernel_pt
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
     process* proc = get_cur_proc();
     file_descriptor* fd = proc->fd_table[fd_ind];
     proc->fd_table[fd_ind] = $file_descriptor* nullptr;
     
+    // check if file descriptor exists
     if($u64 fd == $u64 nullptr) {
         pt_switch(user_pt);
-        return -1;
+        return -ERR_BADF;
     }
 
     i32 retval = fd_close(fd);
@@ -479,12 +536,12 @@ pid_t sys_fork() {
 // by convention, the first string contains the filename to be executed
 //envp is a null terminated array of pointers to strings that are environment variables
 //if this succeeds, this should not return to the original process, should inject new trapframe
+//if this fails, will return to the original process with an error
 i32 sys_execve(u8* path, u8** argv, u8** envp) {
     sout << "EXEC START\n";
 
-    //for now, not supporting any commandline arguments or environment variables
-    if($void* argv != nullptr || $void* envp != nullptr) {
-        sout << "UNSUPPORTED COMMANDLINE STUFF\n";
+    //make sure argv and envp aren't nullptr
+    if($void* argv == nullptr || $void* envp == nullptr) {
         return 1;
     }
 
@@ -493,42 +550,53 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     u64 pathlen = strlen(path);
     pt_switch_to_kernel();
     u8* kpath = $u8* malloc(pathlen + 0x1);
-    copy_from_user(user_pt, kpath, path, pathlen);
-    string kpath_str = new string(kpath);
+    copy_from_user(user_pt, kpath, path, pathlen + 0x1);
+    string* kpath_str = $string* malloc(sizeof(string));
+    new (kpath_str) string(kpath);
     free($void* kpath, pathlen + 0x1);
 
     //see if file exists at path
     i32 is_file;
-    if(vfs_is_file(kpath_str, is_file)) {
+    if(vfs_is_file(*kpath_str, is_file)) {
         //check failed
-        sout << "IS FILE CHECK FAILED\n";
+        sout << "IS FILE CHECK FAILED : " << *kpath_str << "\n";
+        kpath_str->~();
+        free($void* kpath_str, sizeof(string));
         pt_switch(user_pt);
         return 1;
     }
     if(!is_file) {
         //not a file
         sout << "NOT A FILE\n";
+        kpath_str->~();
+        free($void* kpath_str, sizeof(string));
         pt_switch(user_pt);
         return 1;
     }
 
     //read in file
     u64 file_len;
-    if(vfs_get_size(kpath_str, file_len)) {
+    if(vfs_get_size(*kpath_str, file_len)) {
         //getting size failed
         sout << "GETTING FILE SIZE FAILED\n";
+        kpath_str->~();
+        free($void* kpath_str, sizeof(string));
         pt_switch(user_pt);
         return 1;
     }
     u64 amt_read;
     u8* file_buf = $u8* malloc(file_len);
-    if(vfs_read_file(kpath_str, file_buf, file_len, 0x0, amt_read)) {
+    if(vfs_read_file(*kpath_str, file_buf, file_len, 0x0, amt_read)) {
         //reading file failed
         sout << "READ FILE FAILED\n";
         free($void* file_buf, file_len);
+        kpath_str->~();
+        free($void* kpath_str, sizeof(string));
         pt_switch(user_pt);
         return 1;
     }
+    kpath_str->~();
+    free($void* kpath_str, sizeof(string));
     passert(amt_read == file_len, "sys_execve() : should always read entire file");
 
     //start building new process user_pt
@@ -548,6 +616,56 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     }
 
     //replace current process, no heading back now. 
+    //copy argv, envp to kernel
+    u8** kargv;
+    u8** kenvp;
+    u64 argc;
+    u64 envc;
+    {
+        pt_switch(user_pt);
+
+        //figure out argc, envc
+        argc = 0x0;
+        while($void* argv[argc] != nullptr) argc ++;
+        envc = 0x0;
+        while($void* envp[envc] != nullptr) envc ++;
+
+        pt_switch_to_kernel();
+
+        //copy argument string addresses 
+        u8** kargv_uptrs = $u8** malloc(sizeof(u8*) * (argc + 0x1));
+        u8** kenvp_uptrs = $u8** malloc(sizeof(u8*) * (envc + 0x1));
+        kargv = $u8** malloc(sizeof(u8*) * (argc + 0x1));
+        kenvp = $u8** malloc(sizeof(u8*) * (envc + 0x1));
+
+        copy_from_user(user_pt, $u8* kargv_uptrs, $u8* argv, sizeof(u8*) * (argc + 0x1));
+        copy_from_user(user_pt, $u8* kenvp_uptrs, $u8* envp, sizeof(u8*) * (envc + 0x1));
+        kargv[argc] = $u8* nullptr;
+        kenvp[envc] = $u8* nullptr;
+
+        //copy argument strings
+        for(u64 i = 0x0; i < argc; i++) {
+            pt_switch(user_pt);
+            u64 len = strlen(argv[i]);
+            pt_switch_to_kernel();
+
+            kargv[i] = $u8* malloc(sizeof(u8) * (len + 0x1));
+            copy_from_user(user_pt, $u8* kargv[i], $u8* kargv_uptrs[i], len + 0x1);
+        }
+        for(u64 i = 0x0; i < envc; i++) {
+            pt_switch(user_pt);
+            u64 len = strlen(envp[i]);
+            pt_switch_to_kernel();
+
+            kenvp[i] = $u8* malloc(sizeof(u8) * (len + 0x1));
+            copy_from_user(user_pt, $u8* kenvp[i], $u8* kenvp_uptrs[i], len + 0x1);
+        }
+
+        //free uptrs
+        free($void* kargv_uptrs, sizeof(u8*) * (argc + 0x1));
+        free($void* kenvp_uptrs, sizeof(u8*) * (envc + 0x1));
+    }
+
     //destroy old pt, replace with new one
     process_pt_unmap_kernel(proc, user_pt);
     pt_free(user_pt);
@@ -564,6 +682,19 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     tf->ss = 0x1b;
     process_set_trapframe(proc, tf);
     free($void* tf, sizeof(trapframe));
+
+    //place argv, envp onto stack
+    process_populate_stack(proc, kargv, kenvp);
+
+    //dealloc kargv, kenvp
+    for(u64 i = 0x0; i < argc; i++) {
+        free($void* kargv[i], strlen(kargv[i]) + 0x1);
+    }
+    for(u64 i = 0x0; i < envc; i++) {
+        free($void* kenvp[i], strlen(kenvp[i]) + 0x1);
+    }
+    free($void* kargv, sizeof(u8*) * (argc + 0x1));
+    free($void* kenvp, sizeof(u8*) * (envc + 0x1));
 
     //set status to READY
     proc->status = PROCESS_READY;
@@ -711,8 +842,7 @@ i32 sys_chdir(u8* path) {
     free($void* kpath, path_len + 0x1);
 
     //make sure this is a directory
-    i32 is_directory;
-    if(vfs_is_directory(ncwd, is_directory) || !is_directory) {
+    if(!ncwd->is_directory()) {
         //is_directory check failed
         vfs_dec_refcnt(ncwd);
         pt_switch(user_pt);
@@ -726,4 +856,3 @@ i32 sys_chdir(u8* path) {
     pt_switch(user_pt);
     return 0;
 }   
-

@@ -90,3 +90,71 @@ void hexdump(T* _buf, u64 amt_bytes) {
     if(amt_bytes % 0x10) sout << "\n";
 }
 
+//returns 0 on success, negative on failure
+//expects kernel_pt to be active
+i32 copy_to_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
+    u64 uptr = $u64 ubuf;
+    uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
+    u64 ubuf_end = $u64 ubuf + amt;
+    u64 kptr = 0x0;
+
+    while(uptr < ubuf_end) {
+        //make sure page is mapped
+        if(!pt_is_vaddr_mapped(user_pt, $void* uptr)) {
+            return -ERR_FAULT;
+        }
+
+        //check flags
+        u64 flags;
+        void* paddr = pt_translate(user_pt, $void* uptr, flags);
+        if(!(flags & PTE_WRITEABLE) || !(flags & PTE_USER)) {
+            return -ERR_FAULT;
+        }
+
+        //copy data
+        for(u64 i = 0x0; i < PAGE_SIZE; i++) {
+            u64 cptr = uptr + i;
+            if(cptr < $u64 ubuf || cptr >= ubuf_end) continue;
+            ($u8* paddr)[i] = kbuf[kptr ++];
+        }
+
+        uptr += PAGE_SIZE;
+    }
+
+    return 0;
+}
+
+//returns 0 on success, negative on failure
+//expects kernel_pt to be active
+i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
+    u64 uptr = $u64 ubuf;
+    uptr = (uptr / PAGE_SIZE) * PAGE_SIZE;  //round down to nearest page boundary
+    u64 ubuf_end = $u64 ubuf + amt;
+    u64 kptr = 0x0;
+
+    while(uptr < ubuf_end) {
+        //make sure page is mapped
+        if(!pt_is_vaddr_mapped(user_pt, $void* uptr)) {
+            return -ERR_FAULT;
+        }
+
+        //check flags
+        u64 flags;
+        void* paddr = pt_translate(user_pt, $void* uptr, flags);
+        if(!(flags & PTE_USER)) {
+            return -ERR_FAULT;
+        }
+
+        //copy data
+        for(u64 i = 0x0; i < PAGE_SIZE; i++) {
+            u64 cptr = uptr + i;
+            if(cptr < $u64 ubuf || cptr >= ubuf_end) continue;
+            kbuf[kptr ++] = ($u8* paddr)[i];
+        }
+
+        uptr += PAGE_SIZE;
+    }
+
+    return 0;
+}
+

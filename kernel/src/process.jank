@@ -79,10 +79,85 @@ void process_pt_unmap_kernel(process* proc, pagetable_t user_pt) {
     }
 }
 
+//pushes all argument strings + environment strings onto stack, and sets %rsp to the correct position
+//expects stack to already be allocated.
+//         [environment strings...]
+//         [argument strings...]
+//         AT_NULL                          <- AT_NULL = {0, 0}
+//         auxv[0] ... auxv[n-1]            <- {u64 type, void* ptr}
+//         NULL
+//         envp[0] ... envp[n-1]
+//         NULL                           
+//         argv[0] ... argv[argc-1]         <- array of pointers (on the stack)
+// %rsp -> argc
+void process_populate_stack(process* proc, u8** argv, u8** envp) {
+    //gather counts, compute size of buffer needed
+    u64 arg_sz = 0x0;   //in terms of bytes
+    u64 argc = 0x0;
+    while($void* argv[argc] != nullptr) {
+        arg_sz += ((strlen(argv[argc]) + 0x1 + 0x7) / 0x8) * 0x8;
+        argc ++;
+    }
+    arg_sz += 0x8 * (argc + 0x1);
+    u64 envc = 0x0;
+    while($void* envp[envc] != nullptr) {
+        arg_sz += ((strlen(envp[envc]) + 0x1 + 0x7) / 0x8) * 0x8;
+        envc ++;
+    }
+    arg_sz += 0x8 * (envc + 0x1);
+    arg_sz += 0x10;     //AT_NULL
+    arg_sz += 0x8;      //argc
+
+    //build arg buffer
+    passert(arg_sz % 0x8 == 0x0, "process_populate_stack() : arg_sz should be 8-byte aligned");
+    passert(arg_sz <= USER_STACK_TOP - USER_STACK_BOTTOM, "process_populate_stack() : arg_sz exceeds stack size");
+    u64* arg_buf = $u64* malloc(arg_sz);
+    u64 buf_pos = USER_STACK_TOP - arg_sz;
+    u64 buf_ptr = 0x0;
+    {
+        //argc
+        arg_buf[buf_ptr ++] = argc;
+        //argv
+        buf_ptr += argc;
+        arg_buf[buf_ptr ++] = $u64 nullptr;
+        //envp
+        buf_ptr += envc;
+        arg_buf[buf_ptr ++] = $u64 nullptr;
+        //AT_NULL
+        arg_buf[buf_ptr ++]= $u64 nullptr;
+        arg_buf[buf_ptr ++]= $u64 nullptr;
+        //argv strings
+        for(u64 i = 0x0; i < argc; i++) {
+            u64 sz = strlen(argv[i]) + 0x1;
+            memcpy($void* @(arg_buf[buf_ptr]), $void* argv[i], sz);
+            arg_buf[0x1 + i] = buf_pos + buf_ptr * 0x8;
+            buf_ptr += (sz + 0x7) / 0x8;
+        }
+        //envp strings
+        for(u64 i = 0x0; i < envc; i++) {
+            u64 sz = strlen(envp[i]) + 0x1;
+            memcpy($void* @(arg_buf[buf_ptr]), $void* envp[i], sz);
+            arg_buf[0x1 + argc + 0x1 + i] = buf_pos + buf_ptr * 0x8;
+            buf_ptr += (sz + 0x7) / 0x8;
+        }
+    }
+    passert(buf_ptr * 0x8 == arg_sz, "process_populate_stack() : buf_ptr should be at end of buffer");
+
+    //copy arg buffer to user stack
+    copy_to_user(proc->pt, $u8* arg_buf, $u8* buf_pos, arg_sz);
+
+    //dealloc arg buffer
+    free($void* arg_buf, arg_sz);
+
+    //set user %rsp
+    trapframe* tf = $trapframe* (proc->kstack_bottom + KSTACK_TRAPFRAME);
+    tf->rsp = buf_pos;
+}
+
 void process_pt_alloc_userspace(process* proc, pagetable_t user_pt, u64 flags) {
     if(flags & PROCESS_CREATE_STACK) {
         //map user stack
-        for(u64 i = USER_STACK_BOTTOM; i <= USER_STACK_TOP; i += PAGE_SIZE) {
+        for(u64 i = USER_STACK_BOTTOM; i < USER_STACK_TOP; i += PAGE_SIZE) {
             pt_alloc_and_map_page(user_pt, $void* i, PTE_USER | PTE_WRITEABLE);
         }
 
@@ -127,9 +202,9 @@ process* create_process(u64 flags) {
     process_pt_alloc_userspace(proc, proc->pt, flags);
 
     if(flags & PROCESS_CREATE_FDTABLE) {
-        proc->fd_table[0] = create_serial_fd(O_RDONLY); //STDIN
-        proc->fd_table[1] = create_serial_fd(O_WRONLY); //STDOUT
-        proc->fd_table[2] = create_serial_fd(O_WRONLY); //STDERR
+        proc->fd_table[0] = fd_create_serial($u64 O_RDONLY); //STDIN
+        proc->fd_table[1] = fd_create_serial($u64 O_WRONLY); //STDOUT
+        proc->fd_table[2] = fd_create_serial($u64 O_WRONLY); //STDERR
     }
 
     //write initial execution context to trapframe
@@ -149,7 +224,7 @@ process* create_process(u64 flags) {
 
 //create new process from file at path
 //assumes it points to valid ELF binary
-process* create_process(string path) {
+process* create_process(string path, u8** argv, u8** envp) {
     process* proc = create_process(PROCESS_CREATE_STACK | PROCESS_CREATE_FDTABLE);
 
     //load file
@@ -188,8 +263,48 @@ process* create_process(string path) {
         proc->cwd = par_dir;
     }
 
+    //populate stack
+    process_populate_stack(proc, argv, envp);
+
     //make ready
     make_process_ready(proc);
+
+    return proc;
+}
+
+//creates process with default arguments and environment variables
+process* create_process(string path) {
+    //just have argv[0] = path
+    u8** argv = $u8** malloc(sizeof(u8*) * 0x2);
+    argv[0] = $u8* malloc(path.size() + 0x1);
+    memcpy($void* argv[0], $void* path.jstr(), path.size() + 0x1);
+    argv[1] = $u8* nullptr;
+
+    //have PATH in envp
+    u8* PATH = "PATH=/path";
+    u8** envp = $u8** malloc(sizeof(u8*) * 0x2);
+    envp[0] = $u8* malloc(strlen(PATH) + 0x1);
+    memcpy($void* envp[0], $void* PATH, strlen(PATH) + 0x1);
+    envp[1] = $u8* nullptr;
+
+    //create process
+    process* proc = create_process(path, argv, envp);
+
+    //dealloc argv, envp
+    for(u64 i = 0x0; ; i++) {
+        if($void* argv[i] == nullptr) {
+            free($void* argv, sizeof(u8*) * (i + 0x1));
+            break;
+        }
+        free($void* argv[i], strlen(argv[i]) + 0x1);
+    }
+    for(u64 i = 0x0; ; i++) {
+        if($void* envp[i] == nullptr){
+            free($void* envp, sizeof(u8*) * (i + 0x1));
+            break;
+        }
+        free($void* envp[i], strlen(envp[i]) + 0x1);
+    }
 
     return proc;
 }

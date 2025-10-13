@@ -1,6 +1,7 @@
 #include <iostream>;
 #include <assert>;
 #include <wait>;
+#include <exec>;
 
 i32 main() {
 
@@ -10,7 +11,7 @@ i32 main() {
     //exec user shell
     pid_t pid = sys_fork();
     if(pid == $pid_t 0) {   //child
-        sys_execve("/sys/shell", $u8** nullptr, $u8** nullptr);
+        exec("/sys/shell");
         cout << "exec shell failed\n";
         return 1;
     }

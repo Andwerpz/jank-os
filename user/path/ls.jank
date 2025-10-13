@@ -1,0 +1,35 @@
+#include <iostream>;
+#include <assert>;
+#include <wait>;
+
+i32 main() {
+
+    i32 fd = sys_open("./", O_RDONLY);
+    cout << "FD : " << fd << "\n";
+
+    u64 buf_sz = 0x1000;
+    void* buf = malloc(buf_sz);
+
+    while(1) {
+        i64 ret = sys_getdents64(fd, buf, buf_sz);
+        if(ret < $i64 0) {
+            cout << "Read failed : " << ret << "\n";
+            return 1;
+        }
+
+        if(ret == $i64 0) {
+            //done reading
+            break;
+        }
+
+        u64 amt = $u64 ret;
+        u64 ptr = 0x0;
+        while(ptr < amt) {
+            dirent* dent = $dirent* @(($u8* buf)[ptr]);
+            ptr += $u64 dent->d_reclen;
+            cout << ($u8* @(dent->d_name)) << "\n";
+        }
+    }
+    
+    return 0;
+}

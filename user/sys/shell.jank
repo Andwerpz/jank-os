@@ -4,6 +4,7 @@
 #include <time>;
 #include <wait>;
 #include <assert>;
+#include <exec>;
 
 [__GLOBAL_FIRST__] u64 CWD_MAXLEN = $u64 4096;
 string getcwd() {
@@ -80,7 +81,8 @@ i32 main() {
             cout << "before exec\n";
             pid_t pid = sys_fork();
             if(pid == $pid_t 0) {   //child
-                sys_execve("/tests/basic", $u8** nullptr, $u8** nullptr);
+                // exec("/tests/basic");
+                exec("/path/ls");
                 cout << "exec failed\n";
                 return 1;
             }
