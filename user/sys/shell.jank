@@ -81,7 +81,6 @@ i32 main() {
             cout << "before exec\n";
             pid_t pid = sys_fork();
             if(pid == $pid_t 0) {   //child
-                // exec("/tests/basic");
                 exec("/path/ls");
                 cout << "exec failed\n";
                 return 1;
@@ -92,6 +91,21 @@ i32 main() {
                 }
             }
             cout << "done exec\n";
+        }
+        else if(cmd[0] == "execp") {
+            cout << "before execp\n";
+            pid_t pid = sys_fork();
+            if(pid == $pid_t 0) {   //child
+                execp("ls");
+                cout << "execp failed\n";
+                return 1;
+            }
+            else {  //parent
+                while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
+                    //continue
+                }
+            }
+            cout << "done execp\n";
         }
         else {
             cout << "unknown command\n";

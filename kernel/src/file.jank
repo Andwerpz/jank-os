@@ -42,7 +42,7 @@ file_descriptor* fd_create_serial(u64 flags) {
     return fd;
 }
 
-//inode should already have a reference allocated to it. 
+//this expects that inode should already have a reference allocated to it. 
 file_descriptor* fd_create_vfs(u64 flags, vfs_inode* inode) {
     file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
     new (fd) file_descriptor();

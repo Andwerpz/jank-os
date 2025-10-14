@@ -433,6 +433,13 @@ i32 sys_open(u8* path, i32 flags) {
     }
     free($void* kpath, path_len + 0x1);
 
+    //see if flags are valid for the file type being accessed
+    if((O_DIRECTORY & flags) == O_DIRECTORY && !walk_res->is_directory()) {
+        vfs_dec_refcnt(walk_res);
+        pt_switch(user_pt);
+        return -ERR_NOTDIR;
+    }
+
     //allocate spot for new file descriptor
     i32 fd_ind = -1;
     for(i32 i = 0; i < $i32 PROCESS_MAX_FD; i++) {

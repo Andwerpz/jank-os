@@ -718,6 +718,11 @@ i64 vfs_getdents(file_descriptor* fd, u8* buf, u64 amt) {
         pos ++;
     }
 
+    //check if buffer is too small to fit next dirent
+    if(buf_ptr == 0x0 && pos != children.size()) {
+        return $i64 -ERR_INVAL;
+    }
+
     fd->position = pos;
     return $i64 buf_ptr;
 }
