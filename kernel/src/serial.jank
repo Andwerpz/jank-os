@@ -150,12 +150,28 @@ u8 is_transmit_empty() {
     return inb(COM1 + $u16 5) & $u8 0x20;
 }
 
+u8 serial_received() {
+    return inb(COM1 + $u16 5) & $u8 1;
+}
+
+//blocking read
 u8 read_serial() {
     while(serial_received() == $u8 0) {}
     u8 c = inb(COM1);
     write_serial(c);
     if(c == '\r') write_serial('\n');
     return c;
+}
+
+//non-blocking read
+i32 poll_serial() {
+    if(serial_received() != $u8 0) {
+        u8 c = inb(COM1);
+        write_serial(c);
+        if(c == '\r') write_serial('\n');
+        return $i32 c;
+    }
+    return -1;
 }
 
 void write_serial(u8 a) {
@@ -228,30 +244,31 @@ void serial_println(T x) {
     serial_print("\n");
 }
 
-u8 serial_received() {
-    return inb(COM1 + $u16 5) & $u8 1;
-}
-
-[__GLOBAL_FIRST__] file_ops* FILE_OPS_SERIAL;
-void init_serial_file_ops() {
-    FILE_OPS_SERIAL = $file_ops* malloc(sizeof(file_ops));
-    new (FILE_OPS_SERIAL) file_ops();
-    FILE_OPS_SERIAL->op_read = #<serial_read(file_descriptor*, u8*, u64)>;
-    FILE_OPS_SERIAL->op_write = #<serial_write(file_descriptor*, u8*, u64)>;
-    FILE_OPS_SERIAL->op_lseek = #<serial_lseek(file_descriptor*, u64, i32)>;
-    FILE_OPS_SERIAL->op_getdents = #<serial_getdents(file_descriptor*, u8*, u64)>;
-    FILE_OPS_SERIAL->op_close = #<serial_close(file_descriptor*)>;
+[__GLOBAL_FIRST__] fd_ops* FD_OPS_SERIAL;
+void init_serial_fd_ops() {
+    FD_OPS_SERIAL = $fd_ops* malloc(sizeof(fd_ops));
+    new (FD_OPS_SERIAL) fd_ops();
+    FD_OPS_SERIAL->op_read = #<serial_read(file_descriptor*, u8*, u64)>;
+    FD_OPS_SERIAL->op_write = #<serial_write(file_descriptor*, u8*, u64)>;
+    FD_OPS_SERIAL->op_lseek = #<serial_lseek(file_descriptor*, u64, i32)>;
+    FD_OPS_SERIAL->op_getdents = #<serial_getdents(file_descriptor*, u8*, u64)>;
+    FD_OPS_SERIAL->op_close = #<serial_close(file_descriptor*)>;
 }
 
 // flush output on newline
 i64 serial_read(file_descriptor* fd, u8* buf, u64 amt) {
-    i64 retval = $i64 0;
-    for(u64 i = 0x0; i < amt; i++) {
-        buf[i] = read_serial();
-        retval ++;
-        if(buf[i] == '\r') break;
+    u64 buf_ptr = 0x0;
+    while(buf_ptr < amt) {
+        i32 res = poll_serial();
+        if(res < 0) break;
+        passert(res >= 0 && res < 256, "serial_read() : checking if res is in range");
+        buf[buf_ptr ++] = $u8 res;
     }
-    return retval;
+    if(buf_ptr == 0x0) {
+        //try again later
+        return $i64 -ERR_AGAIN;
+    }
+    return $i64 buf_ptr;
 }
 
 i64 serial_write(file_descriptor* fd, u8* buf, u64 amt) {

@@ -36,6 +36,8 @@ i32 main() {
     while(1) {
         cout << getcwd() << "> ";
         vector<string> cmd = cin.next_line().split(' ');
+        if(cmd.size() == 0x0) continue;
+
         if(cmd[0] == "quit") {
             break;
         }
@@ -49,39 +51,19 @@ i32 main() {
                 }
             }
         }
-        else if(cmd[0] == "time") {
-            cout << "Current epoch time : " << get_sys_time_sec() << "\n";
-            cout << "Current time UTC (?) : " << strftime() << "\n";
-        }
-        else if(cmd[0] == "yield") {
-            cout << "BEFORE YIELD\n";
-            sys_sched_yield();
-            cout << "AFTER YIELD (YAY)\n";
-        }
-        else if(cmd[0] == "pagefault") {
-            u8* ptr = $u8* 0x0;
-            u8 val = ptr[0];
-        }
-        else if(cmd[0] == "fork") {
-            cout << "before fork\n";
-            pid_t pid = sys_fork();
-            if(pid == $pid_t 0) {
-                cout << "child : " << pid << "\n";
-                return 0;
+        else {
+            //interpret first token as filepath
+            u8* path = cmd[0].jstr();
+            u8** argv = $u8** malloc(sizeof(u8*) * (cmd.size() + 0x1));
+            for(u64 i = 0x0; i < cmd.size(); i++) {
+                argv[i] = cmd[i].jstr();
             }
-            else {
-                while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
-                    //continue
-                }
-                cout << "parent : " << pid << "\n";
-            }   
-            cout << "done fork\n";
-        }
-        else if(cmd[0] == "exec") {
-            cout << "before exec\n";
+            argv[cmd.size()] = $u8* nullptr;
+
+            //try to fork + exec 
             pid_t pid = sys_fork();
             if(pid == $pid_t 0) {   //child
-                exec("/path/ls");
+                execvp(path, argv);
                 cout << "exec failed\n";
                 return 1;
             }
@@ -90,25 +72,9 @@ i32 main() {
                     //continue
                 }
             }
-            cout << "done exec\n";
-        }
-        else if(cmd[0] == "execp") {
-            cout << "before execp\n";
-            pid_t pid = sys_fork();
-            if(pid == $pid_t 0) {   //child
-                execp("ls");
-                cout << "execp failed\n";
-                return 1;
-            }
-            else {  //parent
-                while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
-                    //continue
-                }
-            }
-            cout << "done execp\n";
-        }
-        else {
-            cout << "unknown command\n";
+
+            //free argv
+            free($void* argv, sizeof(u8*) * (cmd.size() + 0x1));
         }
     }
 

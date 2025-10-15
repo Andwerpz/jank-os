@@ -1,11 +1,12 @@
 
 [__GLOBAL_FIRST__] u64 FD_TYPE_SERIAL = 0x0;
 [__GLOBAL_FIRST__] u64 FD_TYPE_VFS    = 0x1;
+[__GLOBAL_FIRST__] u64 FD_TYPE_PIPE   = 0x2;
 
-//file descriptor position should be managed internally by these file_ops. 
+//file descriptor position should be managed internally by these fd_ops. 
 //position should just be some opaque thing that each fd uses to keep track of where they are. 
 //for some file types, position can be well defined, user can modify it via lseek
-struct file_ops {
+struct fd_ops {
     fn<i64(file_descriptor*, u8*, u64)> op_read;            //reads some bytes into the provided buffer, returns the number of bytes read or -1
     fn<i64(file_descriptor*, u8*, u64)> op_write;           //writes some bytes from the provided buffer, returns the number of bytes read or -1
     fn<i64(file_descriptor*, u64, i32)> op_lseek;           //moves the fd position, returns the new position or -1
@@ -16,7 +17,7 @@ struct file_ops {
 struct file_descriptor {
     u64 type;
     void* resource_ptr;
-    file_ops* ops;
+    fd_ops* ops;
     u64 position;
     u64 flags;
     u64 refcount;
@@ -34,7 +35,7 @@ file_descriptor* fd_create_serial(u64 flags) {
 
     fd->type = FD_TYPE_SERIAL;
     fd->resource_ptr = nullptr;
-    fd->ops = FILE_OPS_SERIAL;
+    fd->ops = FD_OPS_SERIAL;
     fd->position = 0x0;
     fd->flags = flags;
     fd->refcount = 0x1;
@@ -49,7 +50,21 @@ file_descriptor* fd_create_vfs(u64 flags, vfs_inode* inode) {
 
     fd->type = FD_TYPE_VFS;
     fd->resource_ptr = $void* inode;
-    fd->ops = FILE_OPS_VFS;
+    fd->ops = FD_OPS_VFS;
+    fd->position = 0x0;
+    fd->flags = flags;
+    fd->refcount = 0x1;
+
+    return fd;
+}
+
+file_descriptor* fd_create_pipe(u64 flags, pipe_ref* pipe) {
+    file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
+    new (fd) file_descriptor();
+
+    fd->type = FD_TYPE_PIPE;
+    fd->resource_ptr = $void* pipe;
+    fd->ops = FD_OPS_PIPE;
     fd->position = 0x0;
     fd->flags = flags;
     fd->refcount = 0x1;

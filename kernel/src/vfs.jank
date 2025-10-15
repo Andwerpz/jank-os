@@ -160,7 +160,7 @@ void init_vfs() {
         vfs_inc_refcnt(VFS_ROOT);
     }
 
-    init_vfs_file_ops();
+    init_vfs_fd_ops();
 
     sout << "done init vfs\n";
 }
@@ -386,22 +386,17 @@ i32 vfs_get_children(vfs_inode* node, vector<string>& res) {
     return node->ops->get_children#(node, res);
 }
 
-i32 vfs_read_file(vfs_inode* node, u8* buf, u64 amt, u64 off, u64& res) {
-    if(!node->is_file()) return 1;
-    return node->ops->read_file#(node, buf, amt, off, res);
-}
-
-i32 vfs_get_size(vfs_inode* node, u64& res) {
-    if(!node->is_file()) return 1;
-    return node->ops->get_size#(node, res);
-}
-
 i32 vfs_get_children(string path, vector<string>& res) {
     vfs_inode* root;
     if(vfs_walk(path, 0, root)) return 1;
     vfs_get_children(root, res);
     vfs_dec_refcnt(root);
     return 0;
+}
+
+i32 vfs_read_file(vfs_inode* node, u8* buf, u64 amt, u64 off, u64& res) {
+    if(!node->is_file()) return 1;
+    return node->ops->read_file#(node, buf, amt, off, res);
 }
 
 i32 vfs_read_file(string path, u8* buf, u64 amt, u64 off, u64& res) {
@@ -412,6 +407,11 @@ i32 vfs_read_file(string path, u8* buf, u64 amt, u64 off, u64& res) {
     return 0;
 }
 
+i32 vfs_get_size(vfs_inode* node, u64& res) {
+    if(!node->is_file()) return 1;
+    return node->ops->get_size#(node, res);
+}
+
 i32 vfs_get_size(string path, u64& res) {
     vfs_inode* root;
     if(vfs_walk(path, 0, root)) return 1;
@@ -420,11 +420,21 @@ i32 vfs_get_size(string path, u64& res) {
     return 0;
 }
 
+i32 vfs_is_file(vfs_inode* node, i32& res) {
+    res = node->is_file();
+    return 0;
+}
+
 i32 vfs_is_file(string path, i32& res) {
     vfs_inode* node;
     if(vfs_walk(path, 0, node)) return 1;
     res = node->is_file();
     vfs_dec_refcnt(node);
+    return 0;
+}
+
+i32 vfs_is_directory(vfs_inode* node, i32& res) {
+    res = node->is_directory();
     return 0;
 }
 
@@ -633,15 +643,15 @@ i32 vfs_dentry_get_size(vfs_inode* _node, u64& res) {
 
 
 // -- FD OPS --
-[__GLOBAL_FIRST__] file_ops* FILE_OPS_VFS;
-void init_vfs_file_ops() {
-    FILE_OPS_VFS = $file_ops* malloc(sizeof(file_ops));
-    new (FILE_OPS_VFS) file_ops();
-    FILE_OPS_VFS->op_read = #<vfs_read(file_descriptor*, u8*, u64)>;
-    FILE_OPS_VFS->op_write = #<vfs_write(file_descriptor*, u8*, u64)>;
-    FILE_OPS_VFS->op_lseek = #<vfs_lseek(file_descriptor*, u64, i32)>;
-    FILE_OPS_VFS->op_getdents = #<vfs_getdents(file_descriptor*, u8*, u64)>;
-    FILE_OPS_VFS->op_close = #<vfs_close(file_descriptor*)>;
+[__GLOBAL_FIRST__] fd_ops* FD_OPS_VFS;
+void init_vfs_fd_ops() {
+    FD_OPS_VFS = $fd_ops* malloc(sizeof(fd_ops));
+    new (FD_OPS_VFS) fd_ops();
+    FD_OPS_VFS->op_read = #<vfs_read(file_descriptor*, u8*, u64)>;
+    FD_OPS_VFS->op_write = #<vfs_write(file_descriptor*, u8*, u64)>;
+    FD_OPS_VFS->op_lseek = #<vfs_lseek(file_descriptor*, u64, i32)>;
+    FD_OPS_VFS->op_getdents = #<vfs_getdents(file_descriptor*, u8*, u64)>;
+    FD_OPS_VFS->op_close = #<vfs_close(file_descriptor*)>;
 }
 
 i64 vfs_read(file_descriptor* fd, u8* buf, u64 amt) {

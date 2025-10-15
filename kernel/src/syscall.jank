@@ -40,7 +40,9 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_CLOSE            = $u64 3;
 [__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
 [__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
+[__GLOBAL_FIRST__] u64 SYS_PIPE             = $u64 22;
 [__GLOBAL_FIRST__] u64 SYS_SCHED_YIELD      = $u64 24;
+[__GLOBAL_FIRST__] u64 SYS_DUP2             = $u64 33;
 [__GLOBAL_FIRST__] u64 SYS_GETPID           = $u64 39;
 [__GLOBAL_FIRST__] u64 SYS_FORK             = $u64 57;
 [__GLOBAL_FIRST__] u64 SYS_EXECVE           = $u64 59;
@@ -194,6 +196,8 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_GETCWD)           ans = $u64 sys_getcwd($u8* arg1, $u64 arg2);
     else if(sys_id == SYS_CHDIR)            ans = $u64 sys_chdir($u8* arg1);
     else if(sys_id == SYS_GETDENTS64)       ans = $u64 sys_getdents64($i32 arg1, $u8* arg2, $u64 arg3);
+    else if(sys_id == SYS_PIPE)             ans = $u64 sys_pipe($i32[2]* arg1);
+    else if(sys_id == SYS_DUP2)             ans = $u64 sys_dup2($i32 arg1, $i32 arg2);
 
     else {
         pt_switch_to_kernel();
@@ -202,6 +206,13 @@ export u64 syscall_handler() {
     }
 
     //asm!("cli");      //disable timer interrupts
+
+    if(0) {
+        pagetable_t user_pt = pt_get_current();
+        pt_switch_to_kernel();
+        sout << "DONE SYSCALL : " << sys_id << "\n";
+        pt_switch(user_pt);
+    }
 
     return $u64 ans;
 }
@@ -429,7 +440,7 @@ i32 sys_open(u8* path, i32 flags) {
         //walk failed
         free($void* kpath, path_len + 0x1);
         pt_switch(user_pt);
-        return -1;
+        return -ERR_UNKNOWN;
     }
     free($void* kpath, path_len + 0x1);
 
@@ -452,7 +463,7 @@ i32 sys_open(u8* path, i32 flags) {
         //no available slot for fd
         vfs_dec_refcnt(walk_res);
         pt_switch(user_pt);
-        return -1;
+        return -ERR_UNKNOWN;
     }
 
     //create fd
@@ -545,11 +556,9 @@ pid_t sys_fork() {
 //if this succeeds, this should not return to the original process, should inject new trapframe
 //if this fails, will return to the original process with an error
 i32 sys_execve(u8* path, u8** argv, u8** envp) {
-    sout << "EXEC START\n";
-
     //make sure argv and envp aren't nullptr
     if($void* argv == nullptr || $void* envp == nullptr) {
-        return 1;
+        return ERR_UNKNOWN;
     }
 
     //copy pathname into kernel space
@@ -562,48 +571,63 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     new (kpath_str) string(kpath);
     free($void* kpath, pathlen + 0x1);
 
-    //see if file exists at path
-    i32 is_file;
-    if(vfs_is_file(*kpath_str, is_file)) {
-        //check failed
-        sout << "IS FILE CHECK FAILED : " << *kpath_str << "\n";
-        kpath_str->~();
-        free($void* kpath_str, sizeof(string));
+    //see if path is valid 
+    vfs_inode* inode;
+    i32 walk_stat;
+    if((*kpath_str)[0] == '/') {
+        //absolute path
+        walk_stat = vfs_walk(*kpath_str, inode);
+    }
+    else {
+        //relative to CWD
+        process* proc = get_cur_proc();
+        walk_stat = vfs_walk(proc->cwd, *kpath_str, inode);
+    }
+    kpath_str->~();
+    free($void* kpath_str, sizeof(string));
+    if(walk_stat) {
+        //path is not valid
+        sout << "INVALID PATH : " << *kpath_str << "\n";
         pt_switch(user_pt);
-        return 1;
+        return ERR_UNKNOWN;
+    }
+    
+    //see if there is a regular file at walk result
+    i32 is_file;
+    i32 is_file_stat = vfs_is_file(inode, is_file);
+    if(is_file_stat) {
+        sout << "IS FILE CHECK FAILED\n";
+        vfs_dec_refcnt(inode);
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
     }
     if(!is_file) {
-        //not a file
         sout << "NOT A FILE\n";
-        kpath_str->~();
-        free($void* kpath_str, sizeof(string));
+        vfs_dec_refcnt(inode);
         pt_switch(user_pt);
-        return 1;
+        return ERR_UNKNOWN;
     }
 
     //read in file
     u64 file_len;
-    if(vfs_get_size(*kpath_str, file_len)) {
+    if(vfs_get_size(inode, file_len)) {
         //getting size failed
         sout << "GETTING FILE SIZE FAILED\n";
-        kpath_str->~();
-        free($void* kpath_str, sizeof(string));
+        vfs_dec_refcnt(inode);
         pt_switch(user_pt);
-        return 1;
+        return ERR_UNKNOWN;
     }
     u64 amt_read;
     u8* file_buf = $u8* malloc(file_len);
-    if(vfs_read_file(*kpath_str, file_buf, file_len, 0x0, amt_read)) {
+    if(vfs_read_file(inode, file_buf, file_len, 0x0, amt_read)) {
         //reading file failed
         sout << "READ FILE FAILED\n";
         free($void* file_buf, file_len);
-        kpath_str->~();
-        free($void* kpath_str, sizeof(string));
+        vfs_dec_refcnt(inode);
         pt_switch(user_pt);
-        return 1;
+        return ERR_UNKNOWN;
     }
-    kpath_str->~();
-    free($void* kpath_str, sizeof(string));
+    vfs_dec_refcnt(inode);
     passert(amt_read == file_len, "sys_execve() : should always read entire file");
 
     //start building new process user_pt
@@ -619,7 +643,7 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
         sout << "FAILED TO LOAD ELF\n";
         pt_free(n_user_pt);
         pt_switch(user_pt);
-        return 1;
+        return ERR_UNKNOWN;
     }
 
     //replace current process, no heading back now. 
@@ -707,7 +731,6 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     proc->status = PROCESS_READY;
 
     //jump to scheduler
-    sout << "EXEC SUCCESS\n";
     scheduler();
 
     panic("sys_execve() : should not return to syscall handler on success");
@@ -735,13 +758,13 @@ void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 o
     // check if len is page aligned
     if(len % PAGE_SIZE != 0x0) {
         pt_switch(user_pt);
-        return $void* $u64 -1;
+        return $void* $u64 -ERR_UNKNOWN;
     }
 
     // check if we've ran out of heap space
     if(proc->brk + len > USER_HEAP_TOP) {
         pt_switch(user_pt);
-        return $void* $u64 -1;
+        return $void* $u64 -ERR_UNKNOWN;
     }
 
     // alloc mem
@@ -762,10 +785,16 @@ i32 sys_munmap(void* addr, u64 len) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
-    if($u64 addr % PAGE_SIZE != 0x0 || len % PAGE_SIZE != 0x0) return -1;
+    //ensure addr and len are page aligned
+    if($u64 addr % PAGE_SIZE != 0x0 || len % PAGE_SIZE != 0x0) return -ERR_UNKNOWN;
+
+    //unmap memory
     for(u64 i = 0x0; i < len; i += PAGE_SIZE) {
         void* curr_vaddr = $void* ($u64 addr + i);
-        if(!pt_is_vaddr_mapped(user_pt, curr_vaddr)) panic("sys_munmap: double free");
+        if(!pt_is_vaddr_mapped(user_pt, curr_vaddr)) {
+            //double free
+            return -ERR_UNKNOWN;
+        }
         void* paddr = pt_translate(user_pt, curr_vaddr);
         pt_unmap_page(user_pt, curr_vaddr);
         pfree(paddr);
@@ -844,7 +873,7 @@ i32 sys_chdir(u8* path) {
         //walk failed
         free($void* kpath, path_len + 0x1);
         pt_switch(user_pt);
-        return 1;
+        return ERR_UNKNOWN;
     }
     free($void* kpath, path_len + 0x1);
 
@@ -853,7 +882,7 @@ i32 sys_chdir(u8* path) {
         //is_directory check failed
         vfs_dec_refcnt(ncwd);
         pt_switch(user_pt);
-        return 1;
+        return ERR_UNKNOWN;
     }
 
     //decrement refcount of current cwd, replace it with new cwd
@@ -863,3 +892,91 @@ i32 sys_chdir(u8* path) {
     pt_switch(user_pt);
     return 0;
 }   
+
+// creates a new pipe
+// on success, fds[0] = read end, fds[1] = write end, returns 0
+// on failure, returns -1
+i32 sys_pipe(i32[2]* fds) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //see if there are two free file descriptors 
+    process* proc = get_cur_proc();
+    i32 fdind0 = -1;
+    i32 fdind1 = -1;
+    for(u64 i = 0x0; i < PROCESS_MAX_FD; i++) {
+        if($void* proc->fd_table[i] == nullptr) {
+            if(fdind0 == -1) fdind0 = $i32 i;
+            else {
+                fdind1 = $i32 i;
+                break;
+            }
+        }
+    }
+    if(fdind0 == -1 || fdind1 == -1) {
+        return -ERR_ENFILE; //file table overflow
+    }
+
+    //create the pipe
+    pipe* pipe = $pipe* malloc(sizeof(pipe));
+    new (pipe) pipe();
+
+    //create read / write references to pipe
+    pipe_ref* read_ref = $pipe_ref* malloc(sizeof(pipe_ref));
+    pipe_ref* write_ref = $pipe_ref* malloc(sizeof(pipe_ref));
+    new (read_ref) pipe_ref(pipe, 0);
+    new (write_ref) pipe_ref(pipe, 1);
+
+    //create file descriptors
+    passert($void* proc->fd_table[fdind0] == nullptr, "sys_pipe() : this should be available");
+    passert($void* proc->fd_table[fdind1] == nullptr, "sys_pipe() : this should be available");
+    proc->fd_table[fdind0] = fd_create_pipe($u64 O_RDONLY, read_ref);
+    proc->fd_table[fdind1] = fd_create_pipe($u64 O_WRONLY, write_ref);
+
+    //copy fds to user
+    i32[2]* kfds = $i32[2]* malloc(sizeof(i32[2]));
+    (*kfds)[0] = fdind0;
+    (*kfds)[1] = fdind1;
+    copy_to_user(user_pt, $u8* kfds, $u8* fds, sizeof(i32[2]));
+    free($void* kfds, sizeof(i32[2]));
+
+    pt_switch(user_pt);
+    return 0;
+}   
+
+// makes new_fd into a reference to the underlying fd referred to by old_fd.
+// if new_fd is already taken, silently closes it
+// returns new_fd on success
+// returns -1 on failure
+i32 sys_dup2(i32 old_fd, i32 new_fd) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //ensure given fds are in bounds
+    if(old_fd < 0 || new_fd < 0 || $u64 old_fd >= PROCESS_MAX_FD || $u64 new_fd >= PROCESS_MAX_FD) {
+        return -ERR_UNKNOWN;
+    }
+
+    //ensure old_fd != new_fd
+    if(old_fd == new_fd) {
+        return -ERR_UNKNOWN;
+    }
+
+    //ensure old_fd refers to an active fd
+    process* proc = get_cur_proc();
+    if($void* proc->fd_table[old_fd] == nullptr) {
+        return -ERR_UNKNOWN;
+    }
+
+    //if new_fd refers to an active fd, close it
+    //if any errors occur, they should be ignored
+    fd_close(proc->fd_table[new_fd]);
+    proc->fd_table[new_fd] = $file_descriptor* nullptr;
+
+    //make copy of old_fd in new_fd
+    proc->fd_table[new_fd] = proc->fd_table[old_fd];
+    proc->fd_table[new_fd]->refcount ++;
+
+    pt_switch(user_pt);
+    return new_fd;
+}

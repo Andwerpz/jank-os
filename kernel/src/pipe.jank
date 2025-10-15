@@ -1,0 +1,162 @@
+
+struct pipe {
+    deque<u8> queue;    //lmao, replace later
+
+    //reference counts
+    u64 readers;
+    u64 writers;
+
+    pipe() {
+        this.readers = 0x0;
+        this.writers = 0x0;
+    }
+
+    pipe(pipe& other) {
+        passert(0, "pipe::pipe() : should never use copy constructor");
+    }
+
+    ~pipe() {
+        
+    }
+
+    i32 has_char() {
+        return this.queue.size() != 0x0;
+    }
+
+    u8 read_char() {
+        while(!this.has_char()) {}
+        return this.queue.pop_front();
+    }
+
+    void write_char(u8 c) {
+        this.queue.push_back(c);
+    }
+
+    i32 eof() {
+        return !this.has_char() && this.writers == 0x0;
+    }
+}
+
+struct pipe_ref {
+    pipe* pipe;
+    i32 is_writer;
+
+    pipe_ref() {
+        passert(0, "pipe_ref::pipe_ref() : should never use default constructor");
+    }
+
+    pipe_ref(pipe* pipe, i32 is_writer) {
+        passert(pipe != nullptr, "pipe_ref::pipe_ref() : pipe should not be nullptr");
+        if(is_writer) pipe->writers ++;
+        else pipe->readers ++;
+
+        this.pipe = pipe;
+        this.is_writer = is_writer;
+    }   
+
+    pipe_ref(pipe_ref& other) {
+        passert(0, "pipe_ref::pipe_ref() : should never use copy constructor");
+    }
+
+    ~pipe_ref() {
+        this.close();
+    }
+
+    i32 poll_char(u8& out) {
+        passert(this.pipe != nullptr, "pipe_ref::poll_char() : pipe must not be nullptr");
+        if(this.is_writer) return -ERR_UNKNOWN;
+        if(!this.pipe->has_char()) return -ERR_AGAIN;   //try again later
+        out = this.pipe->read_char();
+        return 0;
+    }
+
+    i32 read_char(u8& out) {
+        passert(this.pipe != nullptr, "pipe_ref::read_char() : pipe must not be nullptr");
+        if(this.is_writer) return -ERR_UNKNOWN;
+        out = this.pipe->read_char();
+        return 0;
+    }
+
+    i32 write_char(u8 c) {
+        passert(this.pipe != nullptr, "pipe_ref::write_char() : pipe must not be nullptr");
+        if(!this.is_writer) return -ERR_UNKNOWN;
+        if(this.pipe->readers == 0x0) return -ERR_PIPE; //no readers will ever see this byte
+        this.pipe->write_char(c);
+        return 0;
+    }
+
+    i32 eof() {
+        passert(this.pipe != nullptr, "pipe_ref::eof() : pipe must not be nullptr");
+        return this.pipe->eof();
+    }
+
+    void close() {
+        passert($void* this.pipe != nullptr, "pipe_ref::close() : pipe must not be nullptr");
+        if(this.is_writer) {
+            passert(this.pipe->writers != 0x0, "pipe_ref::close() : double writer free");
+            this.pipe->writers --;
+        }
+        else {
+            passert(this.pipe->readers != 0x0, "pipe_ref::close() : double reader free");
+            this.pipe->readers --;
+        }
+
+        //if there are no more references to the pipe, dealloc it
+        if(this.pipe->readers == 0x0 && this.pipe->writers == 0x0) {
+            this.pipe->~();
+            free($void* this.pipe, sizeof(pipe));
+        }
+
+        this.pipe = $pipe* nullptr;
+    }
+}
+
+// -- FD OPS --
+[__GLOBAL_FIRST__] fd_ops* FD_OPS_PIPE;
+void init_pipe_fd_ops() {
+    FD_OPS_PIPE = $fd_ops* malloc(sizeof(fd_ops));
+    new (FD_OPS_PIPE) fd_ops();
+    FD_OPS_PIPE->op_read = #<pipe_read(file_descriptor*, u8*, u64)>;
+    FD_OPS_PIPE->op_write = #<pipe_write(file_descriptor*, u8*, u64)>;
+    FD_OPS_PIPE->op_lseek = #<pipe_lseek(file_descriptor*, u64, i32)>;
+    FD_OPS_PIPE->op_getdents = #<pipe_getdents(file_descriptor*, u8*, u64)>;
+    FD_OPS_PIPE->op_close = #<pipe_close(file_descriptor*)>;
+}
+
+i64 pipe_read(file_descriptor* fd, u8* buf, u64 amt) {
+    pipe_ref* pipe = $pipe_ref* fd->resource_ptr;
+    u64 buf_ptr = 0x0;
+    while(buf_ptr < amt && !pipe->eof()) {
+        u8 c;
+        i32 read_stat = pipe->poll_char(c);
+        if(read_stat != 0) return $i64 read_stat;
+        buf[buf_ptr ++] = c;
+    }
+    return $i64 buf_ptr;
+}
+
+i64 pipe_write(file_descriptor* fd, u8* buf, u64 amt) {
+    pipe_ref* pipe = $pipe_ref* fd->resource_ptr;
+    u64 buf_ptr = 0x0;
+    while(buf_ptr < amt) {
+        i32 write_stat = pipe->write_char(buf[buf_ptr ++]);
+        if(write_stat != 0) return $i64 write_stat;
+    }
+    return $i64 buf_ptr;
+}
+
+i64 pipe_lseek(file_descriptor* fd, u64 npos, i32 whence) {
+    //lseek doesn't make sense for pipes
+    return $i64 -1;
+}
+
+i64 pipe_getdents(file_descriptor* fd, u8* buf, u64 amt) {
+    //getdents doesn't make sense for pipes
+    return $i64 -1;
+}
+
+i32 pipe_close(file_descriptor* fd) {
+    pipe_ref* pipe = $pipe_ref* fd->resource_ptr;
+    pipe->close();
+    return 0;
+}

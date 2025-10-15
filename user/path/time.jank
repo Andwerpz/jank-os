@@ -1,0 +1,13 @@
+#include <iostream>;
+#include <assert>;
+#include <wait>;
+#include <dirent>;
+#include <time>;
+
+i32 main() {
+
+    cout << "Current epoch time : " << get_sys_time_sec() << "\n";
+    cout << "Current time UTC (?) : " << strftime() << "\n";
+    
+    return 0;
+}

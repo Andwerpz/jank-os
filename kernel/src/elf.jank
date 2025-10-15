@@ -72,7 +72,7 @@ struct ELF64_Sym {
 //entry point virtual address is returned through out_entry_off
 //returns 0 on success
 i32 elf_load(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
-    sout << "Loading ELF ...\n";
+    // sout << "Loading ELF ...\n";
 
     //check if there's even enough room for the ELF header
     if(size < sizeof(ELF64_Ehdr)) {
@@ -100,10 +100,10 @@ i32 elf_load(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
     //TODO load actual program header num if phnum == 0xffff
     passert(phnum != 0xffff, "need to load in actual program header num");
 
-    sout << "Entry point : " << ($void* elf_header->e_entry) << "\n";
+    // sout << "Entry point : " << ($void* elf_header->e_entry) << "\n";
 
     //go through program header table
-    sout << "Program header count : " << elf_header->e_phnum << "\n";
+    // sout << "Program header count : " << elf_header->e_phnum << "\n";
     ELF64_Phdr* p_headers = $ELF64_Phdr* @(buf[elf_header->e_phoff]);
     for(u64 i = 0x0; i < phnum; i++){
         ELF64_Phdr* p_header = @(p_headers[i]);
@@ -114,13 +114,13 @@ i32 elf_load(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
         u64 memsz = p_header->p_memsz;
         u64 align = p_header->p_align;
 
-        sout << "Program header " << i << " :\n";
-        sout << "flags : " << flags << "\n";
-        sout << "offset : " << $void* offset << "\n";
-        sout << "vaddr : " << $void* vaddr << "\n";
-        sout << "filesz : " << filesz << "\n";
-        sout << "memsz : " << memsz << "\n";
-        sout << "align : " << align << "\n";
+        // sout << "Program header " << i << " :\n";
+        // sout << "flags : " << flags << "\n";
+        // sout << "offset : " << $void* offset << "\n";
+        // sout << "vaddr : " << $void* vaddr << "\n";
+        // sout << "filesz : " << filesz << "\n";
+        // sout << "memsz : " << memsz << "\n";
+        // sout << "align : " << align << "\n";
 
         if(align != 0x0 && offset % align != vaddr % align) {
             sout << "Program header incorrect alignment\n";

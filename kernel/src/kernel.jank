@@ -17,13 +17,14 @@
 #include "idt.jank";
 #include "scheduler.jank";
 #include "pic.jank";
-#include "file.jank";
+#include "fd.jank";
 #include "process.jank";
 #include "ahci.jank";
 #include "ext2fs.jank";
 #include "acpi.jank";
 #include "mutex.jank";
 #include "vfs.jank";
+#include "pipe.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -236,7 +237,8 @@ void gp_handler_test() {
 
 i32 main() {
     init_acpi();
-    init_serial_file_ops();
+    init_serial_fd_ops();
+    init_pipe_fd_ops();
     init_vfs();
     init_ahci();
 

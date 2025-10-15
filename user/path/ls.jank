@@ -14,6 +14,7 @@ i32 main() {
         }
         cout << ($u8* @(dent->d_name)) << "\n";
     }
+    closedir(dir);
     
     return 0;
 }

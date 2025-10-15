@@ -335,7 +335,7 @@ process* create_process(process* parent, trapframe* parent_tf) {
     //increment refcount of file descriptors
     for(u64 i = 0x0; i < PROCESS_MAX_FD; i++){
         if($void* child->fd_table[i] == nullptr) continue;
-        child->fd_table[i]->refcount++;
+        child->fd_table[i]->refcount ++;
     }
 
     //copy parent lower half mappings
@@ -361,7 +361,7 @@ void make_process_ready(process* proc) {
     proc->status = PROCESS_READY;
     process_queue.push_back(proc->pid);
 
-    sout << "MAKING PROCESS READY : " << proc->pid << " : " << process_queue.size() << "\n";
+    // sout << "MAKING PROCESS READY : " << proc->pid << " : " << process_queue.size() << "\n";
 }
 
 //marks process as dead, cleans up process. 
