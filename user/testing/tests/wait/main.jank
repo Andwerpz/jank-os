@@ -10,7 +10,7 @@ i32 main() {
     pid_t pid = sys_fork();
     if(pid == $pid_t 0) {
         cout << "child\n";
-        for(i32 i = 0; i < 1000; i++) {
+        for(i32 i = 0; i < 100; i++) {
             cout << "I : " << i << "\n";
             for(i32 j = 0; j < 100000; j++) {
                 //bla

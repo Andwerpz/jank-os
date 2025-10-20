@@ -182,7 +182,7 @@ export u64 syscall_handler() {
     u64 ans;
     if(sys_id == SYS_READ)                  ans = $u64 sys_read($i32 arg1, $u8* arg2, arg3);
     else if(sys_id == SYS_WRITE)            ans = $u64 sys_write($i32 arg1, $u8* arg2, arg3);
-    else if(sys_id == SYS_OPEN)             ans = $u64 sys_open($u8* arg1, $i32 arg2);
+    else if(sys_id == SYS_OPEN)             ans = $u64 sys_open($u8* arg1, $i32 arg2, $mode_t arg3);
     else if(sys_id == SYS_CLOSE)            ans = $u64 sys_close($i32 arg1);
     else if(sys_id == SYS_EXIT)             ans = $u64 sys_exit($i32 arg1);
     else if(sys_id == SYS_SCHED_YIELD)      ans = $u64 sys_sched_yield();
@@ -242,13 +242,13 @@ u64 sys_clock_gettime(u64 clock_id, timespec* ts) {
 
 //on success, returns the pid of the child that got WAIT'd
 //if WNOHANG was specified and no child was WAIT'd, returns 0
+//TODO if wstatus != nullptr, save the exit status there
 //on failure some negative error code is returned
 pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
     passert(rusage == nullptr, "sys_wait4() : no support for rusage");
-    passert(wstatus == nullptr, "sys_wait4() : no support for wstatus");
     passert(pid > $pid_t -1 && pid != $pid_t 0, "sys_wait4() : pgids not supported");
 
     pid_t retval = $pid_t 0;
@@ -263,6 +263,9 @@ pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
             if(child->status != PROCESS_ZOMBIE) continue;
             if(pid == $pid_t -1 || pid == child->pid) {
                 retval = child->pid;
+                if(wstatus != nullptr) {
+                    copy_to_user(user_pt, $u8* @(child->exit_status), $u8* wstatus, sizeof(i32));
+                }
                 remove_process(child->pid);
                 break;
             }
@@ -414,7 +417,12 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
 
 //creates a file descriptor on file with specified path
 //returns fd index on success, -1 on failure
-i32 sys_open(u8* path, i32 flags) {
+i32 sys_open(u8* path, i32 flags, mode_t mode) {
+    //don't support creating files for now
+    if(flags & O_CREAT) {
+        return -ERR_UNKNOWN;
+    }
+
     u64 path_len = strlen(path);
 
     pagetable_t user_pt = pt_get_current();
@@ -587,7 +595,7 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     free($void* kpath_str, sizeof(string));
     if(walk_stat) {
         //path is not valid
-        sout << "INVALID PATH : " << *kpath_str << "\n";
+        sout << "INVALID PATH\n";
         pt_switch(user_pt);
         return ERR_UNKNOWN;
     }

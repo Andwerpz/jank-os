@@ -1,63 +1,335 @@
 #include <iostream>;
 #include <dirent>;
+#include <exec>;
+#include <wait>;
 
 //automated test runner
 
 //each test should have the filestructure:
 //<testname>
-//  src
-//    main.jank
-//    <other files>
-//  in.txt
+//  main.jank 
 //  out.txt
-//  args.txt
+//  <other files>
 
-//when a test is ran, all files under src are copied into ./sandbox, all .jank files are compiled 
-// and ./main is ran with arguments in args.txt
+//when a test is ran, all files under src are copied into ./sandbox/<testname>, all .jank files under the test root 
+// are compiled and ./main is ran
 //a test passes if all of the .jank files compile successfully, main returns with status 0, and
 // the output exactly matches out.txt
 
 //since we don't have a jank compiler that can run in the OS, the copying and compiling step will take
 // place in the hosting OS. 
 
+[__GLOBAL_FIRST__] u64 CWD_MAXLEN = $u64 4096;
+string getcwd() {
+    u8* buf = $u8* malloc(CWD_MAXLEN);
+    if(sys_getcwd(buf, CWD_MAXLEN) == 0x0) {
+        assert(0, "failed to get cwd");
+    }
+    string res = new string(buf);
+    free($void* buf, CWD_MAXLEN);
+    return res;
+}
+
+void chdir(string path) {
+    if(sys_chdir(path.jstr())) {
+        cout << "failed to chdir : " << path << "\n";
+        sys_exit(1);
+    }
+}
+
+//just looks for the last '.' in the filename and returns the suffix after that
+//if there is no '.', then an empty string is returned
+string get_file_ext(string filename) {
+    if(filename.size() == 0x0) return new string("");
+    for(i64 i = $i64 (filename.size() - 0x1); i >= $i64 0x0; i--) {
+        if(filename[i] == '.') return filename.substr($u64 i + 0x1);
+    }
+    return new string("");
+}
+
+//looks for the last '.' and returns the prefix
+//if there is no '.', then the full filename is returned
+string strip_file_ext(string filename) {
+    if(filename.size() == 0x0) return new string("");
+    for(i64 i = $i64 (filename.size() - 0x1); i >= $i64 0x0; i--) {
+        if(filename[i] == '.') return filename.substr(0x0, $u64 i);
+    }
+    return filename;
+}
+
+//args[0] should be the path
+//returns stdout of program
+string do_exec(vector<string> args) {
+    assert(args.size() >= $u64 1);
+    string path = args[0];
+    i32[2] pipe;
+    if(sys_pipe(@pipe)) {
+        cout << "sys_pipe failed\n";
+        sys_exit(1);
+    }
+
+    pid_t pid = sys_fork();
+    if(pid == $pid_t 0) {
+        //child
+        //replace stdout with write end of pipe
+        sys_dup2(pipe[1], STDOUT);
+
+        //close read end, child doesn't read
+        sys_close(pipe[0]);
+
+        //create argv
+        u8** argv = $u8** malloc(sizeof(u8*) * (args.size() + 0x1));
+        for(u64 i = 0x0; i < args.size(); i++) {
+            argv[i] = args[i].jstr();
+        }
+        argv[args.size()] = $u8* nullptr;
+
+        execvp(path.jstr(), argv);
+        cout << "exec " << path << " failed\n";
+        sys_exit(1);
+    }
+
+    //parent
+    //close write end, parent doesn't write
+    sys_close(pipe[1]);
+
+    //wait for child
+    i32* wstatus = $i32* malloc(sizeof(i32));
+    while(waitpid(pid, wstatus, WNOHANG) == $pid_t 0) {
+        //continue
+    }
+    if(wstatus[0] != 0) {
+        cout << "exec " << path << " returned with status " << wstatus[0] << "\n";
+        sys_exit(1);
+    }
+    free($void* wstatus, sizeof(i32));
+
+    //read what the child wrote
+    string ret;
+    istream pin = new istream(pipe[0]);
+    u8 c = pin.next_char();
+    while(!pin.eof()) {
+        ret.push_back(c);
+        c = pin.next_char();
+    }
+
+    //close read end
+    sys_close(pipe[0]);
+
+    return ret;
+}
+
+//gets names of all entries under CWD
+vector<string> get_cwd_dirnames() {
+    vector<string> ret;
+    dirstream* dir = opendir(".");
+    while(1) {
+        dirent* dent = readdir(dir);
+        if(dir->eof()) {
+            break;
+        }
+        if($void* dent == nullptr) {
+            assert(0, "get_cwd_dirnames() : error reading from dirstream");
+        }
+        string name = new string($u8* @(dent->d_name));
+        if(name == "." || name == "..") continue;
+        ret.push_back(name);
+    }
+    closedir(dir);
+    return ret;
+}
+
+//deletes and remakes the ./sandbox directory
+void clean_sandbox() {
+    vector<string> args;
+    chdir(basedir);
+
+    //delete sandbox
+    args.clear();
+    args.push_back(new string("rm"));
+    args.push_back(new string("-r"));
+    args.push_back(new string("./sandbox"));
+    do_exec(args);
+
+    //create new sandbox
+    args.clear();
+    args.push_back(new string("mkdir"));
+    args.push_back(new string("./sandbox"));
+    do_exec(args);
+}
+
+//assumes ./sandbox just contains tests
+//goes through and builds them all
+void build_sandbox() {
+    chdir(basedir + "/sandbox");
+    vector<string> tests = get_cwd_dirnames();
+
+    vector<string> args;
+
+    for(u64 i = 0x0; i < tests.size(); i++) {
+        cout << "Building " << tests[i] << "\n";
+        string name = tests[i];
+        chdir(basedir + "/sandbox/" + name);
+
+        //compile all .jank files under root
+        vector<string> root_files = get_cwd_dirnames();
+        for(u64 j = 0x0; j < root_files.size(); j++) {
+            if(get_file_ext(root_files[j]) == "jank") {
+                args.clear();
+                args.push_back(new string("jjc"));
+                args.push_back(new string(root_files[j]));
+                args.push_back(new string("-o"));
+                args.push_back(strip_file_ext(root_files[j]));
+                do_exec(args);
+            }
+        }
+    }
+}
+
+//runs a built test in the sandbox
+//returns the stdout of the test
+string run_test(string test) {
+    vector<string> args;
+    args.push_back(basedir + "/sandbox/" + test + "/main");
+    return do_exec(args);
+}
+
+vector<string> get_testlist() {
+    chdir(basedir + "/tests");
+    return get_cwd_dirnames();
+}
+
+//testing base directory
+string basedir; 
+
 i32 main(u64 argc, u8** argv) {
     if(argc == 0x1) {
         cout << "Usage : \n";
+        cout << "main build-tests\n";
         cout << "main run-tests\n";
+        cout << "main gen-test <testname>\n";
         return 1;
     }
 
     string mode = new string(argv[1]);
-    if(mode == "run-tests") {
-        //gather all tests
-        vector<string> tests;
-        {
-            dirstream* dir = opendir(".");
-            if($void* dir == nullptr) {
-                cout << "failed opening dirstream\n";
+    basedir = getcwd();
+    vector<string> args;
+    if(mode == "build-tests") {
+        //clean sandbox
+        clean_sandbox();
+
+        //get list of all tests
+        vector<string> tests = get_testlist();
+
+        //copy over tests into sandbox
+        chdir(basedir);
+        args.clear();
+        args.push_back(new string("cp"));
+        args.push_back(new string("-r"));
+        args.push_back(new string("./tests/."));
+        args.push_back(new string("./sandbox"));
+        do_exec(args);
+
+        //build tests
+        build_sandbox();
+    }
+    else if(mode == "run-tests") {
+        //get list of all tests
+        vector<string> tests = get_testlist();
+
+        //run them
+        i32 passed_all = 1;
+        for(u64 i = 0x0; i < tests.size(); i++) {
+            cout << "Running " << tests[i] << " : ";
+            string output = run_test(tests[i]);
+
+            //retrieve expected output
+            chdir(basedir + "/tests/" + tests[i]);
+            string expected;
+            i32 out_fd = sys_open("./out.txt", O_RDONLY, $mode_t 0);
+            if(out_fd < 0) {
+                cout << "opening ./out.txt failed\n";
                 return 1;
             }
-
-            while(!dir->eof()) {
-                dirent* dent = readdir(dir);
-                if($void* dent == nullptr) {
-                    break;
-                }
-                tests.push_back(new string($u8* @(dent->d_name)));
+            istream fin = new istream(out_fd);
+            u8 c = fin.next_char();
+            while(!fin.eof()) {
+                expected.push_back(c);
+                c = fin.next_char();
             }
-            if(dir->bad()) {
-                cout << "failed gathering tests\n";
-                return 1;
-            }
+            sys_close(out_fd);
 
-            closedir(dir);
+            //make sure actual matches expected
+            if(output == expected) {
+                cout << "PASSED\n";
+            }
+            else {
+                cout << "FAILED\n";
+                passed_all = 0;
+                break;
+            }
         }
 
-        cout << "TESTS : \n";
-        for(u64 i = 0x0; i < tests.size(); i++) cout << tests[i] << "\n";
+        if(passed_all) cout << "All tests passed\n";
+        else cout << "Tests failed\n";
     }
     else if(mode == "gen-test") {
-        //TODO
+        if(argc != 0x3) {
+            cout << "gen-test incorrect usage\n";
+            return 1;
+        }   
+        string testname = new string(argv[2]);
+
+        //get list of all tests
+        vector<string> tests = get_testlist();
+
+        //make sure test is not already existing
+        for(u64 i = 0x0; i < tests.size(); i++) {
+            if(tests[i] == testname) {
+                cout << "test already exists : " << testname << "\n";
+                return 1;
+            }
+        }
+
+        //clean sandbox
+        clean_sandbox();
+
+        //copy test into sandbox
+        chdir(basedir);
+        args.clear();
+        args.push_back(new string("cp"));
+        args.push_back(new string("-r"));
+        args.push_back(new string("./wip_test/."));
+        args.push_back(new string("./sandbox/") + testname);
+        do_exec(args);
+
+        //build test
+        build_sandbox();
+
+        //run test
+        string output = run_test(testname);
+
+        //copy test into tests
+        chdir(basedir);
+        args.clear();
+        args.push_back(new string("cp"));
+        args.push_back(new string("-r"));
+        args.push_back(new string("./wip_test/."));
+        args.push_back(new string("./tests/") + testname);
+        do_exec(args);
+
+        cout << "OUTPUT : \n" << output << "\n";
+
+        //save output
+        chdir(basedir + "/tests/" + testname);
+        i32 out_fd = sys_open("./out.txt", O_CREAT | O_WRONLY | O_APPEND, $mode_t 0o644);
+        if(out_fd < 0) {
+            cout << "opening ./out.txt failed\n";
+            return 1;
+        }
+        ostream fout = new ostream(out_fd);
+        fout << output;
+        sys_close(out_fd);
     }
     else {
         cout << "unknown mode : \"" << mode << "\"\n";

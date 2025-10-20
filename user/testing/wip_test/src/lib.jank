@@ -1,0 +1,4 @@
+
+void libfunc() {
+    cout << "libfunc test\n";
+}

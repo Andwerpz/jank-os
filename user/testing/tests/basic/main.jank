@@ -1,13 +1,10 @@
 #include <jstring>;
 #include <string>;
 #include <iostream>;
-#include <wait>;
 
-#include "src/lib.jank";
+i32 main(u64 argc, u8** argv) {
 
-i32 main() {
-
-    libfunc();
+    cout << "basic test yay\n";
 
     return 0;
 }

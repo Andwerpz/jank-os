@@ -3,6 +3,9 @@
 
 //right now, we kind of have to handle huge pages as BOOTBOOT initializes our kernel pagetable with hugepages.
 
+typedef u64 pte_t;              
+typedef pte_t* pagetable_t;
+
 [__GLOBAL_FIRST__] u64 PTE_PRESENT    = $u64 1 << $u64 0;
 [__GLOBAL_FIRST__] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;
 [__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;   //if set, user will be able to access

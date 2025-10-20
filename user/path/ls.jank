@@ -6,13 +6,18 @@
 i32 main() {
 
     dirstream* dir = opendir(".");
-    while(!dir->eof()) {
+    while(1) {
         dirent* dent = readdir(dir);
+        if(dir->eof()) {
+            break;
+        }
         if($void* dent == nullptr) {
             //error reading
             break;
         }
-        cout << ($u8* @(dent->d_name)) << "\n";
+        string name = new string($u8* @(dent->d_name));
+        if(name == "." || name == "..") continue;
+        cout << name << "\n";
     }
     closedir(dir);
     
