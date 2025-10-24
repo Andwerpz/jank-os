@@ -25,6 +25,7 @@ struct vfs_ops {
     //directory ops
     fn<i32(vfs_inode*, string, vfs_inode*&)> lookup;    //given inode and child name, find child. Should pass in malloc'd buffer
     fn<i32(vfs_inode*, vector<string>&)> get_children;  //find names of all children
+    fn<i32(vfs_inode*, string)> mkdir;                  //create a new child directory
 
     //file ops
     fn<i32(vfs_inode*, u8*, u64, u64, u64&)> read_file; //read some amount of bytes from a file with offset
@@ -52,6 +53,7 @@ struct vfs_inode {
     //fs specific
     i32 is_virtual;
     u64 node_sz;
+    u64 node_num;   //fs internal inode number
     void* node;     //if is not virtual, needs to be dealloced
     void* super;    //global context
     vfs_ops* ops;
@@ -69,12 +71,13 @@ struct vfs_inode {
 
         this.is_virtual = 1;
         this.node_sz = 0x0;
+        this.node_num = 0x0;
         this.node = _node;
         this.super = nullptr;
         this.ops = _ops;
     }
 
-    vfs_inode(string _name, u64 _type, u64 _node_sz, void* _node, void* _super, vfs_ops* _ops) {
+    vfs_inode(string _name, u64 _type, u64 _node_sz, u64 _node_num, void* _node, void* _super, vfs_ops* _ops) {
         this.parent = $vfs_inode* nullptr;
         this.name = _name;
         this.type = _type;
@@ -87,6 +90,7 @@ struct vfs_inode {
 
         this.is_virtual = 0;
         this.node_sz = _node_sz;
+        this.node_num = _node_num;
         this.node = _node;
         this.super = _super;
         this.ops = _ops;        
@@ -394,6 +398,56 @@ i32 vfs_get_children(string path, vector<string>& res) {
     return 0;
 }
 
+i32 vfs_mkdir(vfs_inode* node, string path) {
+    if(path.size() == 0x0) {
+        //can't have empty path
+        sout << "mkdir can\'t have empty path\n";
+        return 1;
+    }
+
+    //find last occurrence of '/'
+    string parent_path = new string("");
+    string child = path;
+    for(u64 i = path.size() - 0x1; ; i--) {
+        if(path[i] == '/') {
+            parent_path = path.substr(0x0, i + 0x1);
+            child = path.substr(i + 0x1);
+            break;
+        }
+        if(i == 0x0) break;
+    }
+    if(child.size() == 0x0) {
+        sout << "mkdir child must be non-empty\n";
+        return 1;
+    }
+    passert(child.size() != 0x0, "vfs_mkdir() : child should be non-empty");
+
+    //walk to parent
+    vfs_inode* parent;
+    if(vfs_walk(node, parent_path, parent)) return 1;
+
+    //make sure that parent is a directory
+    if(!parent->is_directory()) {
+        sout << "mkdir parent must be directory\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    //mkdir at parent
+    if(node->ops->mkdir#(parent, child)) {
+        sout << "mkdir# failed\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    vfs_dec_refcnt(parent);
+    return 0;
+}
+
+i32 vfs_mkdir(string path) {
+    return vfs_mkdir(VFS_ROOT, path);
+}
+
 i32 vfs_read_file(vfs_inode* node, u8* buf, u64 amt, u64 off, u64& res) {
     if(!node->is_file()) return 1;
     return node->ops->read_file#(node, buf, amt, off, res);
@@ -567,6 +621,13 @@ struct vfs_dentry {
         child->parent = @this;
         child->children.push_back(new pair<string, vfs_dentry*>(new string(".."), @this));
     }
+
+    i32 has_child(string name) {
+        for(u64 i = 0x0; i < this.children.size(); i++) {
+            if(this.children[i].first == name) return 1;
+        }
+        return 0;
+    }
 }
 
 vfs_ops* VFS_DENTRY_OPS;
@@ -577,6 +638,7 @@ void init_vfs_dentry() {
 
     VFS_DENTRY_OPS->lookup = #<vfs_dentry_lookup(vfs_inode*, string, vfs_inode*&)>;
     VFS_DENTRY_OPS->get_children = #<vfs_dentry_get_children(vfs_inode*, vector<string>&)>;
+    VFS_DENTRY_OPS->mkdir = #<vfs_dentry_mkdir(vfs_inode*, string)>;
 
     VFS_DENTRY_OPS->read_file = #<vfs_dentry_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_DENTRY_OPS->get_size = #<vfs_dentry_get_size(vfs_inode*, u64&)>;
@@ -586,13 +648,6 @@ i32 vfs_dentry_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
     vfs_dentry* node = $vfs_dentry* _node->node;
     passert(!node->check_magic(), "vfs_dentry_get_mount_root() : node magic not good");
     return 1;   //should never be mounting vfs onto something else
-}
-
-i32 vfs_dentry_is_directory(vfs_inode* _node, i32& ret) {
-    vfs_dentry* node = $vfs_dentry* _node->node;
-    passert(!node->check_magic(), "vfs_dentry_is_directory() : node magic not good");
-    ret = 1;    //dentries are always directories
-    return 0;
 }
 
 i32 vfs_dentry_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
@@ -622,10 +677,19 @@ i32 vfs_dentry_get_children(vfs_inode* _node, vector<string>& ret) {
     return 0;
 }
 
-i32 vfs_dentry_is_file(vfs_inode* _node, i32& ret) {
+i32 vfs_dentry_mkdir(vfs_inode* _node, string name) {
     vfs_dentry* node = $vfs_dentry* _node->node;
-    passert(!node->check_magic(), "vfs_dentry_is_file() : node magic not good");
-    ret = 0;    //dentries are not files
+    passert(!node->check_magic(), "vfs_dentry_get_children() : node magic not good");
+
+    if(node->has_child(name)) {
+        return 1;   //directory already has child with same name
+    }
+
+    //add child
+    vfs_dentry* child = $vfs_dentry* malloc(sizeof(vfs_dentry));
+    new (child) vfs_dentry();
+    node->add_child(name, child);
+
     return 0;
 }
 
@@ -711,7 +775,7 @@ i64 vfs_getdents(file_descriptor* fd, u8* buf, u64 amt) {
         //get child node
         vfs_inode* child_node;
         if(vfs_walk(node, children[pos], child_node)) {
-            passert(0, "vfs_getdents() : this lookup should not fail");
+            panic("vfs_getdents() : this lookup should not fail");
         }
 
         //write next dirent to buffer

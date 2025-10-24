@@ -1,0 +1,17 @@
+#include <jstring>;
+#include <string>;
+#include <iostream>;
+#include <wait>;
+#include <exec>;
+
+i32 main() {
+
+    u8** argv = $u8** malloc(sizeof(u8*) * 0x3);
+    argv[0] = "cat";
+    argv[1] = "./src/test.txt";
+    argv[2] = $u8* nullptr;
+    execvp(argv[0], argv);
+
+    cout << "should not be here\n";
+    return 1;
+}

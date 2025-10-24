@@ -357,6 +357,7 @@ i32 find_cmdslot(HBA_PORT* p) {
 }
 
 // startl + (starth << 32) is start sector address?
+// buf is physical address
 i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
     p->is = $u32 -1; // clear pending interrupt bits
 	i32 spin = 0; // Spin lock timeout counter
@@ -448,6 +449,7 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 	return 0;
 }
 
+// buf is physical address
 i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
     p->is = $u32 -1; // clear pending interrupt bits
 	i32 spin = 0; // Spin lock timeout counter

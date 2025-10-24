@@ -8,6 +8,9 @@ i32 main() {
     //make sure this is pid 1
     assert(sys_getpid() == $pid_t 1, "init process should have pid 1");
 
+    //change CWD to root
+    sys_chdir("/");
+
     //exec user shell
     pid_t pid = sys_fork();
     if(pid == $pid_t 0) {   //child

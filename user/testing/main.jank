@@ -189,6 +189,7 @@ void build_sandbox() {
 //runs a built test in the sandbox
 //returns the stdout of the test
 string run_test(string test) {
+    chdir(basedir + "/sandbox/" + test);   //make sure that CWD matches where the test executable is
     vector<string> args;
     args.push_back(basedir + "/sandbox/" + test + "/main");
     return do_exec(args);
@@ -199,14 +200,21 @@ vector<string> get_testlist() {
     return get_cwd_dirnames();
 }
 
+vector<string> get_sandbox_testlist() {
+    chdir(basedir + "/sandbox");
+    return get_cwd_dirnames();
+}
+
 //testing base directory
 string basedir; 
 
 i32 main(u64 argc, u8** argv) {
     if(argc == 0x1) {
         cout << "Usage : \n";
+        cout << "main clean-sandbox\n";
         cout << "main build-tests\n";
         cout << "main run-tests\n";
+        cout << "main run-wip\n";
         cout << "main gen-test <testname>\n";
         return 1;
     }
@@ -214,7 +222,10 @@ i32 main(u64 argc, u8** argv) {
     string mode = new string(argv[1]);
     basedir = getcwd();
     vector<string> args;
-    if(mode == "build-tests") {
+    if(mode == "clean-sandbox") {
+        clean_sandbox();
+    }
+    else if(mode == "build-tests") {
         //clean sandbox
         clean_sandbox();
 
@@ -272,6 +283,27 @@ i32 main(u64 argc, u8** argv) {
 
         if(passed_all) cout << "All tests passed\n";
         else cout << "Tests failed\n";
+    }
+    else if(mode == "run-wip") {
+        //clean sandbox
+        clean_sandbox();
+
+        //copy over wip test to sandbox under the name 'wip'
+        chdir(basedir);
+        args.clear();
+        args.push_back(new string("cp"));
+        args.push_back(new string("-r"));
+        args.push_back(new string("./wip_test/."));
+        args.push_back(new string("./sandbox/wip"));
+        do_exec(args);
+
+        //build tests
+        build_sandbox();
+
+        //run test
+        cout << "Running wip : \n";
+        string output = run_test(new string("wip"));
+        cout << output;
     }
     else if(mode == "gen-test") {
         if(argc != 0x3) {

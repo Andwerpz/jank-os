@@ -12,7 +12,7 @@ struct pipe {
     }
 
     pipe(pipe& other) {
-        passert(0, "pipe::pipe() : should never use copy constructor");
+        panic("pipe::pipe() : should never use copy constructor");
     }
 
     ~pipe() {
@@ -42,7 +42,7 @@ struct pipe_ref {
     i32 is_writer;
 
     pipe_ref() {
-        passert(0, "pipe_ref::pipe_ref() : should never use default constructor");
+        panic("pipe_ref::pipe_ref() : should never use default constructor");
     }
 
     pipe_ref(pipe* pipe, i32 is_writer) {
@@ -55,7 +55,7 @@ struct pipe_ref {
     }   
 
     pipe_ref(pipe_ref& other) {
-        passert(0, "pipe_ref::pipe_ref() : should never use copy constructor");
+        panic("pipe_ref::pipe_ref() : should never use copy constructor");
     }
 
     ~pipe_ref() {

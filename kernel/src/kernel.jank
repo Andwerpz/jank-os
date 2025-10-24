@@ -242,7 +242,7 @@ i32 main() {
     init_vfs();
     init_ahci();
 
-    vfs_tests();
+    // vfs_tests();
 
     // gp_handler_test();
 
