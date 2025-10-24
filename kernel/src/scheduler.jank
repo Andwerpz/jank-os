@@ -340,7 +340,7 @@ void init_scheduler() {
     sout << "start init scheduler\n";   
 
     //initialize init process
-    create_process(new string("/sys/init"));
+    create_process(new string("/bin/sys/init"));
 
     sout << "DONE CREATE INIT\n";
 

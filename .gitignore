@@ -4,6 +4,7 @@
 *.out
 .vscode
 drive_testing/*
-user/testing/sandbox/*
+user/home/testing/sandbox/*
+user/bin/*
 
 !kernel/trampoline.s

@@ -49,3 +49,16 @@ debug: disk drive
 clean:
 	rm -rf build 2>/dev/null || true
 	rm drive.img 
+
+# build user tests, boot the OS
+.PHONY: test
+test:
+	@set -e; \
+	echo "Building user tests…"; \
+	cd user/home/testing; \
+	make; \
+	./main build-tests; \
+	echo "Returning to repo root"; \
+	cd ../../../; \
+	echo "Booting OS via 'make normal' (QEMU)…"; \
+	$(MAKE) normal; \

@@ -152,6 +152,14 @@ struct ext2_inode {
     u32         dir_acl;                // In Ext2 version 0, this field is reserved. In version >= 1, Upper 32 bits of file size (if feature bit set) if it's a file, Directory ACL if it's a directory
     u32         fragment_block_addr;    // Block address of fragment
     u8[12]      ossv2;                  // Operating System Specific Value #2
+
+    i32 is_directory() {
+        return (this.mode & $u16 0xf000) == INODE_TYPE_DIR;
+    }
+
+    i32 is_file() {
+        return (this.mode & $u16 0xf000) == INODE_TYPE_FILE;
+    }
 }
 
 [__GLOBAL_FIRST__] u16 INODE_TYPE_FIFO          = $u16 0x1000; // FIFO
@@ -448,7 +456,7 @@ i32 ext2_alloc_inode_in_group(ext2_fs* fs, u32 group, u32& res) {
     i32 found = 0;
     u32 index = $u32 -1;
     for(u32 i = $u32 0x0; i < fs->sb->inodes_per_group; i++) {
-        if((($u8* bitmap_buf)[i / $u32 8] >> $u8 (i % $u32 8)) & $u8 1) {
+        if(bitmap_get_bit(bitmap_buf, $u64 i)) {
             continue;
         }
         found = 1;
@@ -475,7 +483,7 @@ i32 ext2_alloc_inode_in_group(ext2_fs* fs, u32 group, u32& res) {
 
     //do changes on local buffers
     new (inode) ext2_inode();                                               //zero out inode
-    ($u8* bitmap_buf)[index / $u32 8] |= ($u8 1 << $u8 (index % $u32 8));   //set reserved bit
+    bitmap_set_bit(bitmap_buf, $u64 index);                                 //set reserved bit
     gd->free_inodes_count --;                                               //decrement gd free inodes count
     sb->free_inodes_count --;                                               //decrement sb free inodes count
     //TODO update other sb metadata
@@ -598,7 +606,7 @@ i32 ext2_alloc_block_in_group(ext2_fs* fs, u32 group, u32& res) {
     i32 found = 0;
     u32 index = $u32 -1;
     for(u32 i = $u32 0x0; i < fs->sb->blocks_per_group; i++) {
-        if((($u8* bitmap_buf)[i / $u32 8] >> $u8 (i % $u32 8)) & $u8 1) {
+        if(bitmap_get_bit(bitmap_buf, $u64 i)) {
             continue;
         }
         found = 1;
@@ -621,7 +629,7 @@ i32 ext2_alloc_block_in_group(ext2_fs* fs, u32 group, u32& res) {
 
     //do changes on local buffers
     memset(block_buf, 0, PAGE_SIZE);                                        //zero out block
-    ($u8* bitmap_buf)[index / $u32 8] |= ($u8 1 << $u8 (index % $u32 8));   //set reserved bit
+    bitmap_set_bit(bitmap_buf, $u64 index);                                 //set reserved bit
     gd->free_blocks_count --;                                               //decrement gd free inodes count
     sb->free_blocks_count --;                                               //decrement sb free inodes count
     //TODO update other sb metadata
@@ -673,13 +681,176 @@ i32 ext2_alloc_block(ext2_fs* fs, u32& res) {
     return 1;
 }
 
-i32 ext2_dealloc_inode(ext2_fs* fs, u32 inode) {
-    panic("ext2_dealloc_inode() : not implemented");
-    return 1;
+//only deallocs the inode itself, not any attached blocks
+//should probably call ext2_dealloc_inode_blocks() before calling this one
+i32 ext2_dealloc_inode(ext2_fs* fs, u32 inode_num) {
+    passert(inode_num > $u32 0 && inode_num <= fs->sb->inodes_count, "ext2_dealloc_inode() : trying to dealloc inode out of range");
+
+    void* sb_buf = palloc();
+    void* gdt_buf = palloc();
+    void* bitmap_buf = palloc();
+
+    // inodes 1 indexed
+    u32 group = (inode_num - $u32 1) / fs->sb->inodes_per_group;
+    u32 index = (inode_num - $u32 1) % fs->sb->inodes_per_group;
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+
+    // read block that contains superblock
+    memset(sb_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, fs->sb_block, sb_buf)) {
+        sout << "Failed to read superblock\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get superblock
+    ext2_super_block* sb = $ext2_super_block* ($u64 sb_buf + $u64 fs->sb_offset);
+    passert(sb->magic == EXT2_SB_MAGIC, "ext2_dealloc_inode() : sb magic should line up");
+
+    // read gdt block that contains the group's descriptor struct
+    memset(gdt_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, gdt_buf)) {
+        sout << "Failed to read gdt\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get gd from gdt
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 gdt_buf + $u64 (group_offset % fs->block_size));
+
+    // read inode bitmap from gd
+    memset(bitmap_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, gd->inode_bitmap, bitmap_buf)) {
+        sout << "Failed to read inode bitmap\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // ensure inode is marked as allocated 
+    passert(bitmap_get_bit(bitmap_buf, $u64 index), "ext2_dealloc_inode() : inode should be marked as allocated");
+
+    // do changes on local buffers
+    bitmap_unset_bit(bitmap_buf, $u64 index);                               //unset reserved bit
+    gd->free_inodes_count ++;                                               //increment gd free inodes count
+    sb->free_inodes_count ++;                                               //increment sb free inodes count
+    //TODO change other sb metadata
+
+    //write changes back to disk
+    if(ext2_write_block(fs, gd->inode_bitmap, bitmap_buf)) {
+        panic("ext2_dealloc_inode() : failed to write bitmap buf while alloccing");
+    }
+    if(ext2_write_block(fs, group_block, gdt_buf)) {
+        panic("ext2_dealloc_inode() : failed to write gdt buf while alloccing");
+    }
+    if(ext2_write_block(fs, fs->sb_block, sb_buf)) {
+        panic("ext2_dealloc_inode() : failed to write sb buf while alloccing");
+    }
+
+    //refresh sb
+    if(ext2_refresh_sb(fs)) {
+        panic("ext2_dealloc_inode() : failed to refresh sb");
+    }
+
+    //free and done
+    pfree(sb_buf);
+    pfree(gdt_buf);
+    pfree(bitmap_buf);
+    return 0;
 }
 
+//only deallocs the block, doesn't do anything with the contents inside of the block
 i32 ext2_dealloc_block(ext2_fs* fs, u32 block) {
-    panic("ext2_dealloc_block() : not implemented");
+    passert(block < fs->sb->blocks_count, "ext2_dealloc_block() : trying to dealloc out of range block");
+
+    void* sb_buf = palloc();
+    void* gdt_buf = palloc();
+    void* bitmap_buf = palloc();
+
+    u32 group = block / fs->sb->blocks_per_group;
+    u32 index = block % fs->sb->blocks_per_group;
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+
+    // read block that contains superblock
+    memset(sb_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, fs->sb_block, sb_buf)) {
+        sout << "Failed to read superblock\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get superblock
+    ext2_super_block* sb = $ext2_super_block* ($u64 sb_buf + $u64 fs->sb_offset);
+    passert(sb->magic == EXT2_SB_MAGIC, "ext2_dealloc_block() : sb magic should line up");
+
+    // read gdt block that contains the group's descriptor struct
+    memset(gdt_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, gdt_buf)) {
+        sout << "Failed to read gdt\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get gd from gdt
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 gdt_buf + $u64 (group_offset % fs->block_size));
+
+    // read inode bitmap from gd
+    memset(bitmap_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, gd->block_bitmap, bitmap_buf)) {
+        sout << "Failed to read inode bitmap\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // ensure block is marked as allocated 
+    passert(bitmap_get_bit(bitmap_buf, $u64 index), "ext2_dealloc_block() : block should be marked as allocated");
+
+    // do changes on local buffers
+    bitmap_unset_bit(bitmap_buf, $u64 index);                               //unset reserved bit
+    gd->free_blocks_count ++;                                               //increment gd free blocks count
+    sb->free_blocks_count ++;                                               //increment sb free blocks count
+    //TODO change other sb metadata
+
+    //write changes back to disk
+    if(ext2_write_block(fs, gd->block_bitmap, bitmap_buf)) {
+        panic("ext2_dealloc_block() : failed to write bitmap buf while alloccing");
+    }
+    if(ext2_write_block(fs, group_block, gdt_buf)) {
+        panic("ext2_dealloc_block() : failed to write gdt buf while alloccing");
+    }
+    if(ext2_write_block(fs, fs->sb_block, sb_buf)) {
+        panic("ext2_dealloc_block() : failed to write sb buf while alloccing");
+    }
+
+    //refresh sb
+    if(ext2_refresh_sb(fs)) {
+        panic("ext2_dealloc_block() : failed to refresh sb");
+    }
+
+    //free and done
+    pfree(sb_buf);
+    pfree(gdt_buf);
+    pfree(bitmap_buf);
+    return 0;
+}
+
+//only deallocs the blocks attached to the inode, doesn't dealloc the inode itself
+//when this finishes, the inode should be in a valid state and have no attached blocks
+i32 ext2_dealloc_inode_blocks(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
+    panic("ext2_dealloc_inode_blocks() : not implemented");
     return 1;
 }
 
@@ -1091,6 +1262,123 @@ i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_i
     return 0;
 }
 
+//removes the directory entry pointing from the parent to the child
+//this does not touch the child, if the child is being reparented it still needs to modify its '..' entry itself
+i32 ext2_remove_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, u32 child_inode_num) {
+    panic("ext2_remove_directory_entry() : not implemented");
+    return 1;
+}
+
+//looks up a child within a parent directory, returns it and its inode number
+//expects ret to be preallocated
+//if the lookup fails in any way (read error, child doesn't exist), returns 1
+i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_inode* ret_node, u32& ret_node_num) {
+    passert(parent_inode->is_directory(), "ext2_lookup() : parent node must be directory");
+    
+    void* buf = palloc();
+    u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
+        if(block_num == $u32 0) break;
+        ext2_read_block(fs, block_num, buf);
+        
+        u32 offset = $u32 0;
+        while(offset < fs->block_size) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            if(dir->size == $u16 0) {
+                //this is an error
+                panic("ext2_lookup() : size of directory entry should be non-zero");
+            }
+            if(dir->inode != $u32 0 && child_name == new string($u8* @dir->name, $u64 dir->name_len)) {
+                //found child, read inode into memory
+                if(ext2_read_inode(fs, dir->inode, ret_node)) {
+                    //failed to read
+                    pfree(buf);
+                    return 1;
+                }
+
+                //set return inode num
+                ret_node_num = dir->inode;
+
+                pfree(buf);
+                return 0;
+            }
+            offset += $u32 dir->size;
+        }
+    }
+
+    return 1;
+}
+
+//same as lookup, but only returns the ext2_inode struct
+i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_inode* ret_node) {
+    u32 tmp;
+    return ext2_lookup(fs, parent_inode, child_name, ret_node, tmp);
+}
+
+// //same as lookup, but only returns the child inode number
+// i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, u32& ret_node_num) {
+//     passert(parent_inode->is_directory(), "ext2_lookup() : parent node must be directory");
+    
+//     void* buf = palloc();
+//     u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
+//     for(u32 i = $u32 0; i < block_count; i++) {
+//         u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
+//         if(block_num == $u32 0) break;
+//         ext2_read_block(fs, block_num, buf);
+        
+//         u32 offset = $u32 0;
+//         while(offset < fs->block_size) {
+//             ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+//             if(dir->size == $u16 0) {
+//                 //this is an error
+//                 panic("ext2_lookup() : size of directory entry should be non-zero");
+//             }
+//             if(dir->inode != $u32 0 && child_name == new string($u8* @dir->name, $u64 dir->name_len)) {
+//                 //set return inode num
+//                 ret_node_num = dir->inode;
+
+//                 pfree(buf);
+//                 return 0;
+//             }
+//             offset += $u32 dir->size;
+//         }
+//     }
+
+//     return 1;
+// }
+
+i32 ext2_dir_empty(ext2_fs* fs, ext2_inode* node, i32& ret) {
+    passert(node->is_directory(), "ext2_dir_empty() : node must be a directory");
+
+    void* buf = palloc();
+    u32 block_count = (node->size + fs->block_size - $u32 1) / fs->block_size;
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, node, i);
+        if(block_num == $u32 0) break;
+        ext2_read_block(fs, block_num, buf);
+        
+        u32 offset = $u32 0;
+        while(offset < fs->block_size) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            if(dir->size == $u16 0) {
+                //this is an error
+                panic("ext2_dir_empty() : found error, dir->size should be non-zero");
+            }
+            if(dir->inode != $u32 0) {
+                //found an entry, this is not empty
+                ret = 0;
+                return 0;
+            }
+            offset += $u32 dir->size;
+        }
+    }
+
+    //didn't find anything, this is empty
+    ret = 1;
+    return 0;
+}
+
 vfs_ops* VFS_EXT2_OPS;
 void init_ext2() {
     VFS_EXT2_OPS = $vfs_ops* malloc(sizeof(vfs_ops));
@@ -1099,7 +1387,9 @@ void init_ext2() {
 
     VFS_EXT2_OPS->lookup = #<ext2_lookup(vfs_inode*, string, vfs_inode*&)>;
     VFS_EXT2_OPS->get_children = #<ext2_get_children(vfs_inode*, vector<string>&)>;
+    VFS_EXT2_OPS->dir_empty = #<ext2_dir_empty(vfs_inode*, i32&)>;
     VFS_EXT2_OPS->mkdir = #<ext2_mkdir(vfs_inode*, string)>;
+    VFS_EXT2_OPS->rmdir = #<ext2_rmdir(vfs_inode*, string)>;
 
     VFS_EXT2_OPS->read_file = #<ext2_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_EXT2_OPS->get_size = #<ext2_get_size(vfs_inode*, u64&)>;
@@ -1140,46 +1430,26 @@ i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     passert(_node->is_directory(), "ext2_lookup() : only valid on directories");
+    passert(node->is_directory(), "ext2_lookup() : only valid on directories");
 
-    void* buf = palloc();
-    u32 block_count = (node->size + fs->block_size - $u32 1) / fs->block_size;
-    for(u32 i = $u32 0; i < block_count; i++) {
-        u32 block_num = ext2_traverse_block_map(fs, node, i);
-        if(block_num == $u32 0) break;
-        ext2_read_block(fs, block_num, buf);
-        
-        u32 offset = $u32 0;
-        while(offset < fs->block_size) {
-            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
-            if(dir->size == $u16 0) {
-                //this is an error
-                panic("ext2_lookup() : size of directory entry should be non-zero");
-            }
-            if(dir->inode != $u32 0 && child == new string($u8* @dir->name, $u64 dir->name_len)) {
-                //found child, alloc and read inode
-                ext2_inode* next_node = $ext2_inode* malloc(sizeof(ext2_inode));
-                if(ext2_read_inode(fs, dir->inode, next_node)) {
-                    pfree(buf);
-                    free($void* next_node, sizeof(ext2_inode));
-                    return 1;
-                }
-
-                ext2_construct_vfs_inode(child, dir->inode, fs, next_node, res);
-                pfree(buf);
-                return 0;
-            }
-            offset += $u32 dir->size;
-        }
+    //try to find child
+    ext2_inode* child_node = $ext2_inode* malloc(sizeof(ext2_inode));
+    u32 child_node_num;
+    if(ext2_lookup(fs, node, child, child_node, child_node_num)) {
+        free($void* child_node, sizeof(ext2_inode));
+        return 1;
     }
 
-    pfree(buf);
-    return 1;
+    //construct output and return
+    ext2_construct_vfs_inode(child, child_node_num, fs, child_node, res);
+    return 0;
 }
 
 i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     passert(_node->is_directory(), "ext2_get_children() : only valid on directories");
+    passert(node->is_directory(), "ext2_get_children() : only valid on directories");
 
     void* buf = palloc();
     u32 block_count = (node->size + fs->block_size - $u32 1) / fs->block_size;
@@ -1206,11 +1476,24 @@ i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
     return 0;
 }
 
+i32 ext2_dir_empty(vfs_inode* _node, i32& ret) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    passert(_node->is_directory(), "ext2_dir_empty() : only valid on directories");
+    passert(node->is_directory(), "ext2_dir_empty() : only valid on directories");
+
+    if(ext2_dir_empty(fs, node, ret)) {
+        return 1;
+    }
+    return 0;
+}
+
 i32 ext2_mkdir(vfs_inode* _node, string name) {
     ext2_inode* parent_inode = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
-    ext2_super_block* super = $ext2_super_block* fs->sb;
     passert(_node->is_directory(), "ext2_mkdir() : only valid on directories");
+    passert(parent_inode->is_directory(), "ext2_mkdir() : only valid on directories");
+
     u32 time_now = $u32 cmos_get_epoch_time_sec();
 
     //see if parent already has a child with this name
@@ -1291,10 +1574,57 @@ i32 ext2_mkdir(vfs_inode* _node, string name) {
     return 0;
 }
 
+i32 ext2_rmdir(vfs_inode* _node, string name) {
+    ext2_inode* parent_inode = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    passert(_node->is_directory(), "ext2_rmdir() : only valid on directories");
+    passert(parent_inode->is_directory(), "ext2_rmdir() : only valid on directories");
+
+    //retrieve child node
+    ext2_inode* child_node = $ext2_inode* malloc(sizeof(ext2_inode));
+    u32 child_inode_num;
+    if(ext2_lookup(fs, parent_inode, name, child_node, child_inode_num)) {
+        //failed to lookup child
+        free($void* child_node, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //ensure child is a directory
+    if(!child_node->is_directory()) {
+        free($void* child_node, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //ensure child is empty
+    i32 is_empty;
+    if(ext2_dir_empty(fs, child_node, is_empty)) {
+        free($void* child_node, sizeof(ext2_inode));
+        return 1;
+    }
+    if(is_empty) {
+        free($void* child_node, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //remove link from parent to child
+    if(ext2_remove_directory_entry(fs, parent_inode, $u32 _node->node_num, child_inode_num)) {
+        free($void* child_node, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //dealloc child
+    //TODO
+    panic("not implemented");
+
+    free($void* child_node, sizeof(ext2_inode));
+    return 0;
+}
+
 i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     passert(_node->is_file(), "ext2_read_file() : only valid on files");
+    passert(node->is_file(), "ext2_read_file() : only valid on files");
 
     u32 size = node->size;
 
@@ -1346,6 +1676,8 @@ i32 ext2_get_size(vfs_inode* _node, u64& res) {
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     passert(_node->is_file(), "ext2_get_size() : only valid on files");
+    passert(node->is_file(), "ext2_get_size() : only valid on files");
+
     res = $u64 node->size;
     return 0;
 }

@@ -281,7 +281,7 @@ process* create_process(string path) {
     argv[1] = $u8* nullptr;
 
     //have PATH in envp
-    u8* PATH = "PATH=/path";
+    u8* PATH = "PATH=/bin/path";
     u8** envp = $u8** malloc(sizeof(u8*) * 0x2);
     envp[0] = $u8* malloc(strlen(PATH) + 0x1);
     memcpy($void* envp[0], $void* PATH, strlen(PATH) + 0x1);

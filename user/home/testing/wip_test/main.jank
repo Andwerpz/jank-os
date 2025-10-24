@@ -1,0 +1,79 @@
+#include <iostream>;
+#include <assert>;
+#include <wait>;
+#include <dirent>;
+
+u64 count_dir_children(u8* path) {
+    dirstream* dir = opendir(path);
+    u64 dircnt = $u64 0;
+    while(1) {
+        dirent* dent = readdir(dir);
+        if(dir->eof()) {
+            break;
+        }
+        if($void* dent == nullptr) {
+            //error reading
+            break;
+        }
+        string name = new string($u8* @(dent->d_name));
+        if(name == "." || name == "..") continue;
+        dircnt ++;
+    }
+    closedir(dir);
+    return dircnt;
+}
+
+i32 main(u64 argc, u8** argv) {
+
+    sys_mkdir("testdir", $mode_t 0o755);
+
+    u64 n = $u64 64;
+    u8* buf = $u8* malloc(0x1000);
+    memcpy($void* buf, $void* "testdir/", $u64 8);
+    buf[8 + 16] = '\0';
+    for(u64 i = 0x0; i < n; i++) {
+        u64 mask = 0b1111;
+        for(i32 j = 15; j >= 0; j--){
+            u64 dig = (i & (mask << ($u64 j * $u64 4))) >> ($u64 j * $u64 4);
+            u8 c;
+            if(dig < $u64 10) c = '0' + $u8 dig;
+            else c = 'a' + $u8 dig - $u8 10;
+            buf[8 + 15 - j] = c;
+        }
+
+        if(sys_mkdir(buf, $mode_t 0o755)) {
+            cout << "mkdir failed\n";
+            return 1;
+        }
+    }
+    
+    u64 dircnt = count_dir_children("./testdir");
+    assert(dircnt == n);
+
+    u8* buf = $u8* malloc(0x1000);
+    memcpy($void* buf, $void* "testdir/", $u64 8);
+    buf[8 + 16] = '\0';
+    for(u64 i = 0x0; i < n; i++) {
+        u64 mask = 0b1111;
+        for(i32 j = 15; j >= 0; j--){
+            u64 dig = (i & (mask << ($u64 j * $u64 4))) >> ($u64 j * $u64 4);
+            u8 c;
+            if(dig < $u64 10) c = '0' + $u8 dig;
+            else c = 'a' + $u8 dig - $u8 10;
+            buf[8 + 15 - j] = c;
+        }
+
+        if(sys_rmdir(buf)) {
+            cout << "rmdir failed\n";
+            return 1;
+        }
+    }
+
+    dircnt = count_dir_children("./testdir");
+    assert(dircnt == 0x0);
+
+    free($void* buf, 0x1000);
+    cout << "test passed\n";
+    
+    return 0;
+}

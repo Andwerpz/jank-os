@@ -158,3 +158,17 @@ i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
     return 0;
 }
 
+//assumes that the lowest significant bits in each byte come first
+i32 bitmap_get_bit(void* bitmap, u64 index) {
+    return $i32 ((($u8* bitmap)[index / $u64 8] >> $u8 (index % $u64 8)) & $u8 1);
+}
+
+void bitmap_set_bit(void* bitmap, u64 index) {
+    ($u8* bitmap)[index / $u64 8] |= ($u8 1 << $u8 (index % $u64 8));
+}
+
+void bitmap_unset_bit(void* bitmap, u64 index) {
+    bitmap_set_bit(bitmap, index);
+    ($u8* bitmap)[index / $u64 8] ^= ($u8 1 << $u8 (index % $u64 8));
+}
+

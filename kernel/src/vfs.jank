@@ -25,7 +25,9 @@ struct vfs_ops {
     //directory ops
     fn<i32(vfs_inode*, string, vfs_inode*&)> lookup;    //given inode and child name, find child. Should pass in malloc'd buffer
     fn<i32(vfs_inode*, vector<string>&)> get_children;  //find names of all children
+    fn<i32(vfs_inode*, i32&)> dir_empty;                //tells you if the directory is empty
     fn<i32(vfs_inode*, string)> mkdir;                  //create a new child directory
+    fn<i32(vfs_inode*, string)> rmdir;                  //remove a child directory. Child directory must be empty
 
     //file ops
     fn<i32(vfs_inode*, u8*, u64, u64, u64&)> read_file; //read some amount of bytes from a file with offset
@@ -604,6 +606,12 @@ struct vfs_dentry {
         this.parent = parent;
     }
 
+    ~vfs_dentry() {
+        passert(this.parent == nullptr, "~vfs_dentry() : parent should be nullptr");
+        passert(this.children.size() == 0x0, "~vfs_dentry() : should have no children");
+        passert(!this.check_magic(), "~vfs_dentry() : magic should be good");
+    }
+
     void init_magic() {
         this.magic[0] = 'D';
         this.magic[1] = 'E';
@@ -622,6 +630,22 @@ struct vfs_dentry {
         child->children.push_back(new pair<string, vfs_dentry*>(new string(".."), @this));
     }
 
+    void remove_child(string name) {
+        for(u64 i = 0x0; i < this.children.size(); i++) {
+            if(this.children[i].first == name) {
+                vfs_dentry* child = this.children[i].second;
+                passert(child->children.size() == 0x0, "vfs_dentry::remove_child() : child should be empty");
+
+                child->parent = $vfs_dentry* nullptr;
+                child->~();
+                this.children.erase(i);
+
+                return;
+            }
+        }
+        panic("vfs_dentry::remove_child() : child should always exist");
+    }
+
     i32 has_child(string name) {
         for(u64 i = 0x0; i < this.children.size(); i++) {
             if(this.children[i].first == name) return 1;
@@ -638,7 +662,9 @@ void init_vfs_dentry() {
 
     VFS_DENTRY_OPS->lookup = #<vfs_dentry_lookup(vfs_inode*, string, vfs_inode*&)>;
     VFS_DENTRY_OPS->get_children = #<vfs_dentry_get_children(vfs_inode*, vector<string>&)>;
+    VFS_DENTRY_OPS->dir_empty = #<vfs_dentry_dir_empty(vfs_inode*, i32&)>;
     VFS_DENTRY_OPS->mkdir = #<vfs_dentry_mkdir(vfs_inode*, string)>;
+    VFS_DENTRY_OPS->rmdir = #<vfs_dentry_rmdir(vfs_inode*, string)>;
 
     VFS_DENTRY_OPS->read_file = #<vfs_dentry_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_DENTRY_OPS->get_size = #<vfs_dentry_get_size(vfs_inode*, u64&)>;
@@ -677,9 +703,17 @@ i32 vfs_dentry_get_children(vfs_inode* _node, vector<string>& ret) {
     return 0;
 }
 
+i32 vfs_dentry_dir_empty(vfs_inode* _node, i32& ret) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    passert(!node->check_magic(), "vfs_dentry_dir_empty() : node magic not good");
+
+    ret = node->children.size() == 0x0;
+    return 0;
+}
+
 i32 vfs_dentry_mkdir(vfs_inode* _node, string name) {
     vfs_dentry* node = $vfs_dentry* _node->node;
-    passert(!node->check_magic(), "vfs_dentry_get_children() : node magic not good");
+    passert(!node->check_magic(), "vfs_dentry_mkdir() : node magic not good");
 
     if(node->has_child(name)) {
         return 1;   //directory already has child with same name
@@ -691,6 +725,32 @@ i32 vfs_dentry_mkdir(vfs_inode* _node, string name) {
     node->add_child(name, child);
 
     return 0;
+}
+
+i32 vfs_dentry_rmdir(vfs_inode* _node, string name) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    passert(!node->check_magic(), "vfs_dentry_rmdir() : node magic not good");
+
+    for(u64 i = 0x0; i < node->children.size(); i++) {
+        if(node->children[i].first == name) {
+            i32 is_empty;
+            if(vfs_dentry_dir_empty(_node, is_empty)) {
+                panic("vfs_dentry_rmdir() : this should not fail");
+            }
+            if(!is_empty) {
+                //can't rm empty dir
+                return 1;
+            }
+
+            //remove the child
+            node->remove_child(name);
+
+            return 0;
+        }
+    }
+
+    //could not find child
+    return 1;
 }
 
 i32 vfs_dentry_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
