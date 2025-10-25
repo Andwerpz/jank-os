@@ -53,7 +53,8 @@ struct vfs_inode {
     vfs_inode* mount_root;  //root of mounted fs
 
     //fs specific
-    i32 is_virtual;
+    i32 is_virtual; //currently only true for vfs_dentry 
+    i32 is_root;    //if this is on, then this node is either root of mounted fs or root of entire fs
     u64 node_sz;
     u64 node_num;   //fs internal inode number
     void* node;     //if is not virtual, needs to be dealloced
@@ -72,6 +73,7 @@ struct vfs_inode {
         this.mount_root = $vfs_inode* nullptr;
 
         this.is_virtual = 1;
+        this.is_root = 0;
         this.node_sz = 0x0;
         this.node_num = 0x0;
         this.node = _node;
@@ -91,6 +93,7 @@ struct vfs_inode {
         this.mount_root = $vfs_inode* nullptr;
 
         this.is_virtual = 0;
+        this.is_root = 0;
         this.node_sz = _node_sz;
         this.node_num = _node_num;
         this.node = _node;
@@ -164,6 +167,7 @@ void init_vfs() {
         VFS_ROOT = $vfs_inode* malloc(sizeof(vfs_inode));
         new (VFS_ROOT) vfs_inode(new string(""), DT_DIR, $void* root_dentry, VFS_DENTRY_OPS);
         vfs_inc_refcnt(VFS_ROOT);
+        VFS_ROOT->is_root = 1;
     }
 
     init_vfs_fd_ops();
@@ -379,8 +383,9 @@ i32 vfs_mount(string path, void* super, vfs_ops* ops) {
     walk_res->is_mountpoint = 1;
     walk_res->mount_super = super;
     walk_res->mount_root = mount_root;
+    mount_root->is_root = 1;
 
-    vfs_inc_refcnt(mount_root);
+    vfs_inc_refcnt(mount_root);    
     vfs_dec_refcnt(walk_res);
 
     return 0;
@@ -398,6 +403,11 @@ i32 vfs_get_children(string path, vector<string>& res) {
     vfs_get_children(root, res);
     vfs_dec_refcnt(root);
     return 0;
+}
+
+i32 vfs_dir_empty(vfs_inode* node, i32& res) {
+    if(!node->is_directory()) return 1;
+    return node->ops->dir_empty#(node, res);
 }
 
 i32 vfs_mkdir(vfs_inode* node, string path) {
@@ -448,6 +458,78 @@ i32 vfs_mkdir(vfs_inode* node, string path) {
 
 i32 vfs_mkdir(string path) {
     return vfs_mkdir(VFS_ROOT, path);
+}
+
+i32 vfs_rmdir(vfs_inode* node, string path) {
+    //walk to child
+    vfs_inode* child;
+    if(vfs_walk(node, path, child)) {
+        //walk failed
+        sout << "RMDIR WALK FAILED\n";
+        return 1;
+    }
+
+    //make sure child isn't root of a fs
+    if(child->is_root) {
+        //can't rm roots
+        sout << "RMDIR CANT RM ROOTS\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //make sure child is a directory
+    if(!child->is_directory()) {
+        //this is not a directory
+        sout << "RMDIR NOT A DIRECTORY\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //make sure there's nothing else referencing child
+    if(child->subt_refcnt > 0x1) {
+        //there's something else, can't rm
+        sout << "RMDIR CANT REMOVE REFERENCED DIR\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //make sure child is empty
+    i32 is_empty;
+    if(vfs_dir_empty(child, is_empty)) {
+        //dir empty check failed
+        sout << "RMDIR EMPTY CHECK FAILED\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+    if(!is_empty) {
+        //must be empty to rm
+        sout << "RMDIR NOT EMPTY\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //get parent
+    passert(child->parent != nullptr, "vfs_rmdir() : at this point, child should always have a parent");
+    vfs_inode* parent = child->parent;
+
+    //do rm
+    vfs_inc_refcnt(parent);
+    string child_name = child->name;
+    vfs_dec_refcnt(child);
+    if(parent->ops->rmdir#(parent, child_name)) {
+        //rm failed
+        sout << "RMDIR RM FAILED\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+    passert(parent->get_child(child_name) == nullptr, "vfs_rmdir() : child should be removed from vfs tree");
+
+    vfs_dec_refcnt(parent);
+    return 0;
+}
+
+i32 vfs_rmdir(string path) {
+    return vfs_rmdir(VFS_ROOT, path);
 }
 
 i32 vfs_read_file(vfs_inode* node, u8* buf, u64 amt, u64 off, u64& res) {

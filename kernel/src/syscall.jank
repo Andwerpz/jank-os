@@ -51,6 +51,7 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_GETCWD           = $u64 79;
 [__GLOBAL_FIRST__] u64 SYS_CHDIR            = $u64 80;
 [__GLOBAL_FIRST__] u64 SYS_MKDIR            = $u64 83;
+[__GLOBAL_FIRST__] u64 SYS_RMDIR            = $u64 84;
 [__GLOBAL_FIRST__] u64 SYS_GETDENTS64       = $u64 217;
 [__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
 
@@ -200,6 +201,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_PIPE)             ans = $u64 sys_pipe($i32[2]* arg1);
     else if(sys_id == SYS_DUP2)             ans = $u64 sys_dup2($i32 arg1, $i32 arg2);
     else if(sys_id == SYS_MKDIR)            ans = $u64 sys_mkdir($u8* arg1, $mode_t arg2);
+    else if(sys_id == SYS_RMDIR)            ans = $u64 sys_rmdir($u8* arg1);
 
     else {
         pt_switch_to_kernel();
@@ -1024,6 +1026,43 @@ i32 sys_mkdir(u8* path, mode_t mode) {
 
     if(mkdir_status) {
         //failed to mkdir
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+i32 sys_rmdir(u8* path) {
+    u64 path_len = strlen(path);
+    if(path_len == 0x0) {
+        //path cannot be size 0
+        return -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    process* proc = get_cur_proc();
+    vfs_inode* cwd = proc->cwd;
+    i32 rmdir_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        rmdir_status = vfs_rmdir(new string(kpath));
+    }
+    else {
+        //relative path
+        rmdir_status = vfs_rmdir(cwd, new string(kpath));
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(rmdir_status) {
+        //failed to rmdir
         pt_switch(user_pt);
         return -ERR_UNKNOWN;
     }

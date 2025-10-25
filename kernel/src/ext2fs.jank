@@ -85,6 +85,9 @@ struct ext2_super_block {
     u8[788] padding;                    // (Unused)
 }
 
+[__GLOBAL_FIRST__] u32 EXT2_SECTOR_SIZE     = $u32 512;
+[__GLOBAL_FIRST__] u16 EXT2_SB_MAGIC        = $u16 0xef53;
+
 [__GLOBAL_FIRST__] u16 FS_STATE_CLEAN       = $u16 1; // File system is clean
 [__GLOBAL_FIRST__] u16 FS_STATE_ERROR       = $u16 2; // File system has errors
 
@@ -141,6 +144,8 @@ struct ext2_inode {
     u16         gid;                    // Group ID 
     u16         links_count;            // Count of hard links (directory entries) to this inode. When this reaches 0, the data blocks are marked as unallocated.
     u32         sectors;                // Count of disk sectors (not Ext2 blocks) in use by this inode, not counting the actual inode structure nor directory entries linking to the inode. 
+                                        // this includes indirect mapping blocks 
+                                        // note that the size of the 'disk sectors' in question is fixed at 512 bytes, regardless of the actual size of sector in the underlying disk
     u32         flags;                  // Flags (see below)
     u32         ossv1;                  // Operating System Specific value #1
     u32[12]     direct_block_ptr;       // Direct Block Pointer 0-11
@@ -284,10 +289,6 @@ void ext2_print_dir_entry(ext2_dir_entry* dir) {
     sout << "Name: "                        << new string($u8* @dir->name, $u64 dir->name_len) << "\n";
     sout << "========================\n\n";
 }
-
-// For now, ill only support 1024 block size. hehe
-[__GLOBAL_FIRST__] u32 EXT2_BLOCK_SIZE = $u32 1024;
-[__GLOBAL_FIRST__] u16 EXT2_SB_MAGIC = $u16 0xef53;
 
 u32 ext2_block_to_sector(u32 block, u32 block_size) {
     return (block * block_size) / AHCI_SECTOR_SIZE;
@@ -767,14 +768,15 @@ i32 ext2_dealloc_inode(ext2_fs* fs, u32 inode_num) {
 
 //only deallocs the block, doesn't do anything with the contents inside of the block
 i32 ext2_dealloc_block(ext2_fs* fs, u32 block) {
-    passert(block < fs->sb->blocks_count, "ext2_dealloc_block() : trying to dealloc out of range block");
+    passert(block >= fs->sb->first_data_block && block < fs->sb->first_data_block + fs->sb->blocks_count, "ext2_dealloc_block() : trying to dealloc out of range block");
 
     void* sb_buf = palloc();
     void* gdt_buf = palloc();
     void* bitmap_buf = palloc();
 
-    u32 group = block / fs->sb->blocks_per_group;
-    u32 index = block % fs->sb->blocks_per_group;
+    // blocks are indexed in groups starting from the first data block
+    u32 group = (block - fs->sb->first_data_block) / fs->sb->blocks_per_group;
+    u32 index = (block - fs->sb->first_data_block) % fs->sb->blocks_per_group;
     u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
     u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
 
@@ -850,8 +852,126 @@ i32 ext2_dealloc_block(ext2_fs* fs, u32 block) {
 //only deallocs the blocks attached to the inode, doesn't dealloc the inode itself
 //when this finishes, the inode should be in a valid state and have no attached blocks
 i32 ext2_dealloc_inode_blocks(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
-    panic("ext2_dealloc_inode_blocks() : not implemented");
-    return 1;
+    // entries per indirect block
+    u32 B = fs->block_size / $u32 4; 
+
+    // direct
+    for(u64 i = 0x0; i < $u64 12; i++) {
+        if(inode->direct_block_ptr[i] != $u32 0) {
+            if(ext2_dealloc_block(fs, inode->direct_block_ptr[i])) {
+                panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+            }
+            inode->direct_block_ptr[i] = $u32 0;
+        }
+    }
+
+    // singly
+    if(inode->singly_ind_block_ptr != $u32 0) {
+        void* singly_ind_block = palloc();
+        if(ext2_read_block(fs, inode->singly_ind_block_ptr, singly_ind_block)) {
+            panic("ext2_dealloc_inode_blocks() : failed to read singly ind block");
+        }
+        for(u32 i = $u32 0; i < B; i++) {
+            u32 block_ptr = ($u32* singly_ind_block)[i];
+            if(ext2_dealloc_block(fs, block_ptr)) {
+                panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+            }
+        }
+        if(ext2_dealloc_block(fs, inode->singly_ind_block_ptr)) {
+            panic("ext2_dealloc_inode_blocks() : failed to dealloc singly ind block");
+        }
+        inode->singly_ind_block_ptr = $u32 0;
+        pfree(singly_ind_block);
+    }   
+
+    // doubly
+    if(inode->doubly_ind_block_ptr != $u32 0) {
+        void* doubly_ind_block = palloc();
+        void* singly_ind_block = palloc();
+        if(ext2_read_block(fs, inode->doubly_ind_block_ptr, doubly_ind_block)) {
+            panic("ext2_dealloc_inode_blocks() : failed to read doubly ind block");
+        }
+        for(u32 j = $u32 0; j < B; j++) {
+            u32 singly_ind_block_ptr = ($u32* doubly_ind_block)[j];
+            if(singly_ind_block_ptr != $u32 0) {
+                if(ext2_read_block(fs, singly_ind_block_ptr, singly_ind_block)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to read singly ind block");
+                }
+                for(u32 i = $u32 0; i < B; i++) {
+                    u32 block_ptr = ($u32* singly_ind_block)[i];
+                    if(ext2_dealloc_block(fs, block_ptr)) {
+                        panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+                    }
+                }
+                if(ext2_dealloc_block(fs, singly_ind_block_ptr)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to dealloc singly ind block");
+                }
+            }
+        }
+        if(ext2_dealloc_block(fs, inode->doubly_ind_block_ptr)) {
+            panic("ext2_dealloc_inode_blocks() : failed to dealloc doubly ind block");
+        }
+        inode->doubly_ind_block_ptr = $u32 0;
+        pfree(singly_ind_block);
+        pfree(doubly_ind_block);
+    }
+
+    // triply
+    if(inode->triply_ind_block_ptr != $u32 0) {
+        void* triply_ind_block = palloc();
+        void* doubly_ind_block = palloc();
+        void* singly_ind_block = palloc();
+        if(ext2_read_block(fs, inode->triply_ind_block_ptr, triply_ind_block)) {
+            panic("ext2_dealloc_inode_blocks() : failed to read triply ind block");
+        }
+        for(u32 k = $u32 0; k < B; k++) {
+            u32 doubly_ind_block_ptr = ($u32* triply_ind_block)[k];
+            if(doubly_ind_block_ptr != $u32 0) {
+                if(ext2_read_block(fs, doubly_ind_block_ptr, doubly_ind_block)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to read doubly ind block");
+                }
+                for(u32 j = $u32 0; j < B; j++) {
+                    u32 singly_ind_block_ptr = ($u32* doubly_ind_block)[j];
+                    if(singly_ind_block_ptr != $u32 0) {
+                        if(ext2_read_block(fs, singly_ind_block_ptr, singly_ind_block)) {
+                            panic("ext2_dealloc_inode_blocks() : failed to read singly ind block");
+                        }
+                        for(u32 i = $u32 0; i < B; i++) {
+                            u32 block_ptr = ($u32* singly_ind_block)[i];
+                            if(ext2_dealloc_block(fs, block_ptr)) {
+                                panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+                            }
+                        }
+                        if(ext2_dealloc_block(fs, singly_ind_block_ptr)) {
+                            panic("ext2_dealloc_inode_blocks() : failed to dealloc singly ind block");
+                        }
+                    }
+                }
+                if(ext2_dealloc_block(fs, doubly_ind_block_ptr)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to dealloc doubly ind block");
+                }
+            }
+        }
+        if(ext2_dealloc_block(fs, inode->triply_ind_block_ptr)) {
+            panic("ext2_dealloc_inode_blocks() : failed to dealloc triply ind block");
+        }
+        inode->triply_ind_block_ptr = $u32 0;
+        pfree(singly_ind_block);
+        pfree(doubly_ind_block);
+        pfree(triply_ind_block);
+    }
+
+    // update inode
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+    inode->size = $u32 0;
+    inode->sectors = $u32 0;
+    inode->atime = time_now;
+    inode->mtime = time_now;
+    if(ext2_write_inode(fs, inode, inode_num)) {
+        panic("ext2_dealloc_inode_blocks() : failed to write inode");
+    }
+
+    return 0;
 }
 
 //loads an inode from disk into memory
@@ -963,6 +1083,7 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
 
         //update and write back
         inode->direct_block_ptr[lblock] = pblock;
+        inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
         if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
 
         sout << "DIRECT MAPPED : " << lblock << "\n";
@@ -973,11 +1094,13 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
 
     // singly
     if(lblock < B) {
+        //do we need to allocate singly indirect block
         if(inode->singly_ind_block_ptr == $u32 0) {
             //alloc singly indirect block
             if(ext2_alloc_block(fs, inode->singly_ind_block_ptr)) panic("ext2_map_block() : failed to alloc singly indirect block");
             
             //update inode
+            inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
             if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
         }
 
@@ -994,6 +1117,7 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
 
         //update and write back 
         ($u32* buf)[lblock] = pblock;   
+        inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
         if(ext2_write_block(fs, inode->singly_ind_block_ptr, buf)) panic("ext2_map_block() : failed to write singly indirect block");
 
         sout << "SINGLY INDIRECT MAPPED\n";
@@ -1005,11 +1129,13 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
 
     // doubly
     if(lblock < B * B) {
+        //do we need to map doubly indirect block
         if(inode->doubly_ind_block_ptr == $u32 0) {
             //alloc doubly indirect block
             if(ext2_alloc_block(fs, inode->doubly_ind_block_ptr)) panic("ext2_map_block() : failed to alloc doubly indirect block");
 
             //update node
+            inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
             if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
         }
 
@@ -1019,11 +1145,13 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
         memset(buf, 0, PAGE_SIZE);
         if(ext2_read_block(fs, doubly_ind_block, buf)) panic("ext2_map_block() : failed to read doubly indirect block");
 
+        //do we need to map singly indirect block
         if(($u32* buf)[lblock / B] == $u32 0) {
             //alloc singly indirect block
             if(ext2_alloc_block(fs, ($u32* buf)[lblock / B])) panic("ext2_map_block() : failed to alloc singly indirect block");
 
             //update block
+            inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
             if(ext2_write_block(fs, doubly_ind_block, buf)) panic("ext2_map_block() : failed to write doubly indirect block");
         }
         
@@ -1041,6 +1169,7 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
 
         //update and write back
         ($u32* buf)[lblock] = pblock;
+        inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
         if(ext2_write_block(fs, singly_ind_block, buf)) panic("ext2_map_block() : failed to write singly indirect block");
 
         sout << "DOUBLY INDIRECT MAPPED\n";
@@ -1062,6 +1191,7 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
 }
 
 //gets block number within file
+//TODO if block is not mapped, return block 0
 u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index) {
     // entries per indirect block
     u32 B = fs->block_size / $u32 4; 
@@ -1141,15 +1271,13 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
 //the child still needs to add an entry pointing to the parent
 i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, u32 child_inode_num, string child_name) {
     //parent has to be a directory
-    if((parent_inode->mode & $u16 0xf000) != INODE_TYPE_DIR) {
-        panic("ext2_add_directory_entry() : parent_inode must be directory");
-    }
+    passert(parent_inode->is_directory(), "ext2_add_directory_entry() : parent inode must be directory");
 
     //add directory entry to parent
     {
         //see if there is existing space where we can place it
-        i32 found = 0;
         void* buf = palloc();
+        i32 found = 0;
         u32 child_entry_size = (($u32 8 + $u32 child_name.size() + $u32 3) / $u32 4) * $u32 4;
         u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
 
@@ -1171,11 +1299,10 @@ i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_i
                     //see if there's enough space here
                     u32 cur_ideal_size = (($u32 8 + $u32 dir->name_len + $u32 3) / $u32 4) * $u32 4;
                     if($u32 dir->size - cur_ideal_size >= child_entry_size) {
-                        sout << "FOUND ENTRY WITH ENOUGH SPACE : " << dir->size << " " << cur_ideal_size << " " << new string($u8* @dir->name, $u64 dir->name_len) << "\n";
+                        sout << "FOUND ENTRY WITH ENOUGH SPACE : " << dir->size << " " << cur_ideal_size << " " << child_entry_size << " " << new string($u8* @dir->name, $u64 dir->name_len) << " " << block_num << "\n";
 
                         //yes, place it here. create new entry
                         ext2_dir_entry* ndir = $ext2_dir_entry* ($u64 dir + $u64 cur_ideal_size);
-                        new (ndir) ext2_dir_entry();
                         ndir->inode = child_inode_num;
                         ndir->size = dir->size - $u16 cur_ideal_size;
                         ndir->name_len = $u8 child_name.size();
@@ -1236,15 +1363,15 @@ i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_i
             }
 
             //map block to parent
-            if(ext2_map_block(fs, parent_inode, child_inode_num, new_block, block_count)) {
+            if(ext2_map_block(fs, parent_inode, parent_inode_num, new_block, block_count)) {
                 panic("ext2_add_directory_entry() : failed to map new directory block to parent");
             }
 
             //update parent metadata
             parent_inode->size += fs->block_size;
-            parent_inode->sectors += fs->block_size / AHCI_SECTOR_SIZE;
+            parent_inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
 
-            sout << "ALLOC\'D NEW BLOCK\n";
+            sout << "ALLOC\'D NEW BLOCK : " << new_block << "\n";
         }
 
         pfree(buf);
@@ -1265,8 +1392,70 @@ i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_i
 //removes the directory entry pointing from the parent to the child
 //this does not touch the child, if the child is being reparented it still needs to modify its '..' entry itself
 i32 ext2_remove_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, u32 child_inode_num) {
-    panic("ext2_remove_directory_entry() : not implemented");
-    return 1;
+    //parent has to be directory
+    passert(parent_inode->is_directory(), "ext2_remove_directory_entry() : parent inode must be directory");
+
+    //remove entry from parent
+    {
+        void* buf = palloc();
+        i32 found = 0;
+        u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
+
+        for(u32 i = $u32 0; i < block_count; i++) {
+            u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
+            if(block_num == $u32 0) break;
+            if(ext2_read_block(fs, block_num, buf)) {
+                panic("ext2_remove_directory_entry() : failed to read parent directory block");
+            }
+            
+            u32 offset = $u32 0;
+            ext2_dir_entry* prev = $ext2_dir_entry* nullptr;
+            while(offset < fs->block_size) {
+                ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+                if(dir->size == $u16 0) {
+                    //this is an error
+                    panic("ext2_remove_directory_entry() : found error, dir->size should be non-zero");
+                }
+                if(dir->inode != $u32 0 && dir->inode == child_inode_num) {
+                    //we've found it, mark entry as unused
+                    dir->inode = $u32 0;
+                    if(offset != $u32 0) {
+                        //merge with previous dir entry
+                        passert(prev != nullptr, "ext2_remove_directory_entry() : should\'ve already populated prev by now");
+                        prev->size += dir->size;
+                        sout << "MERGING WITH PREV ENTRY : " << prev->size << " " << dir->size << "\n";
+                    }
+                    
+                    found = 1;
+                    break;
+                }
+                offset += $u32 dir->size;
+                prev = dir;
+            }
+
+            if(found) {
+                //update block and break
+                if(ext2_write_block(fs, block_num, buf)) {
+                    panic("ext2_remove_directory_entry() : failed to write parent directory block");
+                }
+                break;
+            }
+        }
+
+        passert(found, "ext2_remove_directory_entry() : we must be able to find the directory entry");
+        pfree(buf);
+    }
+
+    //update parent inode
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+    parent_inode->links_count --;
+    parent_inode->atime = time_now;
+    parent_inode->mtime = time_now;
+    if(ext2_write_inode(fs, parent_inode, parent_inode_num)) {
+        panic("ext2_remove_directory_entry() : failed write parent inode");
+    }
+
+    return 0;
 }
 
 //looks up a child within a parent directory, returns it and its inode number
@@ -1305,6 +1494,7 @@ i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_i
             }
             offset += $u32 dir->size;
         }
+        passert(offset == fs->block_size, "ext2_lookup() : offset must end exactly at block end");
     }
 
     return 1;
@@ -1316,38 +1506,7 @@ i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_i
     return ext2_lookup(fs, parent_inode, child_name, ret_node, tmp);
 }
 
-// //same as lookup, but only returns the child inode number
-// i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, u32& ret_node_num) {
-//     passert(parent_inode->is_directory(), "ext2_lookup() : parent node must be directory");
-    
-//     void* buf = palloc();
-//     u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
-//     for(u32 i = $u32 0; i < block_count; i++) {
-//         u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
-//         if(block_num == $u32 0) break;
-//         ext2_read_block(fs, block_num, buf);
-        
-//         u32 offset = $u32 0;
-//         while(offset < fs->block_size) {
-//             ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
-//             if(dir->size == $u16 0) {
-//                 //this is an error
-//                 panic("ext2_lookup() : size of directory entry should be non-zero");
-//             }
-//             if(dir->inode != $u32 0 && child_name == new string($u8* @dir->name, $u64 dir->name_len)) {
-//                 //set return inode num
-//                 ret_node_num = dir->inode;
-
-//                 pfree(buf);
-//                 return 0;
-//             }
-//             offset += $u32 dir->size;
-//         }
-//     }
-
-//     return 1;
-// }
-
+//scan directory entries, stop on first entry that is not '.' or '..'
 i32 ext2_dir_empty(ext2_fs* fs, ext2_inode* node, i32& ret) {
     passert(node->is_directory(), "ext2_dir_empty() : node must be a directory");
 
@@ -1366,9 +1525,14 @@ i32 ext2_dir_empty(ext2_fs* fs, ext2_inode* node, i32& ret) {
                 panic("ext2_dir_empty() : found error, dir->size should be non-zero");
             }
             if(dir->inode != $u32 0) {
-                //found an entry, this is not empty
-                ret = 0;
-                return 0;
+                //found an entry, make sure it isn't '.' or '..'
+                if(
+                    !(dir->name_len == $u8 1 && dir->name[0] == '.') &&
+                    !(dir->name_len == $u8 2 && dir->name[0] == '.' && dir->name[1] == '.')
+                ) {
+                    ret = 0;
+                    return 0;
+                } 
             }
             offset += $u32 dir->size;
         }
@@ -1456,7 +1620,9 @@ i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
     for(u32 i = $u32 0; i < block_count; i++) {
         u32 block_num = ext2_traverse_block_map(fs, node, i);
         if(block_num == $u32 0) break;
-        ext2_read_block(fs, block_num, buf);
+        if(ext2_read_block(fs, block_num, buf)) {
+            panic("ext2_get_children() : failed to read block");
+        }
         
         u32 offset = $u32 0;
         while(offset < fs->block_size) {
@@ -1470,6 +1636,7 @@ i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
             }
             offset += $u32 dir->size;
         }
+        passert(offset == fs->block_size, "ext2_get_children() : offset must end exactly at block end");
     }
 
     pfree(buf);
@@ -1525,7 +1692,7 @@ i32 ext2_mkdir(vfs_inode* _node, string name) {
     new (dir_inode) ext2_inode();
     dir_inode->mode = INODE_TYPE_DIR | $u16 0o755;
     dir_inode->size = fs->block_size;                           //just have one block for two directory entries
-    dir_inode->sectors = fs->block_size / AHCI_SECTOR_SIZE;
+    dir_inode->sectors = fs->block_size / EXT2_SECTOR_SIZE;     
     dir_inode->links_count = $u16 2;                            //itself and its parent
     dir_inode->atime = time_now;
     dir_inode->ctime = time_now;
@@ -1544,7 +1711,6 @@ i32 ext2_mkdir(vfs_inode* _node, string name) {
 
         //write '.'
         ext2_dir_entry* dirent_self = $ext2_dir_entry* dirent_buf;
-        new (dirent_self) ext2_dir_entry();
         dirent_self->inode = inode_ind;
         dirent_self->size = $u16 12;                        //8 (first 4 fields) + 4 (name rounded up)
         dirent_self->name_len = $u8 1;
@@ -1553,7 +1719,6 @@ i32 ext2_mkdir(vfs_inode* _node, string name) {
 
         //write '..'
         ext2_dir_entry* dirent_parent = $ext2_dir_entry* @(($u8* dirent_buf)[12]);
-        new (dirent_parent) ext2_dir_entry();
         dirent_parent->inode = $u32 _node->node_num;
         dirent_parent->size = $u16 fs->block_size - $u16 12;     //entries must exactly fill the block
         dirent_parent->name_len = $u8 2;
@@ -1585,12 +1750,14 @@ i32 ext2_rmdir(vfs_inode* _node, string name) {
     u32 child_inode_num;
     if(ext2_lookup(fs, parent_inode, name, child_node, child_inode_num)) {
         //failed to lookup child
+        sout << "EXT2 RM FAILED TO LOOKUP CHILD : " << name << "\n";
         free($void* child_node, sizeof(ext2_inode));
         return 1;
     }
 
     //ensure child is a directory
     if(!child_node->is_directory()) {
+        sout << "EXT2 RM CHILD IS NOT DIR\n";
         free($void* child_node, sizeof(ext2_inode));
         return 1;
     }
@@ -1598,23 +1765,30 @@ i32 ext2_rmdir(vfs_inode* _node, string name) {
     //ensure child is empty
     i32 is_empty;
     if(ext2_dir_empty(fs, child_node, is_empty)) {
+        sout << "EXT2 RM EMPTY CHECK FAILED\n";
         free($void* child_node, sizeof(ext2_inode));
         return 1;
     }
-    if(is_empty) {
+    if(!is_empty) {
+        sout << "EXT2 RM CHILD NOT EMPTY\n";
         free($void* child_node, sizeof(ext2_inode));
         return 1;
     }
 
     //remove link from parent to child
     if(ext2_remove_directory_entry(fs, parent_inode, $u32 _node->node_num, child_inode_num)) {
+        sout << "EXT2 RM RM PARENT LINK FAILED\n";
         free($void* child_node, sizeof(ext2_inode));
         return 1;
     }
 
     //dealloc child
-    //TODO
-    panic("not implemented");
+    if(ext2_dealloc_inode_blocks(fs, child_node, child_inode_num)) {
+        panic("ext2_rmdir() : failed dealloc child blocks");
+    }
+    if(ext2_dealloc_inode(fs, child_inode_num)) {
+        panic("ext2_rmdir() : failed dealloc child node");
+    }
 
     free($void* child_node, sizeof(ext2_inode));
     return 0;
