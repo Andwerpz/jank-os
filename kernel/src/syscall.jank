@@ -205,7 +205,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_MKDIR)            ans = $u64 sys_mkdir($u8* arg1, $mode_t arg2);
     else if(sys_id == SYS_RMDIR)            ans = $u64 sys_rmdir($u8* arg1);
     else if(sys_id == SYS_UNLINK)           ans = $u64 sys_unlink($u8* arg1);
-    else if(sys_id == SYS_LSEEK)            ans = $u64 sys_lseek($i32 arg1, $u64 arg2, $i32 arg3);
+    else if(sys_id == SYS_LSEEK)            ans = $u64 sys_lseek($i32 arg1, $i64 arg2, $i32 arg3);
 
     else {
         pt_switch_to_kernel();
@@ -564,10 +564,10 @@ i32 sys_close(i32 fd_ind) {
     return retval;
 }
 
-// repositions file offset of fd to the argument pos according to whence
+// repositions file offset of fd to the argument off according to whence
 // returns the new position on success
 // returns -1 on error
-i64 sys_lseek(i32 fd_ind, u64 pos, i32 whence) {
+i64 sys_lseek(i32 fd_ind, i64 off, i32 whence) {
     //make sure whence is valid value
     if(whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
         return $i64 -ERR_UNKNOWN;
@@ -591,7 +591,7 @@ i64 sys_lseek(i32 fd_ind, u64 pos, i32 whence) {
     }
 
     // call fd lseek
-    i64 ret = fd_lseek(fd, pos, whence);
+    i64 ret = fd_lseek(fd, off, whence);
 
     pt_switch(user_pt);
     return ret;

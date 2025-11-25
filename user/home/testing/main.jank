@@ -409,6 +409,7 @@ i32 main(u64 argc, u8** argv) {
         }
         ostream fout = new ostream(out_fd);
         fout << output;
+        fout.flush();
         sys_close(out_fd);
     }
     else {

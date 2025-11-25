@@ -1050,7 +1050,7 @@ void init_vfs_fd_ops() {
     new (FD_OPS_VFS) fd_ops();
     FD_OPS_VFS->op_read = #<vfs_read(file_descriptor*, u8*, u64)>;
     FD_OPS_VFS->op_write = #<vfs_write(file_descriptor*, u8*, u64)>;
-    FD_OPS_VFS->op_lseek = #<vfs_lseek(file_descriptor*, u64, i32)>;
+    FD_OPS_VFS->op_lseek = #<vfs_lseek(file_descriptor*, i64, i32)>;
     FD_OPS_VFS->op_getdents = #<vfs_getdents(file_descriptor*, u8*, u64)>;
     FD_OPS_VFS->op_close = #<vfs_close(file_descriptor*)>;
     FD_OPS_VFS->op_truncate = #<vfs_truncate(file_descriptor*, u64)>;
@@ -1107,21 +1107,34 @@ i64 vfs_write(file_descriptor* fd, u8* buf, u64 amt) {
     return $i64 write_amt;
 }
 
-i64 vfs_lseek(file_descriptor* fd, u64 off, i32 whence) {
+i64 vfs_lseek(file_descriptor* fd, i64 off, i32 whence) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
     if(whence == SEEK_SET) {
-        fd->position = off;
+        if(off < $i64 0) {
+            //file position can't be negative
+            return $i64 -ERR_UNKNOWN;
+        }
+        fd->position = $u64 off;
     }
     else if(whence == SEEK_CUR) {
-        fd->position += off;
+        if(off < $i64 0 && $u64 (-off) > fd->position) {
+            //resulting file position can't be negative
+            return $i64 -ERR_UNKNOWN;
+        }
+        fd->position += $u64 off;
     }
     else if(whence == SEEK_END) {
-        if(vfs_get_size(node, fd->position)) {
+        u64 file_size;
+        if(vfs_get_size(node, file_size)) {
             //get size failed
             return $i64 -1;
         }
-        fd->position += off;
+        if(off < $i64 0 && $u64 (-off) > file_size) {
+            //resulting file position can't be negative
+            return $i64 -ERR_UNKNOWN;
+        }
+        fd->position = file_size + $u64 off;
     }
     else panic("vfs_lseek() : unknown whence value");
 

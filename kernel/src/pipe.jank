@@ -118,7 +118,7 @@ void init_pipe_fd_ops() {
     new (FD_OPS_PIPE) fd_ops();
     FD_OPS_PIPE->op_read = #<pipe_read(file_descriptor*, u8*, u64)>;
     FD_OPS_PIPE->op_write = #<pipe_write(file_descriptor*, u8*, u64)>;
-    FD_OPS_PIPE->op_lseek = #<pipe_lseek(file_descriptor*, u64, i32)>;
+    FD_OPS_PIPE->op_lseek = #<pipe_lseek(file_descriptor*, i64, i32)>;
     FD_OPS_PIPE->op_getdents = #<pipe_getdents(file_descriptor*, u8*, u64)>;
     FD_OPS_PIPE->op_close = #<pipe_close(file_descriptor*)>;
     FD_OPS_PIPE->op_truncate = #<pipe_truncate(file_descriptor*, u64)>;
@@ -146,7 +146,7 @@ i64 pipe_write(file_descriptor* fd, u8* buf, u64 amt) {
     return $i64 buf_ptr;
 }
 
-i64 pipe_lseek(file_descriptor* fd, u64 npos, i32 whence) {
+i64 pipe_lseek(file_descriptor* fd, i64 off, i32 whence) {
     //lseek doesn't make sense for pipes
     return $i64 -1;
 }

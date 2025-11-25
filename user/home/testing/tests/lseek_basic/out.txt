@@ -1,0 +1,7 @@
+test seek_set passed
+test seek_cur passed
+test seek_end passed
+test append passed
+test negative passed
+test fail passed
+tests passed

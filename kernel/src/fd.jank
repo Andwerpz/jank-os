@@ -9,7 +9,7 @@
 struct fd_ops {
     fn<i64(file_descriptor*, u8*, u64)> op_read;            //reads some bytes into the provided buffer, returns the number of bytes read or -1
     fn<i64(file_descriptor*, u8*, u64)> op_write;           //writes some bytes from the provided buffer, returns the number of bytes read or -1
-    fn<i64(file_descriptor*, u64, i32)> op_lseek;           //moves the fd position, returns the new position or -1
+    fn<i64(file_descriptor*, i64, i32)> op_lseek;           //moves the fd position, returns the new position or -1
     fn<i64(file_descriptor*, u8*, u64)> op_getdents;        //reads directory entries into provided buffer, returns number of bytes read
     fn<i32(file_descriptor*)> op_close;                     //closes the fd and underlying resource
     fn<i32(file_descriptor*, u64)> op_truncate;             //sets the size of the underlying resource
@@ -92,7 +92,7 @@ i64 fd_write(file_descriptor* fd, u8* buf, u64 amt) {
 // SEEK_SET : set the position to the given offset
 // SEEK_CUR : increment the position by the offset
 // SEEK_END : set the position to EOF + off
-i64 fd_lseek(file_descriptor* fd, u64 off, i32 whence) {
+i64 fd_lseek(file_descriptor* fd, i64 off, i32 whence) {
     return fd->ops->op_lseek#(fd, off, whence);
 }
 
