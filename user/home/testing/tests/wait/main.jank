@@ -6,6 +6,7 @@
 i32 main() {
 
     cout << "before fork\n";
+    cout.flush();
 
     pid_t pid = sys_fork();
     if(pid == $pid_t 0) {

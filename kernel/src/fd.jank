@@ -89,6 +89,9 @@ i64 fd_write(file_descriptor* fd, u8* buf, u64 amt) {
     return $i64 retval;
 }   
 
+// SEEK_SET : set the position to the given offset
+// SEEK_CUR : increment the position by the offset
+// SEEK_END : set the position to EOF + off
 i64 fd_lseek(file_descriptor* fd, u64 off, i32 whence) {
     return fd->ops->op_lseek#(fd, off, whence);
 }

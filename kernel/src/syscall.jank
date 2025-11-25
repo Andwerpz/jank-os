@@ -38,6 +38,7 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_WRITE            = $u64 1;
 [__GLOBAL_FIRST__] u64 SYS_OPEN             = $u64 2;
 [__GLOBAL_FIRST__] u64 SYS_CLOSE            = $u64 3;
+[__GLOBAL_FIRST__] u64 SYS_LSEEK            = $u64 8;
 [__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
 [__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
 [__GLOBAL_FIRST__] u64 SYS_PIPE             = $u64 22;
@@ -204,6 +205,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_MKDIR)            ans = $u64 sys_mkdir($u8* arg1, $mode_t arg2);
     else if(sys_id == SYS_RMDIR)            ans = $u64 sys_rmdir($u8* arg1);
     else if(sys_id == SYS_UNLINK)           ans = $u64 sys_unlink($u8* arg1);
+    else if(sys_id == SYS_LSEEK)            ans = $u64 sys_lseek($i32 arg1, $u64 arg2, $i32 arg3);
 
     else {
         pt_switch_to_kernel();
@@ -560,6 +562,39 @@ i32 sys_close(i32 fd_ind) {
     pt_switch(user_pt);
 
     return retval;
+}
+
+// repositions file offset of fd to the argument pos according to whence
+// returns the new position on success
+// returns -1 on error
+i64 sys_lseek(i32 fd_ind, u64 pos, i32 whence) {
+    //make sure whence is valid value
+    if(whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+        return $i64 -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor exists
+    process* proc = get_cur_proc();
+    file_descriptor* fd = proc->fd_table[fd_ind];
+    if($u64 fd == $u64 nullptr) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // call fd lseek
+    i64 ret = fd_lseek(fd, pos, whence);
+
+    pt_switch(user_pt);
+    return ret;
 }
 
 //terminates the calling process

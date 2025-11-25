@@ -6,6 +6,7 @@
 i32 main() {
 
     cout << "RUNNING FORKTEST\n";
+    cout.flush();
     for(i32 i = 0; i < 10; i++){
         pid_t pid = sys_fork();
         if(pid != $pid_t 0) {   //parent
@@ -13,9 +14,11 @@ i32 main() {
                 //continue
             }
             cout << "PARENT\n";
+            cout.flush();
         }   
         else {      //child
             cout << "CHILD\n";
+            cout.flush();
             return 0;
         }
     }

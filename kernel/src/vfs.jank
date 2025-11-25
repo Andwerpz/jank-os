@@ -1110,8 +1110,20 @@ i64 vfs_write(file_descriptor* fd, u8* buf, u64 amt) {
 i64 vfs_lseek(file_descriptor* fd, u64 off, i32 whence) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
-    //just set position
-    fd->position = off;
+    if(whence == SEEK_SET) {
+        fd->position = off;
+    }
+    else if(whence == SEEK_CUR) {
+        fd->position += off;
+    }
+    else if(whence == SEEK_END) {
+        if(vfs_get_size(node, fd->position)) {
+            //get size failed
+            return $i64 -1;
+        }
+        fd->position += off;
+    }
+    else panic("vfs_lseek() : unknown whence value");
 
     return $i64 fd->position;
 }
