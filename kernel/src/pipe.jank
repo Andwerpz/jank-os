@@ -121,6 +121,7 @@ void init_pipe_fd_ops() {
     FD_OPS_PIPE->op_lseek = #<pipe_lseek(file_descriptor*, u64, i32)>;
     FD_OPS_PIPE->op_getdents = #<pipe_getdents(file_descriptor*, u8*, u64)>;
     FD_OPS_PIPE->op_close = #<pipe_close(file_descriptor*)>;
+    FD_OPS_PIPE->op_truncate = #<pipe_truncate(file_descriptor*, u64)>;
 }
 
 i64 pipe_read(file_descriptor* fd, u8* buf, u64 amt) {
@@ -159,4 +160,9 @@ i32 pipe_close(file_descriptor* fd) {
     pipe_ref* pipe = $pipe_ref* fd->resource_ptr;
     pipe->close();
     return 0;
+}
+
+i32 pipe_truncate(file_descriptor* fd, u64 nsz) {
+    //truncate doesn't make sense for pipes
+    return -1;
 }

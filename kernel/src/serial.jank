@@ -253,6 +253,7 @@ void init_serial_fd_ops() {
     FD_OPS_SERIAL->op_lseek = #<serial_lseek(file_descriptor*, u64, i32)>;
     FD_OPS_SERIAL->op_getdents = #<serial_getdents(file_descriptor*, u8*, u64)>;
     FD_OPS_SERIAL->op_close = #<serial_close(file_descriptor*)>;
+    FD_OPS_SERIAL->op_truncate = #<serial_truncate(file_descriptor*, u64)>;
 }
 
 // flush output on newline
@@ -289,4 +290,9 @@ i64 serial_getdents(file_descriptor* fd, u8* buf, u64 amt) {
 i32 serial_close(file_descriptor* fd) {
     //do nothing
     return 0;
+}
+
+i32 serial_truncate(file_descriptor* fd, u64 nsz) {
+    //truncate doesn't make sense for serial input
+    return -1;
 }

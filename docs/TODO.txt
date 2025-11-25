@@ -1,14 +1,10 @@
-Andrew
- - make syscalls preemptible (kind of working)
- - make command to autogenerate filesystem from folder. 
-   - should be able to call 'make drive' or smth and have it autogenerate the drive from the ./user folder
- - capability to run automated tests within the OS
-   - for starters, can just look at return status code.
-   - afterwards, would like to be able to redirect entire output to file and compare byte-by-byte with expected
-   - could perhaps use all the jank-pl tests as a sanity check
+above all, WRITE MORE TESTS!!!
 
-Steven
- - create filesystem (L brain fog)
-
-Sanat Dubey @ UCLA
- - Fix stevens code (mandatory)
+ - finish rudimentary read/write filesystem
+   - creating / removing / reading directories
+   - creating / removing / reading / writing files
+ - commandline text editor, something like nano or vim
+ - get mutex and other locks to work
+ - get jjc to run on jankos
+ - networking, able to make http requests to the outside world
+ - graphic interface? (very low priority)

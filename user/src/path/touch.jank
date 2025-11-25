@@ -1,0 +1,21 @@
+#include <iostream>;
+#include <assert>;
+#include <wait>;
+#include <dirent>;
+
+i32 main(u64 argc, u8** argv) {
+    if(argc == 0x1) {
+        cout << "Usage : \n";
+        cout << "touch <filepath>\n";
+        return 1;
+    }
+
+    i32 fd = sys_open(argv[1], O_CREAT | O_WRONLY, $mode_t 0o755);
+    if(fd < 0) {
+        cout << "Failed to open file : " << argv[1] << "\n";
+        return 1;
+    }
+    sys_close(fd);
+    
+    return 0;
+}

@@ -1,0 +1,62 @@
+#include <iostream>;
+#include <assert>;
+#include <dirent>;
+#include <string>;
+#include <time>;
+
+i32 main(u64 argc, u8** argv) {
+    {   
+        u64 start = get_sys_time_ns();
+        for(u64 i = 0x0; i < 0x1000; i++) {
+            cout << "I : i goes here\n";
+        }
+        u64 end = get_sys_time_ns();
+        u64 avg = (end - start) / 0x1000;
+        cout << "PRINT DUR : " << avg << "\n";
+    }
+
+    {
+        u64 print_start = get_sys_time_ns();
+        cout << "bello bello\n";
+        u64 flush_start = get_sys_time_ns();
+        cout.flush();
+        u64 end = get_sys_time_ns();
+
+        u64 flush_duration = end - flush_start;
+        u64 print_duration = flush_start - print_start;
+        cout << "PRINT DUR : " << print_duration << " " << flush_duration << "\n";
+    }
+
+    {
+        u8* buf = $u8* malloc(0x1000);
+        for(u64 i = 0x0; i < 0x1000; i++) buf[i] = '\0';
+
+        u64 start = get_sys_time_ns();
+        for(u64 i = 0x0; i < 0x1000; i++) buf[i] = '1';
+        u64 end = get_sys_time_ns();
+        cout << "WRITE DUR : " << (end - start) << "\n";
+    }
+
+    {
+        u64 start_ns = get_sys_time_ns();
+        for(u64 i = 0x0; i < 0x1000; i++) {
+
+        }
+        u64 duration_ns = (get_sys_time_ns() - start_ns);
+        cout << "ITER DUR : " << duration_ns << "\n";
+    }
+
+    {
+        u64 avg = 0x0;
+        for(u64 i = 0x0; i < 0x1000; i++) {
+            u64 start = get_sys_time_ns();
+            u64 end = get_sys_time_ns();
+            avg += end - start;
+        }
+        avg /= 0x1000;
+        
+        cout << "TIME NS : " << avg << "\n";
+    }
+
+    return 0;
+}

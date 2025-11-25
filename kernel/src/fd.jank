@@ -12,6 +12,7 @@ struct fd_ops {
     fn<i64(file_descriptor*, u64, i32)> op_lseek;           //moves the fd position, returns the new position or -1
     fn<i64(file_descriptor*, u8*, u64)> op_getdents;        //reads directory entries into provided buffer, returns number of bytes read
     fn<i32(file_descriptor*)> op_close;                     //closes the fd and underlying resource
+    fn<i32(file_descriptor*, u64)> op_truncate;             //sets the size of the underlying resource
 }
 
 struct file_descriptor {
@@ -72,6 +73,8 @@ file_descriptor* fd_create_pipe(u64 flags, pipe_ref* pipe) {
     return fd;
 }
 
+//TODO assert accmode bits
+
 i64 fd_read(file_descriptor* fd, u8* buf, u64 amt) {
     i64 retval = fd->ops->op_read#(fd, buf, amt);
     fd->read_count ++;
@@ -104,5 +107,10 @@ i32 fd_close(file_descriptor* fd) {
         fd->~();
         free($void* fd, sizeof(file_descriptor));
     }
+    return retval;
+}
+
+i32 fd_truncate(file_descriptor* fd, u64 nsz) {
+    i32 retval = fd->ops->op_truncate#(fd, nsz);
     return retval;
 }

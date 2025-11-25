@@ -1070,7 +1070,8 @@ i32 ext2_write_inode(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
 //attaches the given block to the inode
 //pblock gives the physical block index
 //lblock gives the block index within the file 
-i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u32 lblock) {
+//expects lblock to not be mapped, and pblock to already be allocated
+i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 lblock, u32 pblock) {
     // entries per indirect block
     u32 B = fs->block_size / $u32 4;
 
@@ -1085,8 +1086,6 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
         inode->direct_block_ptr[lblock] = pblock;
         inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
         if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
-
-        sout << "DIRECT MAPPED : " << lblock << "\n";
 
         return 0;
     }
@@ -1190,8 +1189,58 @@ i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 pblock, u3
     return 1;
 }
 
+//removes the given block from the inode
+//does not deallocate the underlying physical block
+//expects lblock to be mapped
+i32 ext2_unmap_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 lblock) {
+    sout << "ext2_unmap_block : " << inode_num << " " << lblock << "\n";
+
+    // entries per indirect block
+    u32 B = fs->block_size / $u32 4;
+
+    // direct
+    if(lblock < $u32 12) {
+        //make sure block is mapped
+        if(inode->direct_block_ptr[lblock] == $u32 0) {
+            panic("ext2_unmap_block() : lblock is not mapped");
+        }
+
+        //update and write back
+        inode->direct_block_ptr[lblock] = $u32 0;
+        inode->sectors -= fs->block_size / EXT2_SECTOR_SIZE;
+        if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
+
+        return 0;
+    }
+    lblock -= $u32 12;
+
+    // singly
+    if(lblock < B) {
+        panic("ext2_unmap_block() : singly not implemented");
+        return 1;
+    }
+    lblock -= B;
+
+    // doubly
+    if(lblock < B * B) {
+        panic("ext2_unmap_block() : doubly not implemented");
+        return 1;
+    }
+    lblock -= B * B;
+
+    // triply
+    if(lblock < B * B * B) {
+        panic("ext2_unmap_block() : triply not implemented");
+        return 1;
+    }
+    lblock -= B * B * B;
+    
+    panic("ext2_unmap_block() : lblock exceeds size limit");
+    return 1;
+}
+
 //gets block number within file
-//TODO if block is not mapped, return block 0
+//if block is not mapped, return block 0
 u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index) {
     // entries per indirect block
     u32 B = fs->block_size / $u32 4; 
@@ -1204,9 +1253,11 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
     
     // singly
     if(file_block_index < B) {
+        if(inode->singly_ind_block_ptr == $u32 0) return $u32 0;
         void* buf = palloc();
-        ext2_read_block(fs, inode->singly_ind_block_ptr, buf);
+        if(ext2_read_block(fs, inode->singly_ind_block_ptr, buf)) panic("ext2_traverse_block_map() : read failed");
         u32* blocks = $u32* buf;
+
         u32 block = blocks[file_block_index];
         pfree(buf);
         return block; 
@@ -1214,20 +1265,21 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
     file_block_index -= B;
 
     // doubly
-    if(file_block_index < (B * B)) {
-        void* buf_l0 = palloc();
-        ext2_read_block(fs, inode->doubly_ind_block_ptr, buf_l0);
-        u32* l0 = $u32* buf_l0;
-
+    if(file_block_index < (B * B)) {    
         u32 l0_index = file_block_index / B;
         u32 l1_index = file_block_index % B;
 
+        if(inode->singly_ind_block_ptr == $u32 0) return $u32 0;
+        void* buf_l0 = palloc();
+        if(ext2_read_block(fs, inode->doubly_ind_block_ptr, buf_l0)) panic("ext2_traverse_block_map() : read failed");
+        u32* l0 = $u32* buf_l0;
+        
+        if(l0[l0_index] == $u32 0) return $u32 0;
         void* buf_l1 = palloc();
-        ext2_read_block(fs, l0[l0_index], buf_l1);
-        u32* l1= $u32* buf_l1;
+        if(ext2_read_block(fs, l0[l0_index], buf_l1)) panic("ext2_traverse_block_map() : read failed");
+        u32* l1 = $u32* buf_l1;
 
         u32 block = l1[l1_index];
-
         pfree($void* buf_l1);
         pfree($void* buf_l0);
         return block;
@@ -1236,25 +1288,27 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
 
     // triply
     if(file_block_index < (B * B * B)) {
-        void* buf_l0 = palloc();
-        ext2_read_block(fs, inode->triply_ind_block_ptr, buf_l0);
-        u32* l0 = $u32* buf_l0;
-
         u32 l0_index = file_block_index / (B * B);
         u32 rem = file_block_index % (B * B);
         u32 l1_index = rem / B;
         u32 l2_index = rem % B;
 
+        if(inode->triply_ind_block_ptr == $u32 0) return $u32 0;
+        void* buf_l0 = palloc();
+        if(ext2_read_block(fs, inode->triply_ind_block_ptr, buf_l0)) panic("ext2_traverse_block_map() : read failed");
+        u32* l0 = $u32* buf_l0;
+        
+        if(l0[l0_index] == $u32 0) return $u32 0;
         void* buf_l1 = palloc();
-        ext2_read_block(fs, l0[l0_index], buf_l1);
+        if(ext2_read_block(fs, l0[l0_index], buf_l1)) panic("ext2_traverse_block_map() : read failed");
         u32* l1= $u32* buf_l1;
 
+        if(l1[l1_index] == $u32 0) return $u32 0;
         void* buf_l2 = palloc();
-        ext2_read_block(fs, l1[l1_index], buf_l2);
+        if(ext2_read_block(fs, l1[l1_index], buf_l2)) panic("ext2_traverse_block_map() : read failed");
         u32* l2 = $u32* buf_l2;
 
         u32 block = l2[l2_index];
-
         pfree($void* buf_l2);
         pfree($void* buf_l1);
         pfree($void* buf_l0);
@@ -1269,7 +1323,7 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
 //takes in a directory and a child, and adds the child inode to the directory
 //this only adds a directory entry to the parent, 
 //the child still needs to add an entry pointing to the parent
-i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, u32 child_inode_num, string child_name) {
+i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, ext2_inode* child_inode, u32 child_inode_num, string child_name) {
     //parent has to be a directory
     passert(parent_inode->is_directory(), "ext2_add_directory_entry() : parent inode must be directory");
 
@@ -1363,7 +1417,7 @@ i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_i
             }
 
             //map block to parent
-            if(ext2_map_block(fs, parent_inode, parent_inode_num, new_block, block_count)) {
+            if(ext2_map_block(fs, parent_inode, parent_inode_num, block_count, new_block)) {
                 panic("ext2_add_directory_entry() : failed to map new directory block to parent");
             }
 
@@ -1379,11 +1433,16 @@ i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_i
 
     //update parent inode
     u32 time_now = $u32 cmos_get_epoch_time_sec();
-    parent_inode->links_count ++;
     parent_inode->atime = time_now;
     parent_inode->mtime = time_now;
     if(ext2_write_inode(fs, parent_inode, parent_inode_num)) {
         panic("ext2_add_directory_entry() : failed write parent inode");
+    }
+
+    //update child inode
+    child_inode->links_count ++;
+    if(ext2_write_inode(fs, child_inode, child_inode_num)) {
+        panic("ext2_add_directory_entry() : failed write child inode");
     }
 
     return 0;
@@ -1391,7 +1450,7 @@ i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_i
 
 //removes the directory entry pointing from the parent to the child
 //this does not touch the child, if the child is being reparented it still needs to modify its '..' entry itself
-i32 ext2_remove_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, u32 child_inode_num) {
+i32 ext2_remove_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, ext2_inode* child_inode, u32 child_inode_num) {
     //parent has to be directory
     passert(parent_inode->is_directory(), "ext2_remove_directory_entry() : parent inode must be directory");
 
@@ -1432,6 +1491,7 @@ i32 ext2_remove_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 paren
                 offset += $u32 dir->size;
                 prev = dir;
             }
+            if(!found) passert(offset == fs->block_size, "ext2_remove_directory_entry() : entries take up the entire block");
 
             if(found) {
                 //update block and break
@@ -1448,11 +1508,17 @@ i32 ext2_remove_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 paren
 
     //update parent inode
     u32 time_now = $u32 cmos_get_epoch_time_sec();
-    parent_inode->links_count --;
     parent_inode->atime = time_now;
     parent_inode->mtime = time_now;
     if(ext2_write_inode(fs, parent_inode, parent_inode_num)) {
         panic("ext2_remove_directory_entry() : failed write parent inode");
+    }
+
+    //update child inode
+    passert(child_inode->links_count != $u16 0, "ext2_remove_directory_entry() : child should have non-zero links count");
+    child_inode->links_count --;
+    if(ext2_write_inode(fs, child_inode, child_inode_num)) {
+        panic("ext2_remove_directory_entry() : failed write child inode");
     }
 
     return 0;
@@ -1483,21 +1549,21 @@ i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_i
                 if(ext2_read_inode(fs, dir->inode, ret_node)) {
                     //failed to read
                     pfree(buf);
-                    return 1;
+                    return VFS_WALK_ERR;
                 }
 
                 //set return inode num
                 ret_node_num = dir->inode;
 
                 pfree(buf);
-                return 0;
+                return VFS_WALK_FOUND;
             }
             offset += $u32 dir->size;
         }
-        passert(offset == fs->block_size, "ext2_lookup() : offset must end exactly at block end");
+        passert(offset == fs->block_size, "ext2_lookup() : entries take up the entire block");
     }
 
-    return 1;
+    return VFS_WALK_MISSING;
 }
 
 //same as lookup, but only returns the ext2_inode struct
@@ -1536,6 +1602,7 @@ i32 ext2_dir_empty(ext2_fs* fs, ext2_inode* node, i32& ret) {
             }
             offset += $u32 dir->size;
         }
+        passert(offset == fs->block_size, "ext2_dir_empty() : entries take up the entire block");
     }
 
     //didn't find anything, this is empty
@@ -1554,9 +1621,13 @@ void init_ext2() {
     VFS_EXT2_OPS->dir_empty = #<ext2_dir_empty(vfs_inode*, i32&)>;
     VFS_EXT2_OPS->mkdir = #<ext2_mkdir(vfs_inode*, string)>;
     VFS_EXT2_OPS->rmdir = #<ext2_rmdir(vfs_inode*, string)>;
+    VFS_EXT2_OPS->create = #<ext2_create(vfs_inode*, string)>;
+    VFS_EXT2_OPS->unlink = #<ext2_unlink(vfs_inode*, string)>;
 
-    VFS_EXT2_OPS->read_file = #<ext2_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_EXT2_OPS->get_size = #<ext2_get_size(vfs_inode*, u64&)>;
+    VFS_EXT2_OPS->read_file = #<ext2_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
+    VFS_EXT2_OPS->write_file = #<ext2_write_file(vfs_inode*, u8*, u64, u64, u64&)>;
+    VFS_EXT2_OPS->truncate = #<ext2_truncate(vfs_inode*, u64)>;
 }
 
 //expects vfs_inode to be preallocated
@@ -1599,14 +1670,15 @@ i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
     //try to find child
     ext2_inode* child_node = $ext2_inode* malloc(sizeof(ext2_inode));
     u32 child_node_num;
-    if(ext2_lookup(fs, node, child, child_node, child_node_num)) {
+    i32 lookup_status = ext2_lookup(fs, node, child, child_node, child_node_num);
+    if(lookup_status) {
         free($void* child_node, sizeof(ext2_inode));
-        return 1;
+        return lookup_status;
     }
 
     //construct output and return
     ext2_construct_vfs_inode(child, child_node_num, fs, child_node, res);
-    return 0;
+    return VFS_WALK_FOUND;
 }
 
 i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
@@ -1677,65 +1749,40 @@ i32 ext2_mkdir(vfs_inode* _node, string name) {
         }
     }
 
-    //alloc inode and block 
+    //alloc inode for child dir
     u32 inode_ind;
-    u32 block_ind;
     if(ext2_alloc_inode(fs, inode_ind)) {
         panic("ext2_mkdir() : failed alloc inode");
-    }
-    if(ext2_alloc_block(fs, block_ind)) {
-        panic("ext2_mkdir() : failed alloc block");
     }
 
     //write directory inode
     ext2_inode* dir_inode = $ext2_inode* malloc(sizeof(ext2_inode));
     new (dir_inode) ext2_inode();
     dir_inode->mode = INODE_TYPE_DIR | $u16 0o755;
-    dir_inode->size = fs->block_size;                           //just have one block for two directory entries
-    dir_inode->sectors = fs->block_size / EXT2_SECTOR_SIZE;     
-    dir_inode->links_count = $u16 2;                            //itself and its parent
+    dir_inode->size = $u32 0;
+    dir_inode->sectors = $u32 0;  
+    dir_inode->links_count = $u16 0;                            
     dir_inode->atime = time_now;
     dir_inode->ctime = time_now;
     dir_inode->mtime = time_now;
     dir_inode->uid = $u16 0;                                    //root user
     dir_inode->gid = $u16 0;                                    //root user
-    dir_inode->direct_block_ptr[0] = block_ind;
     if(ext2_write_inode(fs, dir_inode, inode_ind)) {
         panic("ext2_mkdir() : failed write inode");
     }
 
     //write directory entries
-    {
-        void* dirent_buf = palloc();
-        memset(dirent_buf, 0, PAGE_SIZE);
-
-        //write '.'
-        ext2_dir_entry* dirent_self = $ext2_dir_entry* dirent_buf;
-        dirent_self->inode = inode_ind;
-        dirent_self->size = $u16 12;                        //8 (first 4 fields) + 4 (name rounded up)
-        dirent_self->name_len = $u8 1;
-        dirent_self->file_type = $u8 0;
-        memcpy($void* @dirent_self->name, $void* ".", 0x1);
-
-        //write '..'
-        ext2_dir_entry* dirent_parent = $ext2_dir_entry* @(($u8* dirent_buf)[12]);
-        dirent_parent->inode = $u32 _node->node_num;
-        dirent_parent->size = $u16 fs->block_size - $u16 12;     //entries must exactly fill the block
-        dirent_parent->name_len = $u8 2;
-        dirent_parent->file_type = $u8 0;
-        memcpy($void* @dirent_parent->name, $void* "..", 0x2);
-
-        if(ext2_write_block(fs, block_ind, dirent_buf)) {
-            panic("ext2_mkdir() : failed write block");
-        }
-        pfree(dirent_buf);
-    }
-
-    //add child to parent
-    if(ext2_add_directory_entry(fs, parent_inode, $u32 _node->node_num, inode_ind, name)) {
+    if(ext2_add_directory_entry(fs, parent_inode, $u32 _node->node_num, dir_inode, inode_ind, name)) {              //parent -> child
         panic("ext2_mkdir() : failed to add child to parent");
     }
+    if(ext2_add_directory_entry(fs, dir_inode, inode_ind, dir_inode, inode_ind, new string("."))) {                 //child -> child
+        panic("ext2_mkdir() : failed to add \".\" entry to new dir");
+    }
+    if(ext2_add_directory_entry(fs, dir_inode, inode_ind, parent_inode, $u32 _node->node_num, new string(".."))) {  //child -> parent
+        panic("ext2_mkdir() : failed to add \"..\" entry to new dir");
+    }
 
+    free($void* dir_inode, sizeof(ext2_inode));
     return 0;
 }
 
@@ -1746,54 +1793,168 @@ i32 ext2_rmdir(vfs_inode* _node, string name) {
     passert(parent_inode->is_directory(), "ext2_rmdir() : only valid on directories");
 
     //retrieve child node
-    ext2_inode* child_node = $ext2_inode* malloc(sizeof(ext2_inode));
+    ext2_inode* child_inode = $ext2_inode* malloc(sizeof(ext2_inode));
     u32 child_inode_num;
-    if(ext2_lookup(fs, parent_inode, name, child_node, child_inode_num)) {
+    if(ext2_lookup(fs, parent_inode, name, child_inode, child_inode_num)) {
         //failed to lookup child
         sout << "EXT2 RM FAILED TO LOOKUP CHILD : " << name << "\n";
-        free($void* child_node, sizeof(ext2_inode));
+        free($void* child_inode, sizeof(ext2_inode));
         return 1;
     }
 
     //ensure child is a directory
-    if(!child_node->is_directory()) {
+    if(!child_inode->is_directory()) {
         sout << "EXT2 RM CHILD IS NOT DIR\n";
-        free($void* child_node, sizeof(ext2_inode));
+        free($void* child_inode, sizeof(ext2_inode));
         return 1;
     }
 
     //ensure child is empty
     i32 is_empty;
-    if(ext2_dir_empty(fs, child_node, is_empty)) {
+    if(ext2_dir_empty(fs, child_inode, is_empty)) {
         sout << "EXT2 RM EMPTY CHECK FAILED\n";
-        free($void* child_node, sizeof(ext2_inode));
+        free($void* child_inode, sizeof(ext2_inode));
         return 1;
     }
     if(!is_empty) {
         sout << "EXT2 RM CHILD NOT EMPTY\n";
-        free($void* child_node, sizeof(ext2_inode));
+        free($void* child_inode, sizeof(ext2_inode));
         return 1;
     }
+    passert(child_inode->links_count == $u16 2, "ext2_rmdir() : empty directory should have exactly 2 links");
 
-    //remove link from parent to child
-    if(ext2_remove_directory_entry(fs, parent_inode, $u32 _node->node_num, child_inode_num)) {
-        sout << "EXT2 RM RM PARENT LINK FAILED\n";
-        free($void* child_node, sizeof(ext2_inode));
-        return 1;
+    //remove '.' and '..' links, as well as parent -> child link
+    if(ext2_remove_directory_entry(fs, parent_inode, $u32 _node->node_num, child_inode, child_inode_num)) {
+        panic("ext2_rmdir() : failed remove child from parent");
     }
+    if(ext2_remove_directory_entry(fs, child_inode, child_inode_num, child_inode, child_inode_num)) {
+        panic("ext2_rmdir() : failed remove \".\" entry from child");
+    }
+    if(ext2_remove_directory_entry(fs, child_inode, child_inode_num, parent_inode, $u32 _node->node_num)) {
+        panic("ext2_rmdir() : failed remove \"..\" entry from child");
+    }
+    passert(child_inode->links_count == $u16 0, "ext2_rmdir() : empty directory should now have exactly 0 links");
 
     //dealloc child
-    if(ext2_dealloc_inode_blocks(fs, child_node, child_inode_num)) {
+    if(ext2_dealloc_inode_blocks(fs, child_inode, child_inode_num)) {
         panic("ext2_rmdir() : failed dealloc child blocks");
     }
     if(ext2_dealloc_inode(fs, child_inode_num)) {
         panic("ext2_rmdir() : failed dealloc child node");
     }
 
-    free($void* child_node, sizeof(ext2_inode));
+    free($void* child_inode, sizeof(ext2_inode));
     return 0;
 }
 
+i32 ext2_create(vfs_inode* _node, string name) {
+    ext2_inode* parent_inode = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    passert(_node->is_directory(), "ext2_create() : only valid on directories");
+    passert(parent_inode->is_directory(), "ext2_create() : only valid on directories");
+
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+
+    //see if parent already has a child with this name
+    {
+        vector<string> children;
+        if(ext2_get_children(_node, children)) {
+            panic("ext2_create() : failed getting children");
+        }
+        for(u64 i = 0x0; i < children.size(); i++) {
+            if(children[i] == name) {
+                sout << "Child " << name << " already exists in directory " << _node->name << "\n";
+                return 1;
+            }
+        }
+    }
+
+    //alloc inode for child dir
+    u32 inode_ind;
+    if(ext2_alloc_inode(fs, inode_ind)) {
+        panic("ext2_create() : failed alloc inode");
+    }
+
+    //write file inode
+    ext2_inode* file_inode = $ext2_inode* malloc(sizeof(ext2_inode));
+    new (file_inode) ext2_inode();
+    file_inode->mode = INODE_TYPE_FILE | $u16 0o755;
+    file_inode->size = $u32 0;
+    file_inode->sectors = $u32 0;  
+    file_inode->links_count = $u16 0;                            
+    file_inode->atime = time_now;
+    file_inode->ctime = time_now;
+    file_inode->mtime = time_now;
+    file_inode->uid = $u16 0;                                    //root user
+    file_inode->gid = $u16 0;                                    //root user
+    if(ext2_write_inode(fs, file_inode, inode_ind)) {
+        panic("ext2_create() : failed write inode");
+    }
+
+    //write directory entry from parent to file
+    if(ext2_add_directory_entry(fs, parent_inode, $u32 _node->node_num, file_inode, inode_ind, name)) {        
+        panic("ext2_create() : failed to add child to parent");
+    }
+
+    free($void* file_inode, sizeof(ext2_inode));
+    return 0;
+}
+
+i32 ext2_unlink(vfs_inode* _node, string name) {
+    ext2_inode* parent_inode = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    passert(_node->is_directory(), "ext2_unlink() : only valid on directories");
+    passert(parent_inode->is_directory(), "ext2_unlink() : only valid on directories");
+
+    //retrieve child node
+    ext2_inode* child_inode = $ext2_inode* malloc(sizeof(ext2_inode));
+    u32 child_inode_num;
+    if(ext2_lookup(fs, parent_inode, name, child_inode, child_inode_num)) {
+        //failed to lookup child
+        sout << "EXT2 UNLINK FAILED TO LOOKUP CHILD : " << name << "\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //ensure child is a file
+    if(!child_inode->is_file()) {
+        sout << "EXT2 UNLINK CHILD IS NOT FILE\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //remove link from parent to child
+    if(ext2_remove_directory_entry(fs, parent_inode, $u32 _node->node_num, child_inode, child_inode_num)) {        
+        panic("ext2_unlink() : failed to add child to parent");
+    }
+
+    //if child hard link count goes to 0, dealloc child entirely
+    if(child_inode->links_count == $u16 0) {
+        if(ext2_dealloc_inode_blocks(fs, child_inode, child_inode_num)) {
+            panic("ext2_unlink() : failed dealloc child blocks");
+        }
+        if(ext2_dealloc_inode(fs, child_inode_num)) {
+            panic("ext2_unlink() : failed dealloc child node");
+        }
+    }
+
+    free($void* child_inode, sizeof(ext2_inode));
+    return 0;
+}
+
+i32 ext2_get_size(vfs_inode* _node, u64& res) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    passert(_node->is_file(), "ext2_get_size() : only valid on files");
+    passert(node->is_file(), "ext2_get_size() : only valid on files");
+
+    res = $u64 node->size;
+    return 0;
+}
+
+//reads the contents from a regular file
+//it may be the case that some blocks are not mapped. If so, those will be filled with all '\0' on read
+//returns the number of bytes read
 i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
@@ -1813,10 +1974,18 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
 
     //if beginning is not aligned, special case for it
     if($u32 off % fs->block_size != $u32 0) {
+        //read block
         u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
-        if(block_num == $u32 0) return 1;
+        if(block_num == $u32 0) {
+            //unmapped block, fill with '\0'
+            memset(tmp_buf, 0, PAGE_SIZE);
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
 
-        ext2_read_block(fs, block_num, tmp_buf);
+        //copy over to output
         u64 block_off = off - $u64 fs->block_size * (off / $u64 fs->block_size);
         u64 cur_amt = min($u64 fs->block_size - block_off, amt);
         memcpy($void* buf, $void* ($u64 tmp_buf + block_off), cur_amt);
@@ -1829,10 +1998,18 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
 
     //read rest of blocks
     while(amt) {
+        //read block
         u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
-        if(block_num == $u32 0) return 1;
+        if(block_num == $u32 0) {
+            //unmapped block, fill with '\0'
+            memset(tmp_buf, 0, PAGE_SIZE);
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
 
-        ext2_read_block(fs, block_num, tmp_buf);
+        //copy over to output
         u64 cur_amt = min($u64 fs->block_size, amt);
         memcpy($void* ($u64 buf + buf_ptr), tmp_buf, cur_amt);
 
@@ -1846,12 +2023,166 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
     return 0;
 }
 
-i32 ext2_get_size(vfs_inode* _node, u64& res) {
+//writes over the contents of the file
+//maps new blocks as necessary 
+//returns the number of bytes written
+i32 ext2_write_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
-    passert(_node->is_file(), "ext2_get_size() : only valid on files");
-    passert(node->is_file(), "ext2_get_size() : only valid on files");
+    passert(_node->is_file(), "ext2_write_file() : only valid on files");
+    passert(node->is_file(), "ext2_write_file() : only valid on files");
 
-    res = $u64 node->size;
+    void* tmp_buf = palloc();
+    res = 0x0;
+    u64 buf_ptr = 0x0;
+
+    //if beginning is not aligned, special case for it
+    if($u32 off % fs->block_size != $u32 0) {
+        //read block
+        u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
+        if(block_num == $u32 0) {
+            //unmapped block, go alloc and map it
+            if(ext2_alloc_block(fs, block_num)) {
+                //failed to alloc block
+                return 1;
+            }
+            passert(block_num != $u32 0, "ext2_write_file() : the allocd block should be non-zero");
+            if(ext2_map_block(fs, node, $u32 _node->node_num, $u32 off / fs->block_size, block_num)) {
+                //failed to map block
+                return 1;
+            }
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
+
+        //write to buffer
+        u64 block_off = off - $u64 fs->block_size * (off / $u64 fs->block_size);
+        u64 cur_amt = min($u64 fs->block_size - block_off, amt);
+        memcpy($void* ($u64 tmp_buf + block_off), $void* buf, cur_amt);
+
+        //write block
+        passert(block_num != $u32 0, "ext2_write_file() : block num should be non-zero");
+        if(ext2_write_block(fs, block_num, tmp_buf)) {
+            //write failed
+            return 1;
+        }
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+    }   
+
+    //read rest of blocks
+    while(amt) {
+        //read block
+        u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
+        if(block_num == $u32 0) {
+            //unmapped block, go alloc and map it
+            if(ext2_alloc_block(fs, block_num)) {
+                //failed to alloc block
+                return 1;
+            }
+            passert(block_num != $u32 0, "ext2_write_file() : the allocd block should be non-zero");
+            if(ext2_map_block(fs, node, $u32 _node->node_num, $u32 off / fs->block_size, block_num)) {
+                //failed to map block
+                return 1;
+            }
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
+
+        //write to buffer
+        u64 cur_amt = min($u64 fs->block_size, amt);
+        memcpy(tmp_buf, $void* ($u64 buf + buf_ptr), cur_amt);
+
+        //write block
+        passert(block_num != $u32 0, "ext2_write_file() : block num should be non-zero");
+        if(ext2_write_block(fs, block_num, tmp_buf)) {
+            //write failed
+            return 1;
+        }
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+    }
+
+    //update file metadata
+    if($u32 off > node->size) {
+        node->size = $u32 off;
+        if(ext2_write_inode(fs, node, $u32 _node->node_num)) {
+            panic("ext2_write_file() : failed to update node");
+        }
+    }
+
+    pfree(tmp_buf);
+    return 0;
+}
+
+//sets the size of the file to equal nsz
+//if nsz is less than the current size, excess blocks are deallocated
+//if nsz >= current size, can simply update size. It's fine to leave holes. 
+i32 ext2_truncate(vfs_inode* _node, u64 nsz) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    passert(_node->is_file(), "ext2_truncate() : only valid on files");
+    passert(node->is_file(), "ext2_truncate() : only valid on files");
+    
+    //if the file is getting shorter, need to dealloc excess
+    if(nsz < $u64 node->size) {
+        passert(nsz < $u64 node->size, "ext2_truncate() : now we should be dealing with the shortening case");
+
+        //very naive way, just go through one by one and dealloc pages
+        u32 lb = ($u32 nsz + fs->block_size - $u32 1) / fs->block_size;
+        u32 rb = (node->size + fs->block_size - $u32 1) / fs->block_size;
+        passert(lb <= rb, "ext2_truncate() : lb <= rb");
+        for(u32 i = lb; i < rb; i++) {
+            u32 block_num = ext2_traverse_block_map(fs, node, i);
+            if(block_num != $u32 0) {
+                //unmap 
+                if(ext2_unmap_block(fs, node, $u32 _node->node_num, i)) {
+                    panic("ext2_truncate() : failed to unmap block");
+                }
+
+                //dealloc 
+                if(ext2_dealloc_block(fs, block_num)) {
+                    panic("ext2_truncate() : failed to dealloc block");
+                }
+            }
+        }
+
+        //special case for last page, if it's alloc'd, need to read and zero out excess
+        if(nsz % $u64 fs->block_size != 0x0) {
+            u32 block_num = ext2_traverse_block_map(fs, node, $u32 nsz / fs->block_size);
+            if(block_num != $u32 0) {
+                void* buf = palloc();
+                if(ext2_read_block(fs, block_num, buf)) {
+                    panic("ext2_truncate() : failed read block");
+                }
+
+                u64 start = nsz % $u64 fs->block_size;
+                passert(start < PAGE_SIZE, "ext2_truncate() : should be true as long as PAGE_SIZE >= fs->block_size");
+                memset($void* ($u64 buf + start), 0, PAGE_SIZE - start);
+
+                if(ext2_write_block(fs, block_num, buf)) {
+                    panic("ext2_truncate() : failed write block");
+                }
+                pfree(buf);
+            }
+        }
+    }
+    
+    //update inode metadata
+    node->size = $u32 nsz;
+    if(ext2_write_inode(fs, node, $u32 _node->node_num)) {
+        panic("ext2_truncate() : failed to update node");
+    }
+
     return 0;
 }

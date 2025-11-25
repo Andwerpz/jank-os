@@ -63,6 +63,7 @@ void writefile(u8* path, i32 flags, u8* str) {
 
     ostream fout = new ostream(fd);
     fout << str;
+    fout.flush();
     sys_close(fd);
 }
 
@@ -82,6 +83,7 @@ void test_readback() {
     ostream fout = new ostream(fd);
     string str = new string("testing testing 123");
     fout << str;
+    fout.flush();
     sys_close(fd);
 
     string fstr = readfile("test_readback/a.txt");
@@ -93,20 +95,22 @@ void test_readback() {
 void test_large() {
     mkdir("test_large");
 
+    string str = new string("bello, this is a very long string. uhh, idk what else to put here lmao");
+
     i32 fd = sys_open("test_large/a.txt", O_CREAT | O_WRONLY, $mode_t 0o755);
     assert(fd >= 0, "test_large() : this should succeed");
     ostream fout = new ostream(fd);
-    for(u64 i = 0x0; i < 0x1000; i++) {
-        fout << i << "\n";
+    for(u64 i = 0x0; i < 0x100; i++) {
+        fout << str << "\n";
     }
+    fout.flush();
     sys_close(fd);
 
     i32 fd2 = sys_open("test_large/a.txt", O_RDONLY, $mode_t 0);
     istream fin = new istream(fd2);
-    for(u64 i = 0x0; i < 0x1000; i++) {
-        u64 x;
-        fin >> x;
-        assert(i == x, "test_large() : numbers should match");
+    for(u64 i = 0x0; i < 0x100; i++) {
+        string x = fin.next_line();
+        assert(x == str, "test_large() : strings should match");
     }
     sys_close(fd2);
 
@@ -166,6 +170,10 @@ void test_trunc() {
 
     string fstr = readfile("test_trunc/a.txt");
     assert(strcmp(fstr.jstr(), long) == 0, "test_trunc() : long string should completely overwrite short");
+
+    writefile("test_trunc/a.txt", O_TRUNC, short);
+    fstr = readfile("test_trunc/a.txt");
+    assert(strcmp(fstr.jstr(), short) == 0, "test_trunc() : short string should completely overwrite long");
 
     cout << "test trunc passed\n";
 }

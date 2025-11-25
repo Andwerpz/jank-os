@@ -52,6 +52,7 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_CHDIR            = $u64 80;
 [__GLOBAL_FIRST__] u64 SYS_MKDIR            = $u64 83;
 [__GLOBAL_FIRST__] u64 SYS_RMDIR            = $u64 84;
+[__GLOBAL_FIRST__] u64 SYS_UNLINK           = $u64 87;
 [__GLOBAL_FIRST__] u64 SYS_GETDENTS64       = $u64 217;
 [__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
 
@@ -202,6 +203,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_DUP2)             ans = $u64 sys_dup2($i32 arg1, $i32 arg2);
     else if(sys_id == SYS_MKDIR)            ans = $u64 sys_mkdir($u8* arg1, $mode_t arg2);
     else if(sys_id == SYS_RMDIR)            ans = $u64 sys_rmdir($u8* arg1);
+    else if(sys_id == SYS_UNLINK)           ans = $u64 sys_unlink($u8* arg1);
 
     else {
         pt_switch_to_kernel();
@@ -422,8 +424,22 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
 //creates a file descriptor on file with specified path
 //returns fd index on success, -1 on failure
 i32 sys_open(u8* path, i32 flags, mode_t mode) {
-    //don't support creating files for now
-    if(flags & O_CREAT) {
+    //invalid flag combinations
+    if((flags & O_CREAT) && (flags & O_DIRECTORY)) {
+        //O_CREAT and O_DIRECTORY together doesn't make sense
+        return -ERR_UNKNOWN;
+    }
+    if(!(
+        ((flags & O_ACCMODE) == O_RDONLY) ||
+        ((flags & O_ACCMODE) == O_WRONLY) ||
+        ((flags & O_ACCMODE) == O_RDWR) ||
+        ((flags & O_ACCMODE) == 0)
+    )) {
+        //accmode needs to be valid
+        return -ERR_UNKNOWN;
+    }
+    if((flags & O_DIRECTORY) && ((flags & O_ACCMODE) == O_WRONLY || (flags & O_ACCMODE) == O_RDWR)) {
+        //cannot write to a directory
         return -ERR_UNKNOWN;
     }
 
@@ -440,23 +456,49 @@ i32 sys_open(u8* path, i32 flags, mode_t mode) {
     process* proc = get_cur_proc();
     vfs_inode* walk_res;
     i32 walk_status;
-    if(kpath[0] == '/') {
-        //absolute path
-        walk_status = vfs_walk(new string(kpath), walk_res);
+    if(kpath[0] == '/') walk_status = vfs_walk(new string(kpath), walk_res);    //absolute path
+    else walk_status = vfs_walk(proc->cwd, new string(kpath), walk_res);        //relative path
+    if(walk_status) {
+        //walk failed somehow
+        if(walk_status == VFS_WALK_MISSING && (flags & O_CREAT)) {
+            //try to create file here
+            i32 create_status;
+            if(kpath[0] == '/') create_status = vfs_create(new string(kpath));
+            else create_status = vfs_create(proc->cwd, new string(kpath));
+
+            if(create_status) {
+                free($void* kpath, path_len + 0x1);
+                pt_switch(user_pt);
+                return -ERR_UNKNOWN;
+            }
+
+            //walk to created file
+            if(kpath[0] == '/') walk_status = vfs_walk(new string(kpath), walk_res);
+            else walk_status = vfs_walk(proc->cwd, new string(kpath), walk_res);
+
+            if(walk_status) {
+                free($void* kpath, path_len + 0x1);
+                pt_switch(user_pt);
+                return -ERR_UNKNOWN;
+            }
+        }
+        else {
+            free($void* kpath, path_len + 0x1);
+            pt_switch(user_pt);
+            return -ERR_UNKNOWN;
+        }
     }
     else {
-        //relative path
-        walk_status = vfs_walk(proc->cwd, new string(kpath), walk_res);
-    }
-    if(walk_status) {
-        //walk failed
-        free($void* kpath, path_len + 0x1);
-        pt_switch(user_pt);
-        return -ERR_UNKNOWN;
+        //O_EXCL requires that file not exist 
+        if(flags & O_EXCL) {
+            free($void* kpath, path_len + 0x1);
+            pt_switch(user_pt);
+            return -ERR_UNKNOWN;
+        }
     }
     free($void* kpath, path_len + 0x1);
 
-    //see if flags are valid for the file type being accessed
+    //O_DIRECTORY requires opened file to be a directory
     if((O_DIRECTORY & flags) == O_DIRECTORY && !walk_res->is_directory()) {
         vfs_dec_refcnt(walk_res);
         pt_switch(user_pt);
@@ -480,6 +522,11 @@ i32 sys_open(u8* path, i32 flags, mode_t mode) {
 
     //create fd
     proc->fd_table[fd_ind] = fd_create_vfs($u64 flags, walk_res);
+
+    //if O_TRUNC is set and write access mode is set, truncate the file to length 0
+    if((O_TRUNC & flags) && (((flags & O_ACCMODE) == O_WRONLY) || ((flags & O_ACCMODE) == O_RDWR))) {
+        fd_truncate(proc->fd_table[fd_ind], 0x0);
+    }
     
     pt_switch(user_pt);
     return fd_ind;
@@ -1034,6 +1081,9 @@ i32 sys_mkdir(u8* path, mode_t mode) {
     return 0;
 }
 
+//removes the directory specified by path
+//returns 0 on success
+//returns -1 on failure
 i32 sys_rmdir(u8* path) {
     u64 path_len = strlen(path);
     if(path_len == 0x0) {
@@ -1063,6 +1113,48 @@ i32 sys_rmdir(u8* path) {
 
     if(rmdir_status) {
         //failed to rmdir
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+//removes the hard link to the regular file specified by path
+//path must refer to a regular file
+//if the number of hard links to this file drops to 0, then this file is removed from the filesystem
+//returns 0 on success
+//returns -1 on error
+i32 sys_unlink(u8* path) {
+    u64 path_len = strlen(path);
+    if(path_len == 0x0) {
+        //path cannot be size 0
+        return -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    process* proc = get_cur_proc();
+    vfs_inode* cwd = proc->cwd;
+    i32 unlink_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        unlink_status = vfs_unlink(new string(kpath));
+    }
+    else {
+        //relative path
+        unlink_status = vfs_unlink(cwd, new string(kpath));
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(unlink_status) {
+        //failed to unlink
         pt_switch(user_pt);
         return -ERR_UNKNOWN;
     }

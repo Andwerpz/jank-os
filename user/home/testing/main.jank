@@ -168,6 +168,7 @@ void build_sandbox() {
 
     for(u64 i = 0x0; i < tests.size(); i++) {
         cout << "Building " << tests[i] << "\n";
+        cout.flush();
         string name = tests[i];
         chdir(basedir + "/sandbox/" + name);
 
@@ -188,11 +189,47 @@ void build_sandbox() {
 
 //runs a built test in the sandbox
 //returns the stdout of the test
-string run_test(string test) {
+string gen_test_output(string test) {
     chdir(basedir + "/sandbox/" + test);   //make sure that CWD matches where the test executable is
     vector<string> args;
     args.push_back(basedir + "/sandbox/" + test + "/main");
     return do_exec(args);
+}
+
+//runs a built test in the sandbox
+//returns 0 on success
+i32 run_test(string test) {
+    cout << "Running " << test << " : ";
+    cout.flush();
+    string output = gen_test_output(test);
+
+    //retrieve expected output
+    chdir(basedir + "/tests/" + test);
+    string expected;
+    i32 out_fd = sys_open("./out.txt", O_RDONLY, $mode_t 0);
+    if(out_fd < 0) {
+        cout << "opening ./out.txt failed\n";
+        return 1;
+    }
+    istream fin = new istream(out_fd);
+    u8 c = fin.next_char();
+    while(!fin.eof()) {
+        expected.push_back(c);
+        c = fin.next_char();
+    }
+    sys_close(out_fd);
+
+    //make sure actual matches expected
+    if(output == expected) {
+        cout << "PASSED\n";
+        cout.flush();
+        return 0;
+    }
+    else {
+        cout << "FAILED\n";
+        cout.flush();
+        return 1;
+    }
 }
 
 vector<string> get_testlist() {
@@ -212,7 +249,9 @@ i32 main(u64 argc, u8** argv) {
     if(argc == 0x1) {
         cout << "Usage : \n";
         cout << "main clean-sandbox\n";
+        cout << "main build-test <testname>\n";
         cout << "main build-tests\n";
+        cout << "main run-test <testname>\n";
         cout << "main run-tests\n";
         cout << "main run-wip\n";
         cout << "main gen-test <testname>\n";
@@ -244,6 +283,39 @@ i32 main(u64 argc, u8** argv) {
         //build tests
         build_sandbox();
     }
+    else if(mode == "build-test") {
+        if(argc != 0x3) {
+            cout << "build_test incorrect usage\n";
+            return 1;
+        }   
+        string testname = new string(argv[2]);
+
+        //clean sandbox
+        clean_sandbox();
+
+        //copy test over to sandbox
+        chdir(basedir);
+        args.clear();
+        args.push_back(new string("cp"));
+        args.push_back(new string("-r"));
+        args.push_back(new string("./tests/") + testname);
+        args.push_back(new string("./sandbox"));
+        do_exec(args);
+
+        //build test
+        build_sandbox();
+    }
+    else if(mode == "run-test") {
+        if(argc != 0x3) {
+            cout << "run-test incorrect usage\n";
+            return 1;
+        }   
+        string testname = new string(argv[2]);
+
+        i32 passed = run_test(testname) == 0;
+        if(passed) cout << "Test passed\n";
+        else cout << "Test failed\n";
+    }
     else if(mode == "run-tests") {
         //get list of all tests
         vector<string> tests = get_testlist();
@@ -251,31 +323,7 @@ i32 main(u64 argc, u8** argv) {
         //run them
         i32 passed_all = 1;
         for(u64 i = 0x0; i < tests.size(); i++) {
-            cout << "Running " << tests[i] << " : ";
-            string output = run_test(tests[i]);
-
-            //retrieve expected output
-            chdir(basedir + "/tests/" + tests[i]);
-            string expected;
-            i32 out_fd = sys_open("./out.txt", O_RDONLY, $mode_t 0);
-            if(out_fd < 0) {
-                cout << "opening ./out.txt failed\n";
-                return 1;
-            }
-            istream fin = new istream(out_fd);
-            u8 c = fin.next_char();
-            while(!fin.eof()) {
-                expected.push_back(c);
-                c = fin.next_char();
-            }
-            sys_close(out_fd);
-
-            //make sure actual matches expected
-            if(output == expected) {
-                cout << "PASSED\n";
-            }
-            else {
-                cout << "FAILED\n";
+            if(run_test(tests[i])) {
                 passed_all = 0;
                 break;
             }
@@ -302,7 +350,7 @@ i32 main(u64 argc, u8** argv) {
 
         //run test
         cout << "Running wip : \n";
-        string output = run_test(new string("wip"));
+        string output = gen_test_output(new string("wip"));
         cout << output;
     }
     else if(mode == "gen-test") {
@@ -339,7 +387,7 @@ i32 main(u64 argc, u8** argv) {
         build_sandbox();
 
         //run test
-        string output = run_test(testname);
+        string output = gen_test_output(testname);
 
         //copy test into tests
         chdir(basedir);
