@@ -1,0 +1,157 @@
+#include <iostream>;
+#include <assert>;
+#include <wait>;
+#include <dirent>;
+#include <time>;    
+#include <pair>;
+
+//jankedit - simple commandline text editor
+
+void print_file_type(u32 mode) {
+    cout << "type       : ";
+    u32 ft = mode & S_IFMT;
+    if(ft == S_IFREG)      cout << "regular file\n";
+    else if(ft == S_IFDIR) cout << "directory\n";
+    else if(ft == S_IFLNK) cout << "symlink\n";
+    else if(ft == S_IFCHR) cout << "char device\n";
+    else if(ft == S_IFBLK) cout << "block device\n";
+    else if(ft == S_IFIFO) cout << "fifo/pipe\n";
+    else if(ft == S_IFSOCK)cout << "socket\n";
+    else                   cout << "unknown\n";
+}
+
+void print_rwx_triple(u32 mode, u32 r, u32 w, u32 x) {
+    if(mode & r) cout << "r"; else cout << "-";
+    if(mode & w) cout << "w"; else cout << "-";
+    if(mode & x) cout << "x"; else cout << "-";
+}
+
+void print_permissions(u32 mode) {
+    u32 perm = mode & $mode_t 0o7777;   // low 12 bits: suid/sgid/sticky + rwx
+
+    // rwxrwxrwx representation
+    cout << "perms      : ";
+    print_rwx_triple(perm, S_IRUSR, S_IWUSR, S_IXUSR);
+    print_rwx_triple(perm, S_IRGRP, S_IWGRP, S_IXGRP);
+    print_rwx_triple(perm, S_IROTH, S_IWOTH, S_IXOTH);
+    cout << "\n";
+
+    // special bits (setuid, setgid, sticky)
+    cout << "special    : ";
+    i32 any = 0;
+    if(perm & S_ISUID) { cout << "setuid "; any = 1; }
+    if(perm & S_ISGID) { cout << "setgid "; any = 1; }
+    if(perm & S_ISVTX) { cout << "sticky "; any = 1; }
+    if(!any) cout << "(none)";
+    cout << "\n";
+
+    // octal representation like 0755
+    u32 owner = (perm >> $u32 6) & $u32 7;
+    u32 group = (perm >> $u32 3) & $u32 7;
+    u32 other = (perm >> $u32 0) & $u32 7;
+    cout << "mode (oct) : 0"
+         << owner << group << other << "\n";
+}
+
+void print_stat(stat* st) {
+    cout << "===== stat =====\n";
+
+    cout << "st_dev     : " << st->st_dev << "\n";
+    cout << "st_ino     : " << st->st_ino << "\n";
+    cout << "st_nlink   : " << st->st_nlink << "\n";
+
+    cout << "st_uid     : " << st->st_uid << "\n";
+    cout << "st_gid     : " << st->st_gid << "\n";
+
+    print_file_type(st->st_mode);
+    print_permissions(st->st_mode);
+
+    cout << "st_rdev    : " << st->st_rdev << "\n";
+    cout << "st_size    : " << st->st_size << " bytes\n";
+    cout << "st_blksize : " << st->st_blksize << " (optimal block size)\n";
+    cout << "st_blocks  : " << st->st_blocks << " (512-byte blocks)\n";
+
+    cout << "st_atime   : " << strftime(@st->st_atime) << "\n";
+    cout << "st_mtime   : " << strftime(@st->st_mtime) << "\n";
+    cout << "st_ctime   : " << strftime(@st->st_ctime) << "\n";
+
+    cout << "================\n";
+}
+
+u8 ESC = $u8 0x1B;
+
+pair<i32, i32> get_editor_dimensions() {
+    return new pair<i32, i32>(100, 50);
+}
+
+pair<i32, i32> get_cursor_pos() {
+    return new pair<i32, i32>(0, 0);
+}
+
+void clear_screen() {
+    cout << ESC << "[2J";
+}
+
+//moves the cursor to (0, 0)
+void reset_cursor() {
+    cout << ESC << "[H";
+}
+
+//newline separated 
+//assumes newlines are at the end of each line (they're not actually stored)
+vector<string> file;    
+
+i32 main(u64 argc, u8** argv) {
+    if(argc != 0x2) {
+        cout << "Usage : \n";
+        cout << "je <filename>\n";
+        return 1;
+    }
+
+    i32 fd = sys_open(argv[1], O_RDONLY, $mode_t 0);
+    if(fd < 0) {
+        cout << "Failed to open file : " << argv[1] << "\n";
+        return 1;
+    }
+
+    clear_screen();
+    reset_cursor();
+
+    cout << "Opened file :D\n";
+    stat* st = $stat* malloc(sizeof(stat));
+    if(sys_fstat(fd, st)) {
+        cout << "Failed to fstat file\n";
+        return 1;
+    }
+
+    print_stat(st);
+
+    if((st->st_mode & S_IFMT) != S_IFREG) {
+        cout << "Can only open regular file\n";
+        return 1;
+    }
+
+    //read in entire file
+    {
+        istream fin = new istream(fd);
+        string contents;
+        u8 c = fin.next_char();
+        while(!fin.eof()) {
+            if(fin.bad()) {
+                cout << "Error reading file : " << argv[1] << "\n";
+                return 1;
+            }
+            contents.push_back(c);
+            c = fin.next_char();
+        }
+        cout << contents;
+    }
+
+    //editor loop
+
+    //ask if user wants to save
+
+    sys_close(fd);
+    
+    return 0;
+}

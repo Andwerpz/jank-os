@@ -1,0 +1,4 @@
+
+ANSI is a standardized set of escape sequences used when communicating with some text-based terminal
+can use these escape sequences to perform actions other than writing text to the screen
+find a (incomplete?) list of sequences here : https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797 

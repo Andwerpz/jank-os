@@ -38,6 +38,8 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_WRITE            = $u64 1;
 [__GLOBAL_FIRST__] u64 SYS_OPEN             = $u64 2;
 [__GLOBAL_FIRST__] u64 SYS_CLOSE            = $u64 3;
+[__GLOBAL_FIRST__] u64 SYS_STAT             = $u64 4;
+[__GLOBAL_FIRST__] u64 SYS_FSTAT            = $u64 5;
 [__GLOBAL_FIRST__] u64 SYS_LSEEK            = $u64 8;
 [__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
 [__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
@@ -1193,6 +1195,32 @@ i32 sys_unlink(u8* path) {
         pt_switch(user_pt);
         return -ERR_UNKNOWN;
     }
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+i32 sys_stat(u8* path, stat* statbuf) {
+    u64 path_len = strlen(path);
+    if(path_len == 0x0) {
+        //path cannot be size 0
+        return -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //TODO
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+i32 sys_fstat(i32 fd, stat* statbuf) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //TODO
 
     pt_switch(user_pt);
     return 0;
