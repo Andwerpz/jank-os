@@ -256,7 +256,6 @@ void init_serial_fd_ops() {
     FD_OPS_SERIAL->op_truncate = #<serial_truncate(file_descriptor*, u64)>;
 }
 
-// flush output on newline
 i64 serial_read(file_descriptor* fd, u8* buf, u64 amt) {
     u64 buf_ptr = 0x0;
     while(buf_ptr < amt) {

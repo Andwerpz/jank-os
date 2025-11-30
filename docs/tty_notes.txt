@@ -1,0 +1,41 @@
+
+TTY : teletypewriter
+
+another sort of file descriptor that you can read and write bytes from
+should act sort of like a pipe but with some formatting features. 
+these formatting features are controlled by the termios struct within the tty
+they can be changed via the ioctl syscall
+
+\conjecture
+tty also controls which process bytes like Ctrl+C gets sent to. 
+By default, it sends the signal to the shell process which then terminates the child process (?)
+\endconjecture
+
+additionally, tty should be able to talk to a variety of different things via switching out backends
+the tty itself should just be concerned with formatting / buffering bytes 
+
+tty should be able to take in bytes and push bytes to other places
+tty has two main input modes, canonical and non-canonical
+canonical input flushes the output on every newline, and should allow for line editing (backspaces)
+non-canonical input should pass the bytes along as-is, and should flush each byte individually (?)
+
+tty also can do some output modification/sanitization. 
+for example, replace '\n' with '\r\n'
+
+if the tty is not talking to hardware, it's talking to a process which acts as a terminal, a terminal emulator
+the vscode terminal is an example of a terminal emulator, and it talks to an underlying tty fd. 
+since we can't push bytes to a terminal emulator, it uses a OS controlled buffer called a pty to store the bytes that it still needs to read
+it'll constantly 'poll' (wake up when there's bytes to read) the pty and update the display accordingly
+
+the user process using the terminal should read and write bytes from tty_read() and tty_write()
+additionally, tty needs tty_accept_input() to accept input from sources from within the OS
+if you have a hardware terminal, this is all you should need as tty should talk directly to the terminal (terminal sends bytes to tty via accept_input)
+however, if you have a user program act as the terminal emulator, linux has the terminal emulator talk to a pty (pseudo-teletypewriter)
+so it looks like
+emulator -> PTY write -> TTY accept_input -> TTY read -> user program
+user program -> TTY write -> PTY accept_input -> PTY read -> emulator
+in this case, the TTY is usually referred to as the slave and PTY as the master
+
+can have one implementation of TTY and connect it to different stuff like PTY or hardware terminal by implementing an interface for a TTY backend
+
+nice resource : https://www.linusakesson.net/programming/tty/

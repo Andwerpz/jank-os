@@ -35,6 +35,8 @@ i32 main() {
 
     while(1) {
         cout << getcwd() << "> ";
+        cout.flush();
+        
         vector<string> cmd = cin.next_line().split(' ');
         if(cmd.size() == 0x0) continue;
 

@@ -1,0 +1,20 @@
+#include <iostream>;
+#include <assert>;
+#include <dirent>;
+#include <string>;
+#include <time>;
+
+i32 main(u64 argc, u8** argv) {
+
+    //if raw mode is enabled, this should print after every char typed
+    //not just when you press enter
+    while(1) {
+        u8 c = cin.next_char();
+        cout << "CHAR : " << ($i32 c) << "\n";
+        cout.flush();
+
+        if(c == 'Q') break;
+    }
+
+    return 0;
+}

@@ -1,10 +1,16 @@
 above all, WRITE MORE TESTS!!!
 
- - finish rudimentary read/write filesystem
-   - creating / removing / reading directories
-   - creating / removing / reading / writing files
- - commandline text editor, something like nano or vim
- - get mutex and other locks to work
- - get jjc to run on jankos
- - networking, able to make http requests to the outside world
- - graphic interface? (very low priority)
+- TODO
+  - commandline text editor, something like nano or vim
+    - seems like this is much more involved than I thought
+    - need to create TTY fd for io modification
+    - also need to enable raw mode on linux side 
+  - get mutex and other locks to work
+  - get jjc to run on jankos
+  - networking, able to make http requests to the outside world
+  - graphic interface? (very low priority)
+
+- done
+  - finish rudimentary read/write filesystem
+    - creating / removing / reading directories
+    - creating / removing / reading / writing files

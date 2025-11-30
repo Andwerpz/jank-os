@@ -147,7 +147,7 @@ void clean_sandbox() {
     //delete sandbox
     args.clear();
     args.push_back(new string("rm"));
-    args.push_back(new string("-r"));
+    args.push_back(new string("-rf"));
     args.push_back(new string("./sandbox"));
     do_exec(args);
 

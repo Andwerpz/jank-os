@@ -4,6 +4,7 @@
 #include <dirent>;
 #include <time>;    
 #include <pair>;
+#include <termios>;
 
 //jankedit - simple commandline text editor
 
@@ -80,26 +81,347 @@ void print_stat(stat* st) {
 
 u8 ESC = $u8 0x1B;
 
-pair<i32, i32> get_editor_dimensions() {
-    return new pair<i32, i32>(100, 50);
-}
-
-pair<i32, i32> get_cursor_pos() {
-    return new pair<i32, i32>(0, 0);
+pair<u64, u64> get_terminal_dimensions() {
+    return new pair<u64, u64>($u64 50, $u64 50);
 }
 
 void clear_screen() {
     cout << ESC << "[2J";
 }
 
-//moves the cursor to (0, 0)
+//moves the cursor to (1, 1)
 void reset_cursor() {
     cout << ESC << "[H";
 }
 
+//moves the cursor to (r + 1, c + 1)
+//positions are 1-indexed starting from top right corner
+void set_cursor(u64 r, u64 c) {
+    cout << ESC << "[" << (r + 0x1) << ";" << (c + 0x1) << "H";
+}
+
+termios orig_termios;
+
+i32 enable_raw_mode(i32 fd) {
+    // get current settings
+    termios t;
+    if(tcgetattr(fd, @t)) {
+        return -1;
+    }
+
+    // save a copy so we can restore later
+    orig_termios = t; 
+
+    // raw mode: turn off canonical, echo, signals
+    t.c_lflag &= $u32 ~(ICANON | ECHO | ISIG);
+
+    // input flags: no CR->NL, no XON/XOFF
+    t.c_iflag &= $u32 ~(ICRNL | IXON);
+
+    // output flags: no post-processing (so '\n' stays '\n')
+    t.c_oflag &= $u32 ~(OPOST);
+
+    // read returns as soon as 1 byte is available
+    t.c_cc[VMIN]  = $u8 1;
+    t.c_cc[VTIME] = $u8 0;
+
+    // apply new settings
+    if(tcsetattr(fd, @t)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+i32 disable_raw_mode(i32 fd) {
+    // restore original settings
+    if(tcsetattr(fd, @orig_termios)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+string filename;
+
 //newline separated 
-//assumes newlines are at the end of each line (they're not actually stored)
+//implied newlines at the end of every line, except for the last line
 vector<string> file;    
+
+//renders the editor window
+
+//--|a.txt
+// 5|editor should look something like this
+// 6|aligned line numbers on the left
+// 7|name of file on top
+// 8|row, col of cursor on bottom
+// 9|no text wrapping for now
+//10|
+//11|
+//  |lines that go beyond EOF should not have line numbers
+//--|Ln 8, Col 10              
+//--|editor message teehee
+
+//R C : editor dimensions
+//tr tc : top left row col in file space
+//cr cc : cursor position in file space
+
+//it must be the case that the cursor is contained within the editor window
+
+void render(u64 R, u64 C, u64 tr, u64 tc, u64 cr, u64 cc, string msg) {
+    //ensure cursor is inside editor window
+    assert(tr <= cr && cr < tr + R, "render() : cursor row not inside editor");
+    assert(tc <= cc && cc < cc + C, "render() : cursor col not inside editor");
+
+    //reset screen
+    reset_cursor();
+    clear_screen();
+
+    //how many characters to reserve for line numbers?
+    u64 lnum_reserve = 0x0;
+    {
+        u64 tmp = file.size();
+        while(tmp != 0x0) {
+            lnum_reserve ++;
+            tmp /= $u64 10;
+        }
+    }
+
+    //top bar
+    {
+        for(u64 i = 0x0; i < lnum_reserve; i++) {
+            cout << "-";
+        }
+        cout << "|";
+        cout << filename;
+        cout << "\r\n";
+    }
+
+    //editor
+    {
+        for(u64 r = tr; r < tr + R; r++) {
+            //check for line beyond EOF
+            if(r >= file.size()) {
+                for(u64 i = 0x0; i < lnum_reserve; i++) {
+                    cout << " ";
+                }
+                cout << "|\r\n";
+                continue;
+            }
+
+            //line numbers
+            string lnum_str = to_string(r + 0x1);
+            while(lnum_str.size() < lnum_reserve) {
+                lnum_str = " " + lnum_str;
+            }
+            assert(lnum_str.size() <= lnum_reserve);
+            cout << lnum_str << "|";
+
+            //file contents
+            assert(r < file.size(), "render() : r should be in bounds here");
+            if(tc < file[r].size()) {
+                u64 amt = file[r].size() - tc;
+                if(C < amt) amt = C;
+                cout << file[r].substr(tc, amt);
+            }
+
+            cout << "\r\n";
+        }
+    }
+
+    //bottom bar
+    {
+        for(u64 i = 0x0; i < lnum_reserve; i++) {
+            cout << "-";
+        }
+        cout << "|";
+        cout << "Ln " << (cr + 0x1) << ", Col " << (cc + 0x1);
+        cout << "\r\n";
+    }
+
+    //message bar
+    {
+        for(u64 i = 0x0; i < lnum_reserve; i++) {
+            cout << "-";
+        }
+        cout << "|";
+        if(msg.size() > C) cout << msg.substr(0x0, C);
+        else cout << msg;
+        cout << "\r\n";
+    }
+
+    //set cursor position
+    assert(cr >= tr && cc >= tc, "render() : cursor pos should be inside editor window");
+    set_cursor((cr - tr) + 0x1, (cc - tc) + lnum_reserve + 0x1);
+    // reset_cursor();
+
+    cout.flush();
+}
+
+i32 save() {    
+    //write entire file back 
+    i32 fd = sys_open(filename.jstr(), O_WRONLY | O_TRUNC, $mode_t 0);
+    if(fd < 0) {
+        return 1;
+    }
+
+    ostream fout = new ostream(fd);
+    for(u64 i = 0x0; i < file.size(); i++) {
+        fout << file[i];
+        if(i + 0x1 < file.size()) fout << "\n";
+    }
+    fout.flush();
+
+    sys_close(fd);
+
+    return 0;
+}
+
+u64 edim_rows = $u64 50;
+u64 edim_cols = $u64 50;
+
+//top left coordinate of editor in file space
+u64 editor_row = 0x0;
+u64 editor_col = 0x0;
+
+//cursor position in file space
+u64 cursor_row = 0x0;
+u64 cursor_col = 0x0;
+
+string editor_msg = new string("");
+
+void handle_ansi() {
+    vector<u8> seq;
+    u8 c;
+    seq.push_back(c = cin.next_char());
+    if(c == '[') {
+        seq.push_back(c = cin.next_char());
+        if(c == 'A') {
+            //up arrow
+            if(cursor_row != 0x0) {
+                cursor_row --;
+                if(file[cursor_row].size() < cursor_col) {
+                    cursor_col = file[cursor_row].size();
+                }
+            }
+            return;
+        }
+        else if(c == 'B') {
+            //down arrow
+            if(cursor_row + 0x1 < file.size()) {
+                cursor_row ++;
+                if(file[cursor_row].size() < cursor_col) {
+                    cursor_col = file[cursor_row].size();
+                }
+            }
+            return;
+        }
+        else if(c == 'C') {
+            //right arrow
+            if(cursor_col < file[cursor_row].size()) {
+                cursor_col ++;
+            }
+            else if(cursor_row + 0x1 < file.size()) {  //cursor is at end of row, move to next one
+                cursor_col = 0x0;
+                cursor_row ++;
+            }
+            return;
+        }
+        else if(c == 'D') {
+            //left arrow
+            if(cursor_col != 0x0) {
+                cursor_col --;
+            }
+            else if(cursor_row != 0x0) {    //cursor is at beginning of row, move to previous one
+                cursor_row --;
+                cursor_col = file[cursor_row].size();
+            }
+            return;
+        }
+        else if(c == '5') {
+            seq.push_back(c = cin.next_char());
+            if(c == '~') {
+                //pgup, show the page of rows above
+                if(cursor_row >= edim_rows) {
+                    cursor_row -= edim_rows;
+                }
+                else {
+                    cursor_row = 0x0;
+                }
+                if(cursor_col > file[cursor_row].size()) {
+                    cursor_col = file[cursor_row].size();
+                }
+                return;
+            }
+        }
+        else if(c == '6') {
+            seq.push_back(c = cin.next_char());
+            if(c == '~') {
+                //pgdown, show the page of rows below
+                assert(cursor_row < file.size(), "handle_ansi() : cursor row should always be within file");
+                if(file.size() - cursor_row - 0x1 >= edim_rows) {
+                    cursor_row += edim_rows;   
+                }
+                else {
+                    assert(file.size() >= 0x1, "handle_ansi() : file should have non-zero rows");
+                    cursor_row = file.size() - 0x1;
+                }
+                if(cursor_col > file[cursor_row].size()) {
+                    cursor_col = file[cursor_row].size();
+                }
+                return;
+            }
+        }
+    }
+
+    //unknown sequence
+    handle_printable('\\');
+    handle_printable('x');
+    handle_printable('1');
+    handle_printable('B');
+    for(u64 i = 0x0; i < seq.size(); i++) {
+        handle_printable(seq[i]);
+    }
+}
+
+void handle_printable(u8 c) {
+    //printable character
+    //insert character into current cursor position, increment cursor by 1
+    file[cursor_row].insert(cursor_col, c);
+    cursor_col ++;
+}
+
+void handle_enter() {
+    //enter pressed
+    //should move everything from the cursor to the end of the current line to a new next line
+    string nline = file[cursor_row].substr(cursor_col);
+    file.insert(cursor_row + 0x1, nline);
+    file[cursor_row] = file[cursor_row].substr(0x0, cursor_col);
+
+    //cursor should be at beginning of new line
+    cursor_row ++;
+    cursor_col = 0x0;
+}
+
+void handle_backspace() {
+    //backspace 
+    if(cursor_col != 0x0) {
+        //remove the character before you, decrement cursor col
+        file[cursor_row].erase(cursor_col - 0x1);
+        cursor_col --;
+    }
+    else if(cursor_row != 0x0) {    //at the beginning of a row
+        //adjust cursor_col to be at the end of the previous line
+        cursor_col = file[cursor_row - 0x1].size();
+
+        //concatenate this row with the previous, and remove this row
+        file[cursor_row - 0x1] = file[cursor_row - 0x1] + file[cursor_row];
+        file.erase(cursor_row); 
+
+        //update cursor row
+        cursor_row --;
+    }
+}
 
 i32 main(u64 argc, u8** argv) {
     if(argc != 0x2) {
@@ -108,50 +430,141 @@ i32 main(u64 argc, u8** argv) {
         return 1;
     }
 
-    i32 fd = sys_open(argv[1], O_RDONLY, $mode_t 0);
-    if(fd < 0) {
-        cout << "Failed to open file : " << argv[1] << "\n";
-        return 1;
-    }
+    filename = new string(argv[1]);
 
-    clear_screen();
-    reset_cursor();
-
-    cout << "Opened file :D\n";
-    stat* st = $stat* malloc(sizeof(stat));
-    if(sys_fstat(fd, st)) {
-        cout << "Failed to fstat file\n";
-        return 1;
-    }
-
-    print_stat(st);
-
-    if((st->st_mode & S_IFMT) != S_IFREG) {
-        cout << "Can only open regular file\n";
-        return 1;
-    }
-
-    //read in entire file
     {
-        istream fin = new istream(fd);
-        string contents;
-        u8 c = fin.next_char();
-        while(!fin.eof()) {
-            if(fin.bad()) {
-                cout << "Error reading file : " << argv[1] << "\n";
-                return 1;
-            }
-            contents.push_back(c);
-            c = fin.next_char();
+        i32 fd = sys_open(filename.jstr(), O_RDONLY, $mode_t 0);
+        if(fd < 0) {
+            cout << "Failed to open file : " << filename << "\n";
+            return 1;
         }
-        cout << contents;
+
+        stat* st = $stat* malloc(sizeof(stat));
+        if(sys_fstat(fd, st)) {
+            cout << "Failed to fstat file\n";
+            sys_close(fd);
+            return 1;
+        }
+
+        if((st->st_mode & S_IFMT) != S_IFREG) {
+            cout << "Can only open regular file\n";
+            sys_close(fd);
+            return 1;
+        }
+
+        //read in entire file
+        {
+            istream fin = new istream(fd);
+            string line;
+            u8 c = fin.next_char();
+            while(!fin.eof()) {
+                if(fin.bad()) {
+                    cout << "Error reading file : " << filename << "\n";
+                    sys_close(fd);
+                    return 1;
+                }
+                if(c == '\n') {
+                    file.push_back(line);
+                    line = new string();
+                }
+                else {
+                    line.push_back(c);
+                }
+                c = fin.next_char();
+            }
+
+            //last trailing line
+            file.push_back(line);
+        }
+
+        sys_close(fd);
     }
 
     //editor loop
+    enable_raw_mode(STDIN);
+    clear_screen();
+    reset_cursor();
+
+    while(1) {
+        render(edim_rows, edim_cols, editor_row, editor_col, cursor_row, cursor_col, editor_msg);
+
+        u8 c = cin.next_char();
+        if(c == ESC) {
+            //ANSI escape sequence
+            handle_ansi();
+        }
+        else {
+            if(c == '\r' || c == '\n') {
+                handle_enter();
+            }
+            else if(c == '\b' || c == ($u8 0x7F)) {
+                handle_backspace();
+            }
+            else if(c == ($u8 0x18)) {  //Ctrl + X
+                //quit command
+                break;
+            }
+            else if(c == ($u8 0x03)) {  //Ctrl + C
+                //quit command
+                break;
+            }
+            else if(c == ($u8 0x13)) {  //Ctrl + S
+                //save command
+                if(save()) {
+                    disable_raw_mode(STDOUT);
+                    clear_screen();
+                    reset_cursor();
+                    cout << "save failed\n";
+                    return 1;
+                }
+                editor_msg = new string("saved!");
+            }
+            else if(c == '\t') {    //tab
+                //just insert 4 spaces
+                for(u64 i = 0x0; i < 0x4; i++) {
+                    handle_printable(' ');
+                }
+            }
+            else if(c >= ($u8 0x20) && c <= ($u8 0x7E)) {
+                handle_printable(c);
+            }
+            else {
+                editor_msg = new string("unrecognized character : ") + to_string($u64 c);
+            }
+        }
+
+        //cursor row should always be on some row in the file
+        //cursor col should always be on some character in the row, or at the very end of the row
+        assert(cursor_row < file.size(), "cursor_row should always be inside file");
+        assert(cursor_col <= file[cursor_row].size(), "cursor_col should be within row, or at end of row");
+
+        //adjust editor window offset so that cursor is within editor window
+        while(editor_row > cursor_row) editor_row --;
+        while(editor_row + edim_rows <= cursor_row) editor_row ++;
+        while(editor_col > cursor_col) editor_col --;
+        while(editor_col + edim_cols <= cursor_col) editor_col ++;
+    }
+    disable_raw_mode(STDOUT);
 
     //ask if user wants to save
-
-    sys_close(fd);
+    clear_screen();
+    reset_cursor();
+    cout << "Save? (Y/N)\n";
+    cout.flush();
+    while(1) {
+        string resp;
+        cin >> resp;
+        if(resp == "Y" || resp == "y") {
+            if(save()) {
+                cout << "save failed\n";
+                return 1;
+            }
+            break;
+        }
+        else if(resp == "N" || resp == "n") {
+            break;
+        }
+    }
     
     return 0;
 }

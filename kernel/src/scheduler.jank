@@ -342,8 +342,6 @@ void init_scheduler() {
     //initialize init process
     create_process(new string("/bin/sys/init"));
 
-    sout << "DONE CREATE INIT\n";
-
     //point %rsp to top of kernel stack
     asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
 
