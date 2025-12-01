@@ -21,22 +21,201 @@ struct tty {
     u64 refcount;                   //number of open file structs pointing here
 }
 
-//reads bytes from outq
+//default termios 
+termios tty_gen_default_termios() {
+    termios t = new termios();
+
+    // zero everything first
+    t.c_iflag = $u32 0;
+    t.c_oflag = $u32 0;
+    t.c_cflag = $u32 0;
+    t.c_lflag = $u32 0;
+    for (u64 i = 0x0; i < TTY_NCCS; i++) t.c_cc[i] = $u8 0;
+
+    // --- input flags ---
+    t.c_iflag |= $u32 TTY_ICRNL;    //map CR -> NL
+
+    // --- output flags ---
+    t.c_oflag |= $u32 TTY_OPOST;    //enable post-processing 
+    t.c_oflag |= $u32 TTY_ONLCR;    //map NL -> CR NL
+
+    // --- control flags ---
+
+    // --- local flags ---
+    t.c_lflag |= $u32 TTY_ICANON;   //enable line discipline
+    t.c_lflag |= $u32 TTY_ECHO;     //echo characters back to backend
+    t.c_lflag |= $u32 TTY_ECHOE;    //visually delete the last character typed on backspace
+
+    // --- control chars ---
+    t.c_cc[TTY_VERASE] = $u8 0x7F;      //set backspace char to be DEL
+
+    return t;
+}
+
+//reads bytes from outq into buf
 //for now, this also prompts polling of the serial port, 
 //TODO should move that stuff into an interrupt, the interrupt handler should call tty_accept_input on the tty associated with 
 //the serial backend
 i64 tty_read(tty* tty, u8* buf, u64 amt) {
-    return $i64 -1; //TODO
+    //poll serial port until out of bytes, feed through accept_input
+    {   
+        string serial_buf = new string();
+        while(1) {
+            i32 res = poll_serial();
+            if(res < 0) break;
+            passert(res >= 0 && res < 256, "tty_read() : checking if res is in range");
+            serial_buf.push_back($u8 res);
+        }
+        u8* jstr = serial_buf.jstr();
+        u64 bufptr = 0x0;
+        while(bufptr < serial_buf.size()) {
+            i64 ret = tty_accept_input(tty, @(jstr[bufptr]), serial_buf.size() - bufptr);
+            if(ret < $i64 0) {
+                panic("tty_read() : this thing should always work i hope D:");
+            }
+            bufptr += $u64 ret;
+        }
+        passert(bufptr == serial_buf.size(), "tty_read() : bufptr should be at end of buffer");
+    }
+
+    //read to buf from outq
+    u64 ret = 0x0;
+    for(u64 i = 0x0; i < amt; i++) {
+        if(tty->outq.size() == 0x0) {
+            break;
+        }
+        buf[i] = tty->outq.pop_front();
+        ret ++;
+    }
+
+    if(ret == 0x0) {
+        //try again later
+        return $i64 -ERR_AGAIN;
+    }
+    return $i64 ret;
 }
 
-//writes to backend, handles all output formatting
+//writes to backend from buf, handles all output formatting
 i64 tty_write(tty* tty, u8* buf, u64 amt) {
-    return $i64 -1; //TODO
+    if(!(tty->termios.c_oflag & $u32 TTY_OPOST)) {
+        //skip output formatting
+        return tty->backend_ops->op_accept_input#(tty, buf, amt);
+    }   
+    //output formatting
+    //stream the bytes one by one
+    u64 bytes_written = 0x0;
+    for(u64 i = 0x0; i < amt; i++) {
+        //generate formatted char
+        u8 c = buf[i];
+        u8* fmt = $u8* nullptr;
+        if(c == '\n' && $i32 (tty->termios.c_oflag & $u32 TTY_ONLCR)) {
+            fmt = "\r\n";
+        }
+        else {
+            fmt = @c;
+        }
+
+        //write to backend
+        passert($void* fmt != nullptr, "tty_write() : should be assigned by now");
+        u64 fmt_sz = strlen(fmt);
+        u64 fmt_ptr = 0x0;
+        while(fmt_ptr < fmt_sz) {
+            i64 stat = tty->backend_ops->op_accept_input#(tty, @(fmt[fmt_ptr]), fmt_sz - fmt_ptr);
+            if(stat < $i64 0) {
+                return stat;
+            }
+            fmt_ptr += $u64 stat;
+        }
+        passert(fmt_ptr == fmt_sz, "tty_write() : should be done writing here");
+        bytes_written ++;
+    }
+    return $i64 bytes_written;
 }
 
-//writes to inq, handles all input formatting, then if ready, writes to outq
+//writes to inq from buf, handles all input formatting, then if ready, writes to outq
 i64 tty_accept_input(tty* tty, u8* buf, u64 amt) {
-    return $i64 -1; //TODO
+    //stream bytes one by one into inq
+    u64 bytes_written = 0x0;
+    i32 icrnl = $i32 (tty->termios.c_iflag & $u32 TTY_ICRNL) != 0;
+    i32 canonical = $i32 (tty->termios.c_lflag & $u32 TTY_ICANON) != 0;
+    i32 echo = $i32 (tty->termios.c_lflag & $u32 TTY_ECHO) != 0;
+    for(u64 i = 0x0; i < amt; i++) {
+        i32 flush = 0;
+        u8 c = buf[i];
+
+        //map CR -> NL
+        if(icrnl && c == '\r') {
+            c = '\n';
+        }
+
+        //handle flush behaviour
+        if(canonical) {
+            //only flush on newline
+            if(c == '\n') flush = 1;
+        }
+        else {
+            //always flush on non-canonical mode
+            flush = 1;
+        }
+
+        //handle pushing char to inq
+        i32 erased = 0;
+        if(canonical) {
+            if(c == tty->termios.c_cc[TTY_VERASE]) {
+                //backspace
+                if(tty->inq.size() != 0x0) {
+                    tty->inq.pop_back();
+                    erased = 1;
+                }
+            }
+            else {
+                //push char to inq
+                tty->inq.push_back(c);
+            }
+        }
+        else {
+            //no line editing
+            tty->inq.push_back(c);
+        }
+
+        //handle echoing
+        if(echo) {
+            i32 echoe = $i32 (tty->termios.c_lflag & $u32 TTY_ECHOE);
+            if(c == tty->termios.c_cc[TTY_VERASE] && echoe && erased) {
+                //echo "\b \b" to visually erase
+                if($u64 (tty->backend_ops->op_accept_input#(tty, "\b \b", 0x3))  != 0x3) {
+                    panic("tty_accept_input() : this should succeed");
+                }
+            }
+            else {
+                //just echo normally
+                if($u64 (tty->backend_ops->op_accept_input#(tty, @c, 0x1)) != 0x1) {
+                    panic("tty_accept_input() : this should succeed");
+                }
+            }
+        }
+
+        //if we need to flush, move everything from inq to outq
+        if(flush) {
+            while(tty->inq.size() != 0x0) {
+                tty->outq.push_back(tty->inq.pop_front());
+            }
+        }
+
+        bytes_written ++;
+    }
+
+    return $i64 bytes_written;
+}
+
+i32 tty_set_termios(tty* tty, termios* in_termios) {
+    memcpy($void* @(tty->termios), $void* in_termios, sizeof(termios));
+    return 0;
+}
+
+i32 tty_get_termios(tty* tty, termios* out_termios) {
+    memcpy($void* out_termios, $void* @(tty->termios), sizeof(termios));
+    return 0;
 }
 
 i32 tty_close(tty* tty) {
@@ -65,25 +244,37 @@ void init_tty_file_ops() {
 }
 
 i64 tty_read(file* fd, u8* buf, u64 amt) {
-    return $i64 -1; //TODO
+    passert(fd->type == FILE_TYPE_TTY, "tty_read() : mismatching type");
+    passert(fd->resource_ptr != nullptr, "tty_read() : resource must be not null");
+    tty* tty = $tty* fd->resource_ptr;
+    return tty_read(tty, buf, amt);
 }
 
 i64 tty_write(file* fd, u8* buf, u64 amt) {
-    return $i64 -1; //TODO
+    passert(fd->type == FILE_TYPE_TTY, "tty_write() : mismatching type");
+    passert(fd->resource_ptr != nullptr, "tty_write() : resource must be not null");
+    tty* tty = $tty* fd->resource_ptr;
+    return tty_write(tty, buf, amt);
 }
 
 i64 tty_lseek(file* fd, i64 off, i32 whence) {
-    return $i64 -1; //TODO
+    //lseek doesn't make sense
+    return $i64 -1;
 }
 
 i64 tty_getdents(file* fd, u8* buf, u64 amt) {
-    return $i64 -1; //TODO
+    //getdents doesn't make sense
+    return $i64 -1;
 }
 
 i32 tty_close(file* fd){ 
-    return $i32 -1; //TODO
+    passert(fd->type == FILE_TYPE_TTY, "tty_close() : mismatching type");
+    passert(fd->resource_ptr != nullptr, "tty_close() : resource must be not null");
+    tty* tty = $tty* fd->resource_ptr;
+    return tty_close(tty);
 }
 
 i32 tty_truncate(file* fd, u64 nsz) {
-    return $i32 -1; //TODO
+    //truncate doesn't make sense
+    return $i32 -1; 
 }

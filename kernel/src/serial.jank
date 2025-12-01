@@ -3,7 +3,6 @@
 [__GLOBAL_FIRST__] u16 COM1 = $u16 0x3f8;
 
 [SERIAL_STREAM] serial_ostream sout = new serial_ostream();
-[SERIAL_STREAM] serial_istream sin = new serial_istream();
 
 struct serial_ostream {}
 
@@ -58,71 +57,6 @@ serial_ostream& operator<<(serial_ostream& stream, T* p) {
     return stream;
 }
 
-struct serial_istream {
-    u8 next_char() {
-        return read_serial();
-    }
-
-    i32 is_whitespace(u8 c) {
-        return c == ' ' || c == '\n' || c == '\t' || c == '\r';
-    }
-
-    //if we hit eof before a token, returns empty string
-    string next_token() {
-        string tok = new string();
-
-        i32 found_tok = 0;
-        while(1) {
-            u8 c = this.next_char();
-            if(this.is_whitespace(c)) {
-                if(found_tok) break;
-            }
-            else {
-                found_tok = 1;
-                tok.push_back(c);
-            }
-        }
-
-        if(!found_tok) return new string();
-        return tok;
-    }
-
-    string next_line() {
-        string line = new string();
-
-        i32 found_line = 0;
-        while(1) {
-            u8 c = this.next_char();
-            if(c == '\r') {
-                if(found_line) break;
-            }
-            else {
-                found_line = 1;
-                if(c == '\n') continue;
-                line.push_back(c);
-            }
-        }
-
-        if(!found_line) return new string();
-        return line;
-    }
-}
-
-serial_istream& operator>>(serial_istream& stream, string& s) {
-    s = stream.next_token();
-    return stream;
-}
-
-serial_istream& operator>>(serial_istream& stream, u64& x) {
-    x = stou64(stream.next_token());
-    return stream;
-}
-
-serial_istream& operator>>(serial_istream& stream, i32& x) {
-    x = stoi32(stream.next_token());
-    return stream;
-}
-
 i32 init_serial() {
     outb(COM1 + $u16 1, $u8 0x00);    // Disable all interrupts
     outb(COM1 + $u16 3, $u8 0x80);    // Enable DLAB (set baud rate divisor)
@@ -158,8 +92,6 @@ u8 serial_received() {
 u8 read_serial() {
     while(serial_received() == $u8 0) {}
     u8 c = inb(COM1);
-    write_serial(c);
-    if(c == '\r') write_serial('\n');
     return c;
 }
 
@@ -167,8 +99,6 @@ u8 read_serial() {
 i32 poll_serial() {
     if(serial_received() != $u8 0) {
         u8 c = inb(COM1);
-        write_serial(c);
-        if(c == '\r') write_serial('\n');
         return $i32 c;
     }
     return -1;
@@ -306,9 +236,11 @@ void init_serial_tty_backend_ops() {
 }
 
 i64 serial_accept_input(tty* tty, u8* buf, u64 amt) {
-    return $i64 -1; //TODO
+    for(u64 i = 0x0; i < amt; i++) write_serial(buf[i]);
+    return $i64 amt;
 }
 
 i32 serial_close(tty* tty) {
-    return $i32 -1; //TODO
+    //do nothing
+    return 0;
 }

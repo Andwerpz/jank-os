@@ -202,9 +202,18 @@ process* create_process(u64 flags) {
     process_pt_alloc_userspace(proc, proc->pt, flags);
 
     if(flags & PROCESS_CREATE_FDTABLE) {
-        proc->fd_table[0] = file_create_serial($u64 O_RDONLY); //STDIN
-        proc->fd_table[1] = file_create_serial($u64 O_WRONLY); //STDOUT
-        proc->fd_table[2] = file_create_serial($u64 O_WRONLY); //STDERR
+        passert(proc->pid == $pid_t 0x1, "create_process() : should only create new fdtable for init process");
+        
+        tty* tty = $tty* malloc(sizeof(tty));
+        new (tty) tty();
+        tty->termios = tty_gen_default_termios();
+        tty->backend = nullptr;
+        tty->backend_ops = TTY_BACKEND_OPS_SERIAL;
+        tty->refcount = 0x0;
+
+        proc->fd_table[STDIN] = file_create_tty($u64 O_RDONLY, tty);
+        proc->fd_table[STDOUT] = file_create_tty($u64 O_WRONLY, tty);
+        proc->fd_table[STDERR] = file_create_tty($u64 O_WRONLY, tty);
     }
 
     //write initial execution context to trapframe

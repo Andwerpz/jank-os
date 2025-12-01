@@ -110,20 +110,20 @@ i32 enable_raw_mode(i32 fd) {
     }
 
     // save a copy so we can restore later
-    orig_termios = t; 
+    orig_termios = t;
 
     // raw mode: turn off canonical, echo, signals
-    t.c_lflag &= $u32 ~(ICANON | ECHO | ISIG);
+    t.c_lflag &= $u32 ~(TTY_ICANON | TTY_ECHO | TTY_ISIG);
 
     // input flags: no CR->NL, no XON/XOFF
-    t.c_iflag &= $u32 ~(ICRNL | IXON);
+    t.c_iflag &= $u32 ~(TTY_ICRNL | TTY_IXON);
 
-    // output flags: no post-processing (so '\n' stays '\n')
-    t.c_oflag &= $u32 ~(OPOST);
+    // output flags: no post-processing
+    t.c_oflag &= $u32 ~(TTY_OPOST);
 
     // read returns as soon as 1 byte is available
-    t.c_cc[VMIN]  = $u8 1;
-    t.c_cc[VTIME] = $u8 0;
+    t.c_cc[TTY_VMIN]  = $u8 1;
+    t.c_cc[TTY_VTIME] = $u8 0;
 
     // apply new settings
     if(tcsetattr(fd, @t)) {

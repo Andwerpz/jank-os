@@ -43,6 +43,7 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_LSEEK            = $u64 8;
 [__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
 [__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
+[__GLOBAL_FIRST__] u64 SYS_IOCTL            = $u64 16;
 [__GLOBAL_FIRST__] u64 SYS_PIPE             = $u64 22;
 [__GLOBAL_FIRST__] u64 SYS_SCHED_YIELD      = $u64 24;
 [__GLOBAL_FIRST__] u64 SYS_DUP2             = $u64 33;
@@ -208,6 +209,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_RMDIR)            ans = $u64 sys_rmdir($u8* arg1);
     else if(sys_id == SYS_UNLINK)           ans = $u64 sys_unlink($u8* arg1);
     else if(sys_id == SYS_LSEEK)            ans = $u64 sys_lseek($i32 arg1, $i64 arg2, $i32 arg3);
+    else if(sys_id == SYS_IOCTL)            ans = $u64 sys_ioctl($i32 arg1, $u32 arg2, $void* arg3);
 
     else {
         pt_switch_to_kernel();
@@ -1227,4 +1229,44 @@ i32 sys_fstat(i32 fd, stat* statbuf) {
 
     pt_switch(user_pt);
     return 0;
+}
+
+i32 sys_ioctl(i32 fd, u32 op, void* arg) {
+    //make sure fd is in range
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        return -ERR_BADF;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //get file
+    process* proc = get_cur_proc();
+    file* file = proc->fd_table[fd];
+    if(file == nullptr) {
+        //file doesn't exist
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    i32 retval = -ERR_UNKNOWN;
+    if(file->type == FILE_TYPE_TTY) {
+        if(op == $u32 TCGETS) {
+            //retrieve current termios
+            termios* t = $termios* malloc(sizeof(termios));
+            retval = tty_get_termios($tty* file->resource_ptr, t);
+            copy_to_user(user_pt, $u8* t, $u8* arg, sizeof(termios));
+            free($void* t, sizeof(termios));
+        }
+        else if(op == $u32 TCSETS) {
+            //set current termios
+            termios* t = $termios* malloc(sizeof(termios));
+            copy_from_user(user_pt, $u8* t, $u8* arg, sizeof(termios));
+            retval = tty_set_termios($tty* file->resource_ptr, t);
+            free($void* t, sizeof(termios));
+        }
+    }
+
+    pt_switch(user_pt);
+    return retval;
 }
