@@ -1,0 +1,89 @@
+
+//TTY : teletypwriter
+//one kind of fd
+
+//each tty should have one backend associated with it
+//this usually represents some actual hardware, but it could also be emulated
+//writes to tty get pushed through to the backend, and writes to backend get pushed through to tty
+//accept_input is the way for tty and backend to recieve bytes from eachother
+
+struct tty_backend_ops {
+    fn<i64(tty*, u8*, u64)> op_accept_input;
+    fn<i32(tty*)> op_close;
+}
+
+struct tty {
+    deque<u8> outq;                 //bytes ready to be sent to user program
+    deque<u8> inq;                  //bytes waiting to be processed
+    termios termios;                //tty settings
+    void* backend;                  //hardware terminal / terminal emulator handle
+    tty_backend_ops* backend_ops;       
+    u64 refcount;                   //number of open file structs pointing here
+}
+
+//reads bytes from outq
+//for now, this also prompts polling of the serial port, 
+//TODO should move that stuff into an interrupt, the interrupt handler should call tty_accept_input on the tty associated with 
+//the serial backend
+i64 tty_read(tty* tty, u8* buf, u64 amt) {
+    return $i64 -1; //TODO
+}
+
+//writes to backend, handles all output formatting
+i64 tty_write(tty* tty, u8* buf, u64 amt) {
+    return $i64 -1; //TODO
+}
+
+//writes to inq, handles all input formatting, then if ready, writes to outq
+i64 tty_accept_input(tty* tty, u8* buf, u64 amt) {
+    return $i64 -1; //TODO
+}
+
+i32 tty_close(tty* tty) {
+    passert(tty->refcount != 0x0, "tty_close() : tty with 0 references should already be dealloced");
+    tty->refcount --;
+    i32 retval = 0;
+    if(tty->refcount == 0x0) {
+        retval = tty->backend_ops->op_close#(tty);
+        tty->~();
+        free($void* tty, sizeof(tty));
+    }
+    return retval;
+}
+
+
+[__GLOBAL_FIRST__] file_ops* FILE_OPS_TTY;
+void init_tty_file_ops() {
+    FILE_OPS_TTY = $file_ops* malloc(sizeof(file_ops));
+    new (FILE_OPS_TTY) file_ops();
+    FILE_OPS_TTY->op_read = #<tty_read(file*, u8*, u64)>;
+    FILE_OPS_TTY->op_write = #<tty_write(file*, u8*, u64)>;
+    FILE_OPS_TTY->op_lseek = #<tty_lseek(file*, i64, i32)>;
+    FILE_OPS_TTY->op_getdents = #<tty_getdents(file*, u8*, u64)>;
+    FILE_OPS_TTY->op_close = #<tty_close(file*)>;
+    FILE_OPS_TTY->op_truncate = #<tty_truncate(file*, u64)>;
+}
+
+i64 tty_read(file* fd, u8* buf, u64 amt) {
+    return $i64 -1; //TODO
+}
+
+i64 tty_write(file* fd, u8* buf, u64 amt) {
+    return $i64 -1; //TODO
+}
+
+i64 tty_lseek(file* fd, i64 off, i32 whence) {
+    return $i64 -1; //TODO
+}
+
+i64 tty_getdents(file* fd, u8* buf, u64 amt) {
+    return $i64 -1; //TODO
+}
+
+i32 tty_close(file* fd){ 
+    return $i32 -1; //TODO
+}
+
+i32 tty_truncate(file* fd, u64 nsz) {
+    return $i32 -1; //TODO
+}

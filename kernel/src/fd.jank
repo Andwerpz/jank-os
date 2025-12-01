@@ -1,24 +1,30 @@
 
-[__GLOBAL_FIRST__] u64 FD_TYPE_SERIAL = 0x0;
-[__GLOBAL_FIRST__] u64 FD_TYPE_VFS    = 0x1;
-[__GLOBAL_FIRST__] u64 FD_TYPE_PIPE   = 0x2;
+//file descriptors just refer to the array of pointers that each process has
+//files are the underlying file struct that hold handles to the underlying resources
+//multiple file descriptors can point towards the same file struct
+//the file struct holds metadata related to the file's current access mode by the user. 
 
-//file descriptor position should be managed internally by these fd_ops. 
+[__GLOBAL_FIRST__] u64 FILE_TYPE_SERIAL = 0x0;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_VFS    = 0x1;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_PIPE   = 0x2;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_TTY    = 0x3;
+
+//file descriptor position should be managed internally by these file_ops. 
 //position should just be some opaque thing that each fd uses to keep track of where they are. 
 //for some file types, position can be well defined, user can modify it via lseek
-struct fd_ops {
-    fn<i64(file_descriptor*, u8*, u64)> op_read;            //reads some bytes into the provided buffer, returns the number of bytes read or -1
-    fn<i64(file_descriptor*, u8*, u64)> op_write;           //writes some bytes from the provided buffer, returns the number of bytes read or -1
-    fn<i64(file_descriptor*, i64, i32)> op_lseek;           //moves the fd position, returns the new position or -1
-    fn<i64(file_descriptor*, u8*, u64)> op_getdents;        //reads directory entries into provided buffer, returns number of bytes read
-    fn<i32(file_descriptor*)> op_close;                     //closes the fd and underlying resource
-    fn<i32(file_descriptor*, u64)> op_truncate;             //sets the size of the underlying resource
+struct file_ops {
+    fn<i64(file*, u8*, u64)> op_read;            //reads some bytes into the provided buffer, returns the number of bytes read or -1
+    fn<i64(file*, u8*, u64)> op_write;           //writes some bytes from the provided buffer, returns the number of bytes read or -1
+    fn<i64(file*, i64, i32)> op_lseek;           //moves the fd position, returns the new position or -1
+    fn<i64(file*, u8*, u64)> op_getdents;        //reads directory entries into provided buffer, returns number of bytes read
+    fn<i32(file*)> op_close;                     //closes the fd and underlying resource
+    fn<i32(file*, u64)> op_truncate;             //sets the size of the underlying resource
 }
 
-struct file_descriptor {
+struct file {
     u64 type;
     void* resource_ptr;
-    fd_ops* ops;
+    file_ops* ops;
     u64 position;
     u64 flags;
     u64 refcount;
@@ -30,13 +36,13 @@ struct file_descriptor {
     u64 write_count;
 }
 
-file_descriptor* fd_create_serial(u64 flags) {
-    file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
-    new (fd) file_descriptor();
+file* file_create_serial(u64 flags) {
+    file* fd = $file* malloc(sizeof(file));
+    new (fd) file();
 
-    fd->type = FD_TYPE_SERIAL;
+    fd->type = FILE_TYPE_SERIAL;
     fd->resource_ptr = nullptr;
-    fd->ops = FD_OPS_SERIAL;
+    fd->ops = FILE_OPS_SERIAL;
     fd->position = 0x0;
     fd->flags = flags;
     fd->refcount = 0x1;
@@ -44,14 +50,31 @@ file_descriptor* fd_create_serial(u64 flags) {
     return fd;
 }
 
-//this expects that inode should already have a reference allocated to it. 
-file_descriptor* fd_create_vfs(u64 flags, vfs_inode* inode) {
-    file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
-    new (fd) file_descriptor();
+//increments refcount of inode
+file* file_create_vfs(u64 flags, vfs_inode* inode) {
+    file* fd = $file* malloc(sizeof(file));
+    new (fd) file();
 
-    fd->type = FD_TYPE_VFS;
+    fd->type = FILE_TYPE_VFS;
     fd->resource_ptr = $void* inode;
-    fd->ops = FD_OPS_VFS;
+    fd->ops = FILE_OPS_VFS;
+    fd->position = 0x0;
+    fd->flags = flags;
+    fd->refcount = 0x1;
+
+    vfs_inc_refcnt(inode);
+
+    return fd;
+}
+
+//takes ownership of pipe reference
+file* file_create_pipe(u64 flags, pipe_ref* pipe) {
+    file* fd = $file* malloc(sizeof(file));
+    new (fd) file();
+
+    fd->type = FILE_TYPE_PIPE;
+    fd->resource_ptr = $void* pipe;
+    fd->ops = FILE_OPS_PIPE;
     fd->position = 0x0;
     fd->flags = flags;
     fd->refcount = 0x1;
@@ -59,30 +82,33 @@ file_descriptor* fd_create_vfs(u64 flags, vfs_inode* inode) {
     return fd;
 }
 
-file_descriptor* fd_create_pipe(u64 flags, pipe_ref* pipe) {
-    file_descriptor* fd = $file_descriptor* malloc(sizeof(file_descriptor));
-    new (fd) file_descriptor();
+//increments refcount of tty
+file* file_create_tty(u64 flags, tty* tty) {
+    file* fd = $file* malloc(sizeof(file));
+    new (fd) file();
 
-    fd->type = FD_TYPE_PIPE;
-    fd->resource_ptr = $void* pipe;
-    fd->ops = FD_OPS_PIPE;
+    fd->type = FILE_TYPE_TTY;
+    fd->resource_ptr = $void* tty;
+    fd->ops = FILE_OPS_TTY;
     fd->position = 0x0;
     fd->flags = flags;
     fd->refcount = 0x1;
+
+    tty->refcount ++;
 
     return fd;
 }
 
 //TODO assert accmode bits
 
-i64 fd_read(file_descriptor* fd, u8* buf, u64 amt) {
+i64 file_read(file* fd, u8* buf, u64 amt) {
     i64 retval = fd->ops->op_read#(fd, buf, amt);
     fd->read_count ++;
     if(retval > $i64 0) fd->bytes_read += $u64 retval;
     return $i64 retval;
 }
 
-i64 fd_write(file_descriptor* fd, u8* buf, u64 amt) {
+i64 file_write(file* fd, u8* buf, u64 amt) {
     i64 retval = fd->ops->op_write#(fd, buf, amt);
     fd->write_count ++;
     if(retval > $i64 0) fd->bytes_written += $u64 retval;
@@ -92,28 +118,28 @@ i64 fd_write(file_descriptor* fd, u8* buf, u64 amt) {
 // SEEK_SET : set the position to the given offset
 // SEEK_CUR : increment the position by the offset
 // SEEK_END : set the position to EOF + off
-i64 fd_lseek(file_descriptor* fd, i64 off, i32 whence) {
+i64 file_lseek(file* fd, i64 off, i32 whence) {
     return fd->ops->op_lseek#(fd, off, whence);
 }
 
-i64 fd_getdents(file_descriptor* fd, u8* buf, u64 amt) {
+i64 file_getdents(file* fd, u8* buf, u64 amt) {
     i64 retval = fd->ops->op_getdents#(fd, buf, amt);
     return $i64 retval;
 }
 
-i32 fd_close(file_descriptor* fd) {
-    passert(fd->refcount > 0x0, "fd_close() : file descriptors with 0 references should be already dealloced");
+i32 file_close(file* fd) {
+    passert(fd->refcount > 0x0, "file_close() : file descriptors with 0 references should be already dealloced");
     fd->refcount --;
     i32 retval = 0;
     if(fd->refcount == 0x0) {
         retval = fd->ops->op_close#(fd);
         fd->~();
-        free($void* fd, sizeof(file_descriptor));
+        free($void* fd, sizeof(file));
     }
     return retval;
 }
 
-i32 fd_truncate(file_descriptor* fd, u64 nsz) {
+i32 file_truncate(file* fd, u64 nsz) {
     i32 retval = fd->ops->op_truncate#(fd, nsz);
     return retval;
 }

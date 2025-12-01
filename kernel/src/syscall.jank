@@ -300,7 +300,7 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
     }
 
     process* proc = get_cur_proc();
-    file_descriptor* fd = proc->fd_table[fd_ind];
+    file* fd = proc->fd_table[fd_ind];
 
     // check if file descriptor exists
     if(fd == nullptr) {
@@ -316,7 +316,7 @@ i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
 
     //do read
     u8* kbuf = $u8* malloc(amt);
-    i64 retval = fd_read(fd, kbuf, amt);
+    i64 retval = file_read(fd, kbuf, amt);
 
     //transfer data to user buffer
     if(retval > $i64 0) {
@@ -345,7 +345,7 @@ i64 sys_getdents64(i32 fd_ind, u8* buf, u64 amt) {
     }
 
     process* proc = get_cur_proc();
-    file_descriptor* fd = proc->fd_table[fd_ind];
+    file* fd = proc->fd_table[fd_ind];
 
     // check if file descriptor exists
     if(fd == nullptr) {
@@ -361,7 +361,7 @@ i64 sys_getdents64(i32 fd_ind, u8* buf, u64 amt) {
 
     // do getdents
     u8* kbuf = $u8* malloc(amt);
-    i64 retval = fd_getdents(fd, kbuf, amt);
+    i64 retval = file_getdents(fd, kbuf, amt);
 
     // transfer data to user buffer
     if(retval > $i64 0) {
@@ -390,7 +390,7 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     }
 
     process* proc = get_cur_proc();
-    file_descriptor* fd = proc->fd_table[fd_ind];
+    file* fd = proc->fd_table[fd_ind];
 
     // check if file descriptor exists
     if(fd == nullptr) {
@@ -414,7 +414,7 @@ i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
     }
 
     //do write
-    i64 retval = fd_write(fd, kbuf, amt);
+    i64 retval = file_write(fd, kbuf, amt);
 
     //free kbuf
     free($void* kbuf, amt);
@@ -524,12 +524,15 @@ i32 sys_open(u8* path, i32 flags, mode_t mode) {
         return -ERR_UNKNOWN;
     }
 
-    //create fd
-    proc->fd_table[fd_ind] = fd_create_vfs($u64 flags, walk_res);
+    //create fd (this should inc walk_res refcnt)
+    proc->fd_table[fd_ind] = file_create_vfs($u64 flags, walk_res);
+
+    //dec extra refcount due to walk
+    vfs_dec_refcnt(walk_res);
 
     //if O_TRUNC is set and write access mode is set, truncate the file to length 0
     if((O_TRUNC & flags) && (((flags & O_ACCMODE) == O_WRONLY) || ((flags & O_ACCMODE) == O_RDWR))) {
-        fd_truncate(proc->fd_table[fd_ind], 0x0);
+        file_truncate(proc->fd_table[fd_ind], 0x0);
     }
     
     pt_switch(user_pt);
@@ -549,8 +552,8 @@ i32 sys_close(i32 fd_ind) {
     }
 
     process* proc = get_cur_proc();
-    file_descriptor* fd = proc->fd_table[fd_ind];
-    proc->fd_table[fd_ind] = $file_descriptor* nullptr;
+    file* fd = proc->fd_table[fd_ind];
+    proc->fd_table[fd_ind] = $file* nullptr;
     
     // check if file descriptor exists
     if($u64 fd == $u64 nullptr) {
@@ -558,7 +561,7 @@ i32 sys_close(i32 fd_ind) {
         return -ERR_BADF;
     }
 
-    i32 retval = fd_close(fd);
+    i32 retval = file_close(fd);
 
     // set user pt back
     pt_switch(user_pt);
@@ -586,14 +589,14 @@ i64 sys_lseek(i32 fd_ind, i64 off, i32 whence) {
 
     // check if file descriptor exists
     process* proc = get_cur_proc();
-    file_descriptor* fd = proc->fd_table[fd_ind];
+    file* fd = proc->fd_table[fd_ind];
     if($u64 fd == $u64 nullptr) {
         pt_switch(user_pt);
         return $i64 -ERR_BADF;
     }
 
     // call fd lseek
-    i64 ret = fd_lseek(fd, off, whence);
+    i64 ret = file_lseek(fd, off, whence);
 
     pt_switch(user_pt);
     return ret;
@@ -1026,8 +1029,8 @@ i32 sys_pipe(i32[2]* fds) {
     //create file descriptors
     passert($void* proc->fd_table[fdind0] == nullptr, "sys_pipe() : this should be available");
     passert($void* proc->fd_table[fdind1] == nullptr, "sys_pipe() : this should be available");
-    proc->fd_table[fdind0] = fd_create_pipe($u64 O_RDONLY, read_ref);
-    proc->fd_table[fdind1] = fd_create_pipe($u64 O_WRONLY, write_ref);
+    proc->fd_table[fdind0] = file_create_pipe($u64 O_RDONLY, read_ref);
+    proc->fd_table[fdind1] = file_create_pipe($u64 O_WRONLY, write_ref);
 
     //copy fds to user
     i32[2]* kfds = $i32[2]* malloc(sizeof(i32[2]));
@@ -1066,8 +1069,8 @@ i32 sys_dup2(i32 old_fd, i32 new_fd) {
 
     //if new_fd refers to an active fd, close it
     //if any errors occur, they should be ignored
-    fd_close(proc->fd_table[new_fd]);
-    proc->fd_table[new_fd] = $file_descriptor* nullptr;
+    file_close(proc->fd_table[new_fd]);
+    proc->fd_table[new_fd] = $file* nullptr;
 
     //make copy of old_fd in new_fd
     proc->fd_table[new_fd] = proc->fd_table[old_fd];

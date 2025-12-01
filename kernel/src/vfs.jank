@@ -174,7 +174,7 @@ void init_vfs() {
         VFS_ROOT->is_root = 1;
     }
 
-    init_vfs_fd_ops();
+    init_vfs_file_ops();
 
     sout << "done init vfs\n";
 }
@@ -1044,19 +1044,19 @@ i32 vfs_dentry_truncate(vfs_inode* _node, u64 nsz) {
 }
 
 // -- FD OPS --
-[__GLOBAL_FIRST__] fd_ops* FD_OPS_VFS;
-void init_vfs_fd_ops() {
-    FD_OPS_VFS = $fd_ops* malloc(sizeof(fd_ops));
-    new (FD_OPS_VFS) fd_ops();
-    FD_OPS_VFS->op_read = #<vfs_read(file_descriptor*, u8*, u64)>;
-    FD_OPS_VFS->op_write = #<vfs_write(file_descriptor*, u8*, u64)>;
-    FD_OPS_VFS->op_lseek = #<vfs_lseek(file_descriptor*, i64, i32)>;
-    FD_OPS_VFS->op_getdents = #<vfs_getdents(file_descriptor*, u8*, u64)>;
-    FD_OPS_VFS->op_close = #<vfs_close(file_descriptor*)>;
-    FD_OPS_VFS->op_truncate = #<vfs_truncate(file_descriptor*, u64)>;
+[__GLOBAL_FIRST__] file_ops* FILE_OPS_VFS;
+void init_vfs_file_ops() {
+    FILE_OPS_VFS = $file_ops* malloc(sizeof(file_ops));
+    new (FILE_OPS_VFS) file_ops();
+    FILE_OPS_VFS->op_read = #<vfs_read(file*, u8*, u64)>;
+    FILE_OPS_VFS->op_write = #<vfs_write(file*, u8*, u64)>;
+    FILE_OPS_VFS->op_lseek = #<vfs_lseek(file*, i64, i32)>;
+    FILE_OPS_VFS->op_getdents = #<vfs_getdents(file*, u8*, u64)>;
+    FILE_OPS_VFS->op_close = #<vfs_close(file*)>;
+    FILE_OPS_VFS->op_truncate = #<vfs_truncate(file*, u64)>;
 }
 
-i64 vfs_read(file_descriptor* fd, u8* buf, u64 amt) {
+i64 vfs_read(file* fd, u8* buf, u64 amt) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
     if(!node->is_file()) {
@@ -1077,7 +1077,7 @@ i64 vfs_read(file_descriptor* fd, u8* buf, u64 amt) {
     return $i64 read_amt;
 }
 
-i64 vfs_write(file_descriptor* fd, u8* buf, u64 amt) {
+i64 vfs_write(file* fd, u8* buf, u64 amt) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
     if(!node->is_file()) {
@@ -1107,7 +1107,7 @@ i64 vfs_write(file_descriptor* fd, u8* buf, u64 amt) {
     return $i64 write_amt;
 }
 
-i64 vfs_lseek(file_descriptor* fd, i64 off, i32 whence) {
+i64 vfs_lseek(file* fd, i64 off, i32 whence) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
     if(whence == SEEK_SET) {
@@ -1141,7 +1141,7 @@ i64 vfs_lseek(file_descriptor* fd, i64 off, i32 whence) {
     return $i64 fd->position;
 }
 
-i64 vfs_getdents(file_descriptor* fd, u8* buf, u64 amt) {
+i64 vfs_getdents(file* fd, u8* buf, u64 amt) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
     u64 buf_ptr = 0x0;
     u64 pos = fd->position;
@@ -1189,7 +1189,7 @@ i64 vfs_getdents(file_descriptor* fd, u8* buf, u64 amt) {
     return $i64 buf_ptr;
 }
 
-i32 vfs_close(file_descriptor* fd) {
+i32 vfs_close(file* fd) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
     //dec node refcount
@@ -1198,7 +1198,7 @@ i32 vfs_close(file_descriptor* fd) {
     return 0;
 }
 
-i32 vfs_truncate(file_descriptor* fd, u64 nsz) {
+i32 vfs_truncate(file* fd, u64 nsz) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
     if(!node->is_file()) {

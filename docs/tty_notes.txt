@@ -37,5 +37,7 @@ user program -> TTY write -> PTY accept_input -> PTY read -> emulator
 in this case, the TTY is usually referred to as the slave and PTY as the master
 
 can have one implementation of TTY and connect it to different stuff like PTY or hardware terminal by implementing an interface for a TTY backend
+a TTY backend should have a way for the TTY to write bytes to it
+bytes arriving from the backend should go through TTY accept_input and be buffered
 
 nice resource : https://www.linusakesson.net/programming/tty/

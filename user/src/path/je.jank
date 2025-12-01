@@ -82,7 +82,7 @@ void print_stat(stat* st) {
 u8 ESC = $u8 0x1B;
 
 pair<u64, u64> get_terminal_dimensions() {
-    return new pair<u64, u64>($u64 50, $u64 50);
+    return new pair<u64, u64>($u64 50, $u64 75);
 }
 
 void clear_screen() {
@@ -148,8 +148,22 @@ string filename;
 //implied newlines at the end of every line, except for the last line
 vector<string> file;    
 
-//renders the editor window
+//dimensions of the editor itself, doesn't account for any padding 
+u64 edim_rows;
+u64 edim_cols;
 
+//top left coordinate of editor in file space
+u64 editor_row = 0x0;
+u64 editor_col = 0x0;
+
+//cursor position in file space
+u64 cursor_row = 0x0;
+u64 cursor_col = 0x0;
+
+u64 editor_msg_reps = 0x0;
+string editor_msg = new string("");
+
+//renders the editor window
 //--|a.txt
 // 5|editor should look something like this
 // 6|aligned line numbers on the left
@@ -161,17 +175,11 @@ vector<string> file;
 //  |lines that go beyond EOF should not have line numbers
 //--|Ln 8, Col 10              
 //--|editor message teehee
-
-//R C : editor dimensions
-//tr tc : top left row col in file space
-//cr cc : cursor position in file space
-
 //it must be the case that the cursor is contained within the editor window
-
-void render(u64 R, u64 C, u64 tr, u64 tc, u64 cr, u64 cc, string msg) {
+void render() {
     //ensure cursor is inside editor window
-    assert(tr <= cr && cr < tr + R, "render() : cursor row not inside editor");
-    assert(tc <= cc && cc < cc + C, "render() : cursor col not inside editor");
+    assert(editor_row <= cursor_row && cursor_row < editor_row + edim_rows, "render() : cursor row not inside editor");
+    assert(editor_col <= cursor_col && cursor_col < editor_col + edim_cols, "render() : cursor col not inside editor");
 
     //reset screen
     reset_cursor();
@@ -199,7 +207,7 @@ void render(u64 R, u64 C, u64 tr, u64 tc, u64 cr, u64 cc, string msg) {
 
     //editor
     {
-        for(u64 r = tr; r < tr + R; r++) {
+        for(u64 r = editor_row; r < editor_row + edim_rows; r++) {
             //check for line beyond EOF
             if(r >= file.size()) {
                 for(u64 i = 0x0; i < lnum_reserve; i++) {
@@ -219,10 +227,10 @@ void render(u64 R, u64 C, u64 tr, u64 tc, u64 cr, u64 cc, string msg) {
 
             //file contents
             assert(r < file.size(), "render() : r should be in bounds here");
-            if(tc < file[r].size()) {
-                u64 amt = file[r].size() - tc;
-                if(C < amt) amt = C;
-                cout << file[r].substr(tc, amt);
+            if(editor_col < file[r].size()) {
+                u64 amt = file[r].size() - editor_col;
+                if(edim_cols < amt) amt = edim_cols;
+                cout << file[r].substr(editor_col, amt);
             }
 
             cout << "\r\n";
@@ -235,7 +243,7 @@ void render(u64 R, u64 C, u64 tr, u64 tc, u64 cr, u64 cc, string msg) {
             cout << "-";
         }
         cout << "|";
-        cout << "Ln " << (cr + 0x1) << ", Col " << (cc + 0x1);
+        cout << "Ln " << (cursor_row + 0x1) << ", Col " << (cursor_col + 0x1);
         cout << "\r\n";
     }
 
@@ -245,15 +253,23 @@ void render(u64 R, u64 C, u64 tr, u64 tc, u64 cr, u64 cc, string msg) {
             cout << "-";
         }
         cout << "|";
-        if(msg.size() > C) cout << msg.substr(0x0, C);
-        else cout << msg;
+        string reps_str = new string("");
+        if(editor_msg_reps > 0x1) reps_str = new string(" x") + to_string(editor_msg_reps);
+
+        u64 MC = edim_cols;
+        if(reps_str.size() >= edim_cols) MC = edim_cols;
+        else MC = edim_cols - reps_str.size();
+
+        if(editor_msg.size() > MC) cout << editor_msg.substr(0x0, MC);
+        else cout << editor_msg;
+
+        cout << reps_str;
         cout << "\r\n";
     }
 
     //set cursor position
-    assert(cr >= tr && cc >= tc, "render() : cursor pos should be inside editor window");
-    set_cursor((cr - tr) + 0x1, (cc - tc) + lnum_reserve + 0x1);
-    // reset_cursor();
+    assert(cursor_row >= editor_row && cursor_col >= editor_col, "render() : cursor pos should be inside editor window");
+    set_cursor((cursor_row - editor_row) + 0x1, (cursor_col - editor_col) + lnum_reserve + 0x1);
 
     cout.flush();
 }
@@ -277,18 +293,11 @@ i32 save() {
     return 0;
 }
 
-u64 edim_rows = $u64 50;
-u64 edim_cols = $u64 50;
-
-//top left coordinate of editor in file space
-u64 editor_row = 0x0;
-u64 editor_col = 0x0;
-
-//cursor position in file space
-u64 cursor_row = 0x0;
-u64 cursor_col = 0x0;
-
-string editor_msg = new string("");
+void set_msg(string msg) {
+    if(msg == editor_msg) editor_msg_reps ++;
+    else editor_msg_reps = 0x1;
+    editor_msg = msg;
+}
 
 void handle_ansi() {
     vector<u8> seq;
@@ -338,6 +347,18 @@ void handle_ansi() {
             }
             return;
         }
+        else if(c == 'H') {
+            //home
+            //set cursor to beginning of current row
+            cursor_col = 0x0;
+            return;
+        }
+        else if(c == 'F') {
+            //end
+            //set cursor to end of current row
+            cursor_col = file[cursor_row].size();
+            return;
+        }
         else if(c == '5') {
             seq.push_back(c = cin.next_char());
             if(c == '~') {
@@ -375,6 +396,7 @@ void handle_ansi() {
     }
 
     //unknown sequence
+    set_msg(new string("Unrecognized ANSI escape sequence"));
     handle_printable('\\');
     handle_printable('x');
     handle_printable('1');
@@ -421,6 +443,35 @@ void handle_backspace() {
         //update cursor row
         cursor_row --;
     }
+}
+
+void quit(i32 status, string msg) {
+    disable_raw_mode(STDOUT);
+    clear_screen();
+    reset_cursor();
+    cout << msg << "\n";
+    cout.flush();
+    sys_exit(status);
+}
+
+void quit(i32 status) {
+    quit(status, new string());
+}
+
+void handle_quit() {
+    set_msg(new string("Save (Y/N)? Press any other key to cancel"));
+    render();
+    u8 resp = cin.next_char();
+    if(resp == 'Y' || resp == 'y') {
+        if(save()) {
+            quit(1, new string("save failed"));
+        }
+        quit(0);
+    }
+    else if(resp == 'N' || resp == 'n') {
+        quit(0);
+    }
+    set_msg(new string());
 }
 
 i32 main(u64 argc, u8** argv) {
@@ -485,9 +536,19 @@ i32 main(u64 argc, u8** argv) {
     clear_screen();
     reset_cursor();
 
-    while(1) {
-        render(edim_rows, edim_cols, editor_row, editor_col, cursor_row, cursor_col, editor_msg);
+    {
+        pair<u64, u64> dim = get_terminal_dimensions();
+        edim_rows = dim.first;
+        edim_cols = dim.second;
+    }
 
+    set_msg(new string("Welcome to jankedit (je) v1.0"));
+
+    while(1) {
+        //render editor
+        render();
+
+        //process input
         u8 c = cin.next_char();
         if(c == ESC) {
             //ANSI escape sequence
@@ -502,22 +563,20 @@ i32 main(u64 argc, u8** argv) {
             }
             else if(c == ($u8 0x18)) {  //Ctrl + X
                 //quit command
-                break;
+                handle_quit();
             }
             else if(c == ($u8 0x03)) {  //Ctrl + C
                 //quit command
-                break;
+                handle_quit();
             }
             else if(c == ($u8 0x13)) {  //Ctrl + S
                 //save command
                 if(save()) {
-                    disable_raw_mode(STDOUT);
-                    clear_screen();
-                    reset_cursor();
-                    cout << "save failed\n";
-                    return 1;
+                    set_msg(new string("Save failed"));
                 }
-                editor_msg = new string("saved!");
+                else {
+                    set_msg(new string("Saved file ") + filename);
+                }
             }
             else if(c == '\t') {    //tab
                 //just insert 4 spaces
@@ -529,7 +588,7 @@ i32 main(u64 argc, u8** argv) {
                 handle_printable(c);
             }
             else {
-                editor_msg = new string("unrecognized character : ") + to_string($u64 c);
+                set_msg(new string("Unrecognized character : ") + to_string($u64 c));
             }
         }
 
@@ -544,27 +603,8 @@ i32 main(u64 argc, u8** argv) {
         while(editor_col > cursor_col) editor_col --;
         while(editor_col + edim_cols <= cursor_col) editor_col ++;
     }
-    disable_raw_mode(STDOUT);
 
-    //ask if user wants to save
-    clear_screen();
-    reset_cursor();
-    cout << "Save? (Y/N)\n";
-    cout.flush();
-    while(1) {
-        string resp;
-        cin >> resp;
-        if(resp == "Y" || resp == "y") {
-            if(save()) {
-                cout << "save failed\n";
-                return 1;
-            }
-            break;
-        }
-        else if(resp == "N" || resp == "n") {
-            break;
-        }
-    }
+    //should never get here
     
     return 0;
 }

@@ -14,7 +14,7 @@ struct process {
     u64 status;                     // 24
     pagetable_t pt;                 // 32
     i32 exit_status;                // 40
-    file_descriptor*[64] fd_table;  // empty fds will be nullptr
+    file*[64] fd_table;  // empty fds will be nullptr
     process* parent;                // nullptr indicates this is init process
     vector<process*> children;
     vfs_inode* cwd;                 // current working directory
@@ -202,9 +202,9 @@ process* create_process(u64 flags) {
     process_pt_alloc_userspace(proc, proc->pt, flags);
 
     if(flags & PROCESS_CREATE_FDTABLE) {
-        proc->fd_table[0] = fd_create_serial($u64 O_RDONLY); //STDIN
-        proc->fd_table[1] = fd_create_serial($u64 O_WRONLY); //STDOUT
-        proc->fd_table[2] = fd_create_serial($u64 O_WRONLY); //STDERR
+        proc->fd_table[0] = file_create_serial($u64 O_RDONLY); //STDIN
+        proc->fd_table[1] = file_create_serial($u64 O_WRONLY); //STDOUT
+        proc->fd_table[2] = file_create_serial($u64 O_WRONLY); //STDERR
     }
 
     //write initial execution context to trapframe
@@ -395,8 +395,8 @@ void kill_process(pid_t pid, i32 status) {
     //free file descriptors
     for(u64 i = 0x0; i < PROCESS_MAX_FD; i++){
         if(proc->fd_table[i] == nullptr) continue;
-        fd_close(proc->fd_table[i]);
-        proc->fd_table[i] = $file_descriptor* nullptr;
+        file_close(proc->fd_table[i]);
+        proc->fd_table[i] = $file* nullptr;
     }
 
     //free cwd

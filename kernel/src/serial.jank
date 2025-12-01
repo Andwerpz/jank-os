@@ -244,19 +244,19 @@ void serial_println(T x) {
     serial_print("\n");
 }
 
-[__GLOBAL_FIRST__] fd_ops* FD_OPS_SERIAL;
-void init_serial_fd_ops() {
-    FD_OPS_SERIAL = $fd_ops* malloc(sizeof(fd_ops));
-    new (FD_OPS_SERIAL) fd_ops();
-    FD_OPS_SERIAL->op_read = #<serial_read(file_descriptor*, u8*, u64)>;
-    FD_OPS_SERIAL->op_write = #<serial_write(file_descriptor*, u8*, u64)>;
-    FD_OPS_SERIAL->op_lseek = #<serial_lseek(file_descriptor*, i64, i32)>;
-    FD_OPS_SERIAL->op_getdents = #<serial_getdents(file_descriptor*, u8*, u64)>;
-    FD_OPS_SERIAL->op_close = #<serial_close(file_descriptor*)>;
-    FD_OPS_SERIAL->op_truncate = #<serial_truncate(file_descriptor*, u64)>;
+[__GLOBAL_FIRST__] file_ops* FILE_OPS_SERIAL;
+void init_serial_file_ops() {
+    FILE_OPS_SERIAL = $file_ops* malloc(sizeof(file_ops));
+    new (FILE_OPS_SERIAL) file_ops();
+    FILE_OPS_SERIAL->op_read = #<serial_read(file*, u8*, u64)>;
+    FILE_OPS_SERIAL->op_write = #<serial_write(file*, u8*, u64)>;
+    FILE_OPS_SERIAL->op_lseek = #<serial_lseek(file*, i64, i32)>;
+    FILE_OPS_SERIAL->op_getdents = #<serial_getdents(file*, u8*, u64)>;
+    FILE_OPS_SERIAL->op_close = #<serial_close(file*)>;
+    FILE_OPS_SERIAL->op_truncate = #<serial_truncate(file*, u64)>;
 }
 
-i64 serial_read(file_descriptor* fd, u8* buf, u64 amt) {
+i64 serial_read(file* fd, u8* buf, u64 amt) {
     u64 buf_ptr = 0x0;
     while(buf_ptr < amt) {
         i32 res = poll_serial();
@@ -271,27 +271,44 @@ i64 serial_read(file_descriptor* fd, u8* buf, u64 amt) {
     return $i64 buf_ptr;
 }
 
-i64 serial_write(file_descriptor* fd, u8* buf, u64 amt) {
+i64 serial_write(file* fd, u8* buf, u64 amt) {
     for(u64 i = 0x0; i < amt; i++) write_serial(buf[i]);
     return $i64 amt;
 }
 
-i64 serial_lseek(file_descriptor* fd, i64 off, i32 whence) {
+i64 serial_lseek(file* fd, i64 off, i32 whence) {
     //lseek doesn't make sense for serial input
     return $i64 -1;
 }
 
-i64 serial_getdents(file_descriptor* fd, u8* buf, u64 amt) {
+i64 serial_getdents(file* fd, u8* buf, u64 amt) {
     //getdents doesn't make sense for serial input
     return $i64 -1;
 }
 
-i32 serial_close(file_descriptor* fd) {
+i32 serial_close(file* fd) {
     //do nothing
     return 0;
 }
 
-i32 serial_truncate(file_descriptor* fd, u64 nsz) {
+i32 serial_truncate(file* fd, u64 nsz) {
     //truncate doesn't make sense for serial input
     return -1;
+}
+
+
+[__GLOBAL_FIRST__] tty_backend_ops* TTY_BACKEND_OPS_SERIAL;
+void init_serial_tty_backend_ops() {
+    TTY_BACKEND_OPS_SERIAL = $tty_backend_ops* malloc(sizeof(tty_backend_ops));
+    new (TTY_BACKEND_OPS_SERIAL) tty_backend_ops();
+    TTY_BACKEND_OPS_SERIAL->op_accept_input = #<serial_accept_input(tty*, u8*, u64)>;
+    TTY_BACKEND_OPS_SERIAL->op_close = #<serial_close(tty*)>;
+}
+
+i64 serial_accept_input(tty* tty, u8* buf, u64 amt) {
+    return $i64 -1; //TODO
+}
+
+i32 serial_close(tty* tty) {
+    return $i32 -1; //TODO
 }

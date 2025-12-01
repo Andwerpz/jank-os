@@ -25,6 +25,7 @@
 #include "mutex.jank";
 #include "vfs.jank";
 #include "pipe.jank";
+#include "tty.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -237,8 +238,10 @@ void gp_handler_test() {
 
 i32 main() {
     init_acpi();
-    init_serial_fd_ops();
-    init_pipe_fd_ops();
+    init_serial_file_ops();
+    init_serial_tty_backend_ops();
+    init_pipe_file_ops();
+    init_tty_file_ops();
     init_vfs();
     init_ahci();
 
