@@ -8,6 +8,11 @@
 
 //jankedit - simple commandline text editor
 
+//TODO 
+// - optimizations
+//   - reduce number of allocs required to draw 
+//   - write to_string(i32) and to_string(u64) helper that doesn't alloc
+
 void print_file_type(u32 mode) {
     cout << "type       : ";
     u32 ft = mode & S_IFMT;
@@ -95,7 +100,7 @@ void reset_cursor() {
 }
 
 //moves the cursor to (r + 1, c + 1)
-//positions are 1-indexed starting from top right corner
+//positions are 1-indexed starting from top left corner
 void set_cursor(u64 r, u64 c) {
     cout << ESC << "[" << (r + 0x1) << ";" << (c + 0x1) << "H";
 }
@@ -490,18 +495,18 @@ i32 main(u64 argc, u8** argv) {
             return 1;
         }
 
-        stat* st = $stat* malloc(sizeof(stat));
-        if(sys_fstat(fd, st)) {
-            cout << "Failed to fstat file\n";
-            sys_close(fd);
-            return 1;
-        }
+        // stat* st = $stat* malloc(sizeof(stat));
+        // if(sys_fstat(fd, st)) {
+        //     cout << "Failed to fstat file\n";
+        //     sys_close(fd);
+        //     return 1;
+        // }
 
-        if((st->st_mode & S_IFMT) != S_IFREG) {
-            cout << "Can only open regular file\n";
-            sys_close(fd);
-            return 1;
-        }
+        // if((st->st_mode & S_IFMT) != S_IFREG) {
+        //     cout << "Can only open regular file\n";
+        //     sys_close(fd);
+        //     return 1;
+        // }
 
         //read in entire file
         {

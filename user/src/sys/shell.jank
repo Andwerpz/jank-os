@@ -5,6 +5,7 @@
 #include <wait>;
 #include <assert>;
 #include <exec>;
+#include <termios>;
 
 [__GLOBAL_FIRST__] u64 CWD_MAXLEN = $u64 4096;
 string getcwd() {
@@ -17,7 +18,109 @@ string getcwd() {
     return res;
 }
 
-i32 main() {                                                                                          
+u8 ESC = $u8 0x1B;
+u8 DEL = $u8 0x7F;
+
+//raw termios is used when prompting the shell itself
+//canonical termios is switched to when executing a user program
+termios* raw_termios;
+termios* canonical_termios; 
+
+termios* gen_canonical_termios() {
+    termios* t = $termios* malloc(sizeof(termios));
+    memset($void* t, 0, sizeof(termios));
+
+    // --- input flags ---
+    t->c_iflag |= $u32 TTY_ICRNL;    //map CR -> NL
+
+    // --- output flags ---
+    t->c_oflag |= $u32 TTY_OPOST;    //enable post-processing 
+    t->c_oflag |= $u32 TTY_ONLCR;    //map NL -> CR NL
+
+    // --- control flags ---
+
+    // --- local flags ---
+    t->c_lflag |= $u32 TTY_ICANON;   //enable line discipline
+    t->c_lflag |= $u32 TTY_ECHO;     //echo characters back to backend
+    t->c_lflag |= $u32 TTY_ECHOE;    //visually delete the last character typed on backspace
+
+    // --- control chars ---
+    t->c_cc[TTY_VERASE] = $u8 0x7F;      //set backspace char to be DEL
+
+    return t;
+}
+
+termios* gen_raw_termios() {
+    termios* t = gen_canonical_termios();
+
+    // turn off canonical, echo, signals
+    t->c_lflag &= $u32 ~(TTY_ICANON | TTY_ECHO | TTY_ISIG);
+
+    // read returns as soon as 1 byte is available
+    t->c_cc[TTY_VMIN]  = $u8 1;
+    t->c_cc[TTY_VTIME] = $u8 0;
+
+    return t;
+}
+
+i32 enable_raw_mode(i32 fd) {
+    if(tcsetattr(fd, raw_termios)) {
+        return -1;
+    }
+    return 0;
+}
+
+i32 enable_canonical_mode(i32 fd) {
+    if(tcsetattr(fd, canonical_termios)) {
+        return -1;
+    }
+    return 0;
+}
+
+vector<string> interactive_shell() {
+    string line = new string();
+
+    enable_raw_mode(STDOUT);
+    while(1) {
+        u8 c = cin.next_char();
+        if(c == ESC) {
+            //ANSI escape sequence
+            //just print "\\x" for now
+            cout << "\\x";
+            line.push_back('\\');
+            line.push_back('x');
+        }
+        else {
+            //normal character
+            if(c == DEL) {
+                //backspace
+                if(line.size() != 0x0) {
+                    cout << "\b \b";
+                    line.pop_back();
+                }
+            }
+            else if(c == '\n') {
+                //enter pressed
+                break;
+            }
+            else if(c >= ($u8 0x20) && c <= ($u8 0x7E)) {
+                //printable char
+                cout << c;
+                line.push_back(c);
+            }
+        }
+        cout.flush();
+    }
+    cout << "\n";
+    cout.flush();
+    enable_canonical_mode(STDOUT);
+    
+    vector<string> cmd = line.split(' ');    
+    return cmd;
+}
+
+
+i32 main() {                                                                                         
 
     cout << "\n";
     cout << "        88                           88          ,ad8888ba,     ad88888ba " << "\n";     
@@ -33,11 +136,13 @@ i32 main() {
     cout << "Current time UTC (?) : " << strftime() << "\n";
     cout << "\n";
 
+    raw_termios = gen_raw_termios();
+    canonical_termios = gen_canonical_termios(); 
+
     while(1) {
         cout << getcwd() << "> ";
         cout.flush();
-        
-        vector<string> cmd = cin.next_line().split(' ');
+        vector<string> cmd = interactive_shell();
         if(cmd.size() == 0x0) continue;
 
         if(cmd[0] == "quit") {
