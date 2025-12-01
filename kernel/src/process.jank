@@ -14,7 +14,7 @@ struct process {
     u64 status;                     // 24
     pagetable_t pt;                 // 32
     i32 exit_status;                // 40
-    file*[64] fd_table;  // empty fds will be nullptr
+    file*[64] fd_table;             // empty fds will be nullptr
     process* parent;                // nullptr indicates this is init process
     vector<process*> children;
     vfs_inode* cwd;                 // current working directory
