@@ -184,6 +184,7 @@ void init_serial_file_ops() {
     FILE_OPS_SERIAL->op_getdents = #<serial_getdents(file*, u8*, u64)>;
     FILE_OPS_SERIAL->op_close = #<serial_close(file*)>;
     FILE_OPS_SERIAL->op_truncate = #<serial_truncate(file*, u64)>;
+    FILE_OPS_SERIAL->op_fstat = #<serial_fstat(file*, stat*)>;
 }
 
 i64 serial_read(file* fd, u8* buf, u64 amt) {
@@ -224,6 +225,10 @@ i32 serial_close(file* fd) {
 i32 serial_truncate(file* fd, u64 nsz) {
     //truncate doesn't make sense for serial input
     return -1;
+}
+
+i32 serial_fstat(file* file, stat* stat) {
+    return -1;  //TODO
 }
 
 

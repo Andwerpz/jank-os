@@ -12,13 +12,23 @@ struct tty_backend_ops {
     fn<i32(tty*)> op_close;
 }
 
+[__GLOBAL_FIRST__] u64 TTY_NEXT_INO = 0x1;
 struct tty {
+    u64 ino;
     deque<u8> outq;                 //bytes ready to be sent to user program
     deque<u8> inq;                  //bytes waiting to be processed
     termios termios;                //tty settings
     void* backend;                  //hardware terminal / terminal emulator handle
     tty_backend_ops* backend_ops;       
     u64 refcount;                   //number of open file structs pointing here
+
+    tty() {
+        this.ino = TTY_NEXT_INO ++;
+    }
+
+    tty(tty& other) {
+        panic("tty() : should not be using tty copy constructor");
+    }
 }
 
 //default termios 
@@ -241,6 +251,7 @@ void init_tty_file_ops() {
     FILE_OPS_TTY->op_getdents = #<tty_getdents(file*, u8*, u64)>;
     FILE_OPS_TTY->op_close = #<tty_close(file*)>;
     FILE_OPS_TTY->op_truncate = #<tty_truncate(file*, u64)>;
+    FILE_OPS_TTY->op_fstat = #<tty_fstat(file*, stat*)>;
 }
 
 i64 tty_read(file* fd, u8* buf, u64 amt) {
@@ -277,4 +288,25 @@ i32 tty_close(file* fd){
 i32 tty_truncate(file* fd, u64 nsz) {
     //truncate doesn't make sense
     return $i32 -1; 
+}
+
+i32 tty_fstat(file* file, stat* stat) {
+    tty* tty = $tty* file->resource_ptr;
+
+    //clear stat
+    memset($void* stat, 0, sizeof(stat));
+
+    //fill stat
+    stat->st_dev = FILE_TTY_DEV;
+    stat->st_ino = tty->ino;
+    stat->st_nlink = 0x0;
+
+    stat->st_mode = S_IFCHR;
+
+    stat->st_rdev = 0x0;
+    stat->st_size = $i64 0x0;
+    stat->st_blksize = $i64 PAGE_SIZE;
+    stat->st_blocks = $i64 0x0;
+
+    return 0;
 }

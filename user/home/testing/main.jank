@@ -98,11 +98,6 @@ string do_exec(vector<string> args) {
     while(waitpid(pid, wstatus, WNOHANG) == $pid_t 0) {
         //continue
     }
-    if(wstatus[0] != 0) {
-        cout << "exec " << path << " returned with status " << wstatus[0] << "\n";
-        sys_exit(1);
-    }
-    free($void* wstatus, sizeof(i32));
 
     //read what the child wrote
     string ret;
@@ -115,6 +110,16 @@ string do_exec(vector<string> args) {
 
     //close read end
     sys_close(pipe[0]);
+
+    //if child exited with error, report and exit
+    if(wstatus[0] != 0) {
+        cout << "exec " << path << " returned with status " << wstatus[0] << "\n";
+        cout << ret << "\n";
+        cout.flush();
+        sys_exit(1);
+    }
+
+    free($void* wstatus, sizeof(i32));
 
     return ret;
 }

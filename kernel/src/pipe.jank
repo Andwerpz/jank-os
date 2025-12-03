@@ -1,5 +1,8 @@
 
+[__GLOBAL_FIRST__] u64 PIPE_NEXT_INO = 0x1;
 struct pipe {
+    u64 ino;
+
     deque<u8> queue;    //lmao, replace later
 
     //reference counts
@@ -7,6 +10,7 @@ struct pipe {
     u64 writers;
 
     pipe() {
+        this.ino = PIPE_NEXT_INO ++;
         this.readers = 0x0;
         this.writers = 0x0;
     }
@@ -122,6 +126,7 @@ void init_pipe_file_ops() {
     FILE_OPS_PIPE->op_getdents = #<pipe_getdents(file*, u8*, u64)>;
     FILE_OPS_PIPE->op_close = #<pipe_close(file*)>;
     FILE_OPS_PIPE->op_truncate = #<pipe_truncate(file*, u64)>;
+    FILE_OPS_PIPE->op_fstat = #<pipe_fstat(file*, stat*)>;
 }
 
 i64 pipe_read(file* fd, u8* buf, u64 amt) {
@@ -165,4 +170,26 @@ i32 pipe_close(file* fd) {
 i32 pipe_truncate(file* fd, u64 nsz) {
     //truncate doesn't make sense for pipes
     return -1;
+}
+
+i32 pipe_fstat(file* file, stat* stat) {
+    pipe_ref* ref = $pipe_ref* file->resource_ptr;
+    pipe* pipe = ref->pipe;
+
+    //clear stat
+    memset($void* stat, 0, sizeof(stat));
+
+    //fill stat
+    stat->st_dev = FILE_PIPE_DEV;
+    stat->st_ino = pipe->ino;
+    stat->st_nlink = 0x0;
+
+    stat->st_mode = S_IFIFO;
+
+    stat->st_rdev = 0x0;
+    stat->st_size = $i64 0x0;
+    stat->st_blksize = $i64 PAGE_SIZE;
+    stat->st_blocks = $i64 0x0;
+
+    return 0;
 }

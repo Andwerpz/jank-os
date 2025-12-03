@@ -495,18 +495,18 @@ i32 main(u64 argc, u8** argv) {
             return 1;
         }
 
-        // stat* st = $stat* malloc(sizeof(stat));
-        // if(sys_fstat(fd, st)) {
-        //     cout << "Failed to fstat file\n";
-        //     sys_close(fd);
-        //     return 1;
-        // }
+        stat* st = $stat* malloc(sizeof(stat));
+        if(sys_fstat(fd, st)) {
+            cout << "Failed to fstat file\n";
+            sys_close(fd);
+            return 1;
+        }
 
-        // if((st->st_mode & S_IFMT) != S_IFREG) {
-        //     cout << "Can only open regular file\n";
-        //     sys_close(fd);
-        //     return 1;
-        // }
+        if((st->st_mode & S_IFMT) != S_IFREG) {
+            cout << "Can only open regular file\n";
+            sys_close(fd);
+            return 1;
+        }
 
         //read in entire file
         {
@@ -610,6 +610,7 @@ i32 main(u64 argc, u8** argv) {
     }
 
     //should never get here
+    assert(0, "should never get here");
     
     return 0;
 }

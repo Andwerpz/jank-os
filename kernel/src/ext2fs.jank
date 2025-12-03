@@ -1628,21 +1628,23 @@ void init_ext2() {
     VFS_EXT2_OPS->read_file = #<ext2_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_EXT2_OPS->write_file = #<ext2_write_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_EXT2_OPS->truncate = #<ext2_truncate(vfs_inode*, u64)>;
+
+    VFS_EXT2_OPS->fstat = #<ext2_fstat(vfs_inode*, stat*)>;
 }
 
 //expects vfs_inode to be preallocated
 //constructs a new instance of vfs_inode in the provided buffer
-void ext2_construct_vfs_inode(string name, u32 inode_num, ext2_fs* super, ext2_inode* ext2_inode, vfs_inode* vfs_inode) {
+void ext2_construct_vfs_inode(u64 dev, string name, u32 inode_num, ext2_fs* super, ext2_inode* ext2_inode, vfs_inode* vfs_inode) {
     u64 type = DT_UNKNOWN;
-    if((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_FIFO) type = DT_FIFO;
-    else if((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_CHAR_DEV) type = DT_CHR;
-    else if((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_DIR) type = DT_DIR;
-    else if((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_BLOCK_DEV) type = DT_BLK;
-    else if((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_FILE) type = DT_REG;
-    else if((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_SYM_LINK) type = DT_LNK;
-    else if((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_UNIX_SOCK) type = DT_SOCK;
+    if      ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_FIFO)       type = DT_FIFO;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_CHAR_DEV)   type = DT_CHR;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_DIR)        type = DT_DIR;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_BLOCK_DEV)  type = DT_BLK;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_FILE)       type = DT_REG;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_SYM_LINK)   type = DT_LNK;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_UNIX_SOCK)  type = DT_SOCK;
 
-    new (vfs_inode) vfs_inode(name, type, sizeof(ext2_inode), $u64 inode_num, $void* ext2_inode, $void* super, VFS_EXT2_OPS);
+    new (vfs_inode) vfs_inode(dev, $u64 inode_num, name, type, sizeof(ext2_inode), $u64 inode_num, $void* ext2_inode, $void* super, VFS_EXT2_OPS);
 }
 
 //vfs operation to produce root inode for this ext2 filesystem
@@ -1656,7 +1658,7 @@ i32 ext2_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
         return 1;
     }
 
-    ext2_construct_vfs_inode(_node->name, $u32 2, fs, node, res);
+    ext2_construct_vfs_inode(file_next_dev(), _node->name, $u32 2, fs, node, res);
     return 0;
 }
 
@@ -1677,7 +1679,7 @@ i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
     }
 
     //construct output and return
-    ext2_construct_vfs_inode(child, child_node_num, fs, child_node, res);
+    ext2_construct_vfs_inode(_node->dev, child, child_node_num, fs, child_node, res);
     return VFS_WALK_FOUND;
 }
 
@@ -2183,6 +2185,39 @@ i32 ext2_truncate(vfs_inode* _node, u64 nsz) {
     if(ext2_write_inode(fs, node, $u32 _node->node_num)) {
         panic("ext2_truncate() : failed to update node");
     }
+
+    return 0;
+}
+
+i32 ext2_fstat(vfs_inode* _node, stat* stat) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+
+    //clear stat
+    memset($void* stat, 0, sizeof(stat));
+
+    //fill stat
+    stat->st_dev = _node->dev;
+    stat->st_ino = _node->ino;
+    stat->st_nlink = $u64 node->links_count;
+
+    stat->st_mode = $u32 0;
+    if      ((node->mode & $u16 0xf000) == INODE_TYPE_FIFO)        stat->st_mode = S_IFIFO;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_CHAR_DEV)    stat->st_mode = S_IFCHR;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_DIR)         stat->st_mode = S_IFDIR;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_BLOCK_DEV)   stat->st_mode = S_IFBLK;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_FILE)        stat->st_mode = S_IFREG;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_SYM_LINK)    stat->st_mode = S_IFLNK;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_UNIX_SOCK)   stat->st_mode = S_IFSOCK;
+
+    stat->st_rdev = 0x0;
+    stat->st_size = $i64 node->size;
+    stat->st_blksize = $i64 fs->block_size;
+    stat->st_blocks = $i64 node->sectors;
+
+    stat->st_atime.tv_sec = $i64 node->atime;
+    stat->st_mtime.tv_sec = $i64 node->mtime;
+    stat->st_ctime.tv_sec = $i64 node->ctime;
 
     return 0;
 }

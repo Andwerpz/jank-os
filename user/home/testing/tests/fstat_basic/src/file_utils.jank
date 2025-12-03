@@ -1,0 +1,86 @@
+#include <iostream>;
+#include <assert>;
+#include <dirent>;
+#include <string>;
+
+u64 count_dir_children(u8* path) {
+    dirstream* dir = opendir(path);
+    u64 dircnt = $u64 0;
+    while(1) {
+        dirent* dent = readdir(dir);
+        if(dir->eof()) {
+            break;
+        }
+        if($void* dent == nullptr) {
+            //error reading
+            break;
+        }
+        string name = new string($u8* @(dent->d_name));
+        if(name == "." || name == "..") continue;
+        dircnt ++;
+    }
+    closedir(dir);
+    return dircnt;
+}
+
+void chdir(u8* path) {
+    if(sys_chdir(path)) {
+        cout << "chdir failed\n";
+        sys_exit(1);
+    }
+}
+
+void mkdir(u8* path) {
+    if(sys_mkdir(path, $mode_t 0o755)) {
+        cout << "mkdir failed\n";
+        sys_exit(1);
+    }
+}
+
+void rmdir(u8* path) {
+    if(sys_rmdir(path)) {
+        cout << "rmdir failed\n";
+        sys_exit(1);
+    }
+}
+
+void mkchdir(u8* path) {
+    mkdir(path);
+    chdir(path);
+}
+
+// "exit dir"
+void exdir() {
+    chdir("..");
+}
+
+//read entire contents of file into string
+string readfile(u8* path) {
+    i32 fd = sys_open(path, O_RDONLY, $mode_t 0);
+    assert(fd >= 0, "readfile() : failed to open file");
+
+    istream fin = new istream(fd);
+    string contents;
+    u8 c = fin.next_char();
+    while(!fin.eof()) {
+        if(fin.bad()) {
+            cout << "readfile : error reading file\n";
+            sys_exit(1);
+        }
+        contents.push_back(c);
+        c = fin.next_char();
+    }
+    sys_close(fd);
+
+    return contents;
+}
+
+//writes contents of str into the file at path
+void writefile(u8* path, i32 flags, u8* str) {
+    i32 fd = sys_open(path, O_WRONLY | flags, $mode_t 0);
+    assert(fd >= 0, "writefile() : failed to open file");
+
+    ostream fout = new ostream(fd);
+    fout << str;
+    sys_close(fd);
+}

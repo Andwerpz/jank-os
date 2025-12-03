@@ -210,6 +210,8 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_UNLINK)           ans = $u64 sys_unlink($u8* arg1);
     else if(sys_id == SYS_LSEEK)            ans = $u64 sys_lseek($i32 arg1, $i64 arg2, $i32 arg3);
     else if(sys_id == SYS_IOCTL)            ans = $u64 sys_ioctl($i32 arg1, $u32 arg2, $void* arg3);
+    else if(sys_id == SYS_STAT)             ans = $u64 sys_stat($u8* arg1, $stat* arg2);
+    else if(sys_id == SYS_FSTAT)            ans = $u64 sys_fstat($i32 arg1, $stat* arg2);
 
     else {
         pt_switch_to_kernel();
@@ -1205,6 +1207,11 @@ i32 sys_unlink(u8* path) {
     return 0;
 }
 
+//fills the stat struct for the file referred to by path
+//this differs from lstat in that if the path refers to a symbolic link, 
+// lstat returns information about the link itself
+//returns 0 on success
+//returns -1 on failure
 i32 sys_stat(u8* path, stat* statbuf) {
     u64 path_len = strlen(path);
     if(path_len == 0x0) {
@@ -1215,22 +1222,84 @@ i32 sys_stat(u8* path, stat* statbuf) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
-    //TODO
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len);
+    kpath[path_len] = '\0';
+
+    //see if we can walk path
+    process* proc = get_cur_proc();
+    vfs_inode* ncwd;
+    i32 walk_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        walk_status = vfs_walk(new string(kpath), ncwd);
+    }
+    else {
+        //relative path
+        walk_status = vfs_walk(proc->cwd, new string(kpath), ncwd);
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(walk_status) {
+        //walk failed
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    //call vfs fstat
+    stat* kstat = $stat* malloc(sizeof(stat));
+    i32 fstat_status = vfs_fstat(ncwd, kstat);
+    if(fstat_status) {
+        //fstat failed
+        free($void* kstat, sizeof(stat));
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    //copy stat to user
+    copy_to_user(user_pt, $u8* kstat, $u8* statbuf, sizeof(stat));
+    free($void* kstat, sizeof(stat));
 
     pt_switch(user_pt);
     return 0;
 }
 
+//fills the stat struct for the file referred to by the open file descriptor
+//returns 0 on success
+//returns -1 on failure
 i32 sys_fstat(i32 fd, stat* statbuf) {
+    //make sure fd is in range
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        return -ERR_BADF;
+    }
+
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
-    //TODO
+    //get file
+    process* proc = get_cur_proc();
+    file* file = proc->fd_table[fd];
+    if(file == nullptr) {
+        //file doesn't exist
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    //call file fstat
+    stat* kstat = $stat* malloc(sizeof(stat));
+    memset($void* kstat, 0, sizeof(stat));
+    i32 retval = file_fstat(file, kstat);
+    copy_to_user(user_pt, $u8* kstat, $u8* statbuf, sizeof(stat));
+    free($void* kstat, sizeof(stat));
 
     pt_switch(user_pt);
-    return 0;
+    return retval;
 }
 
+//catch-all io-control syscall
+//for functionality that didn't fit well into other syscalls
+//essentially just a huge special case syscall
 i32 sys_ioctl(i32 fd, u32 op, void* arg) {
     //make sure fd is in range
     if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {

@@ -1,0 +1,5 @@
+test file passed
+test dir passed
+test pipe passed
+test fail passed
+tests passed

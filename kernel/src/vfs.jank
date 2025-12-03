@@ -20,7 +20,7 @@
 //inode operation interface
 struct vfs_ops {
     //mount ops
-    fn<i32(vfs_inode*, void*, vfs_inode*&)> get_mount_root;     //find root of filesystem given mountpoint
+    fn<i32(vfs_inode*, void*, vfs_inode*&)> get_mount_root; //find root of filesystem given mountpoint
 
     //directory ops
     fn<i32(vfs_inode*, string, vfs_inode*&)> lookup;        //given inode and child name, find child. Should pass in malloc'd buffer
@@ -36,12 +36,19 @@ struct vfs_ops {
     fn<i32(vfs_inode*, u8*, u64, u64, u64&)> read_file;     //read some amount of bytes from a file with offset
     fn<i32(vfs_inode*, u8*, u64, u64, u64&)> write_file;    //write some amount of bytes to a file with offset
     fn<i32(vfs_inode*, u64)> truncate;                      //sets the size of the file to equal nsz. 
+
+    //general ops
+    fn<i32(vfs_inode*, stat*)> fstat;                       //fill stat struct
 }
 
 // -- VFS INODE --
 //wrapper class for all nodes
 //these get alloc'd when doing vfs_walk, and only dealloc'd when their subt_refcnt hits 0
 struct vfs_inode {
+    // (dev, ino) pair should uniquely identify any file struct
+    u64 dev;
+    u64 ino;
+
     vfs_inode* parent;                                  //should always not be nullptr if not root
     vector<pair<string, vfs_inode*>> children;          //only stores children currently in memory
     string name;
@@ -65,7 +72,10 @@ struct vfs_inode {
     void* super;    //global context
     vfs_ops* ops;
 
-    vfs_inode(string _name, u64 _type, void* _node, vfs_ops* _ops) {
+    vfs_inode(u64 _dev, u64 _ino, string _name, u64 _type, void* _node, vfs_ops* _ops) {
+        this.dev = _dev;
+        this.ino = _ino;
+
         this.parent = $vfs_inode* nullptr;
         this.name = _name;
         this.type = _type;
@@ -85,7 +95,10 @@ struct vfs_inode {
         this.ops = _ops;
     }
 
-    vfs_inode(string _name, u64 _type, u64 _node_sz, u64 _node_num, void* _node, void* _super, vfs_ops* _ops) {
+    vfs_inode(u64 _dev, u64 _ino, string _name, u64 _type, u64 _node_sz, u64 _node_num, void* _node, void* _super, vfs_ops* _ops) {
+        this.dev = _dev;
+        this.ino = _ino;
+        
         this.parent = $vfs_inode* nullptr;
         this.name = _name;
         this.type = _type;
@@ -169,7 +182,7 @@ void init_vfs() {
         new (root_dentry) vfs_dentry();
 
         VFS_ROOT = $vfs_inode* malloc(sizeof(vfs_inode));
-        new (VFS_ROOT) vfs_inode(new string(""), DT_DIR, $void* root_dentry, VFS_DENTRY_OPS);
+        new (VFS_ROOT) vfs_inode(FILE_VFS_DENTRY_DEV, root_dentry->ino, new string(""), DT_DIR, $void* root_dentry, VFS_DENTRY_OPS);
         vfs_inc_refcnt(VFS_ROOT);
         VFS_ROOT->is_root = 1;
     }
@@ -282,7 +295,7 @@ i32 vfs_lookup(vfs_inode* node, string child, i32 create, vfs_inode*& res) {
             new (dentry_child) vfs_dentry();
             dentry->add_child(child, dentry_child);
 
-            new (res) vfs_inode(child, DT_DIR, $void* dentry_child, VFS_DENTRY_OPS);
+            new (res) vfs_inode(FILE_VFS_DENTRY_DEV, dentry_child->ino, child, DT_DIR, $void* dentry_child, VFS_DENTRY_OPS);
             res->is_virtual = 1;
         }
         else {
@@ -428,9 +441,9 @@ i32 vfs_get_children(vfs_inode* node, vector<string>& res) {
 i32 vfs_get_children(string path, vector<string>& res) {
     vfs_inode* root;
     if(vfs_walk(path, 0, root)) return 1;
-    vfs_get_children(root, res);
+    i32 ret = vfs_get_children(root, res);
     vfs_dec_refcnt(root);
-    return 0;
+    return ret;
 }
 
 i32 vfs_dir_empty(vfs_inode* node, i32& res) {
@@ -726,6 +739,18 @@ i32 vfs_truncate(string path, u64 nsz) {
     return status;
 }
 
+i32 vfs_fstat(vfs_inode* node, stat* stat) {
+    return node->ops->fstat#(node, stat);
+}
+
+i32 vfs_fstat(string path, stat* stat) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 ret = vfs_fstat(root, stat);
+    vfs_dec_refcnt(root);
+    return ret;
+}
+
 i32 vfs_is_file(vfs_inode* node, i32& res) {
     res = node->is_file();
     return 0;
@@ -839,21 +864,27 @@ i32 vfs_get_parent(vfs_inode* node, vfs_inode*& res) {
 
 // -- VFS DENTRY --
 //virtual directory node
+[__GLOBAL_FIRST__] u64 VFS_DENTRY_NEXT_INO = 0x1;
 struct vfs_dentry {
     u8[4] magic;  // "DENT"
+    u64 ino;
     vfs_dentry* parent;
     vector<pair<string, vfs_dentry*>> children;
 
+
     vfs_dentry() {
         this.init_magic();
+        this.ino = VFS_DENTRY_NEXT_INO ++;
+        this.parent = $vfs_dentry* nullptr;
         this.children.push_back(new pair<string, vfs_dentry*>(new string("."), @this));
     }
 
     vfs_dentry(vfs_dentry* parent) {
         this.init_magic();
+        this.ino = VFS_DENTRY_NEXT_INO ++;
+        this.parent = parent;
         this.children.push_back(new pair<string, vfs_dentry*>(new string("."), @this));
         this.children.push_back(new pair<string, vfs_dentry*>(new string(".."), this.parent));
-        this.parent = parent;
     }
 
     ~vfs_dentry() {
@@ -922,6 +953,8 @@ void init_vfs_dentry() {
     VFS_DENTRY_OPS->read_file = #<vfs_dentry_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_DENTRY_OPS->write_file = #<vfs_dentry_write_file(vfs_inode*, u8*, u64, u64, u64&)>;
     VFS_DENTRY_OPS->truncate = #<vfs_dentry_truncate(vfs_inode*, u64)>;
+
+    VFS_DENTRY_OPS->fstat = #<vfs_dentry_fstat(vfs_inode*, stat*)>;
 }
 
 i32 vfs_dentry_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
@@ -936,7 +969,8 @@ i32 vfs_dentry_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
 
     for(u64 i = 0x0; i < node->children.size(); i++) { 
         if(node->children[i].first == child) {
-            new (res) vfs_inode(child, DT_DIR, $void* node->children[i].second, VFS_DENTRY_OPS);
+            vfs_dentry* child_node = node->children[i].second;
+            new (res) vfs_inode(FILE_VFS_DENTRY_DEV, child_node->ino, child, DT_DIR, $void* child_node, VFS_DENTRY_OPS);
             res->is_virtual = 1;
             res->node_sz = sizeof(vfs_dentry);
             return VFS_WALK_FOUND;
@@ -1043,6 +1077,29 @@ i32 vfs_dentry_truncate(vfs_inode* _node, u64 nsz) {
     return 1;   //can't truncate dentries
 }
 
+i32 vfs_dentry_fstat(vfs_inode* _node, stat* stat) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    passert(!node->check_magic(), "vfs_dentry_fstat() : node magic not good");
+
+    //clear stat
+    memset($void* stat, 0, sizeof(stat));
+
+    //fill stat
+    stat->st_dev = _node->dev;
+    stat->st_ino = _node->ino;
+    stat->st_nlink = node->children.size() + 0x1;   // children + '.'
+    if($void* _node->parent != nullptr) stat->st_nlink ++; 
+
+    stat->st_mode = S_IFDIR;
+
+    stat->st_rdev = $u64 0;
+    stat->st_size = $i64 0;
+    stat->st_blksize = $i64 PAGE_SIZE;
+    stat->st_blocks = $i64 0;
+
+    return 0;
+}
+
 // -- FD OPS --
 [__GLOBAL_FIRST__] file_ops* FILE_OPS_VFS;
 void init_vfs_file_ops() {
@@ -1054,6 +1111,7 @@ void init_vfs_file_ops() {
     FILE_OPS_VFS->op_getdents = #<vfs_getdents(file*, u8*, u64)>;
     FILE_OPS_VFS->op_close = #<vfs_close(file*)>;
     FILE_OPS_VFS->op_truncate = #<vfs_truncate(file*, u64)>;
+    FILE_OPS_VFS->op_fstat = #<vfs_fstat(file*, stat*)>;
 }
 
 i64 vfs_read(file* fd, u8* buf, u64 amt) {
@@ -1213,4 +1271,10 @@ i32 vfs_truncate(file* fd, u64 nsz) {
     }
 
     return 0;
+}
+
+i32 vfs_fstat(file* file, stat* stat) {
+    vfs_inode* node = $vfs_inode* file->resource_ptr;
+    i32 status = vfs_fstat(node, stat);
+    return status;
 }

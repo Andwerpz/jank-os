@@ -17,7 +17,7 @@
 #include "idt.jank";
 #include "scheduler.jank";
 #include "pic.jank";
-#include "fd.jank";
+#include "file.jank";
 #include "process.jank";
 #include "ahci.jank";
 #include "ext2fs.jank";
