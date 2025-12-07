@@ -1,0 +1,23 @@
+// Master Boot Record (MBR)
+// structure that occupies the first sector of a partitioned drive
+// sizeof(mbr) == 512 should be true
+
+[__GLOBAL_FIRST__] u8 MBR_PARTITION_TYPE_EXT2 = $u8 0x83;
+[__GLOBAL_FIRST__] u8 MBR_PARTITION_TYPE_JANK_BOOT = $u8 0xAB;
+
+//classic MBR struct
+struct mbr {
+    u8[446]                 boot_code;
+    mbr_partition_entry[4]  partition_entries;  // 64 bytes total
+    u8[2]                   signature;          // 0x55, 0xAA
+}
+
+struct mbr_partition_entry{
+    u8      status;         // 0x80 = bootable/active, 0x00 = inactive
+    u8[3]   chs_first;      // CHS address of first sector in partition (for disk drives)
+    u8      type;           // partition type
+    u8[3]   chs_last;       // CHS address of last sector in partition (for disk drives)
+    u32     lba_first;      // LBA of first sector in partition
+    u32     sectors;        // length in sectors
+}
+

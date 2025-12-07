@@ -26,6 +26,7 @@
 #include "vfs.jank";
 #include "pipe.jank";
 #include "tty.jank";
+#include "mbr.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();

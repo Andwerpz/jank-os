@@ -7,6 +7,13 @@
 // block groups will be tightly packed on the disk, and they will not overlap. 
 // *all* data in ext2 (including metadata such as superblocks, gdt) is contained in some block group
 
+// Block groups cover blocks starting at sb->first_data_block.
+// For a global block number B, the owning group and in-group index are:
+//   g = (B - sb->first_data_block) / blocks_per_group
+//   i = (B - sb->first_data_block) % blocks_per_group
+// Block 0 may be reserved and not belong to any group (for 1 KiB blocks).
+// however in this case, sb->blocks_count will still count Block 0
+
 // all stored block indices are relative to the start of the disk partition. 
 // all blocks are aligned relative to the start of the disk partition. 
 
@@ -16,7 +23,7 @@
 // to see which blocks are not allocated. 
 
 // the 'superblock' gives some important metadata about the filesystem. 
-// by convention, it's usually located at an offset of 1024 bytes from the start of the disk. 
+// by convention, it's usually located at an offset of 1024 bytes from the start of the disk partition
 // since blocks are aligned relative to the partition, the superblock may not start at the start of a block 
 // even if the actual block size is larger than a superblock, the superblock still takes up an entire block. 
 // the field sb->first_data_block gives the starting block of the first block group. 
@@ -34,6 +41,7 @@ struct ext2_fs {
     u32                 block_size; 
     u32                 sb_block;   // number of block that contains superblock struct
     u32                 sb_offset;  // offset of superblock struct within sb_block
+    u64                 lba_start;  // index of 512-byte sector where this partition starts
 }
 
 struct ext2_super_block {
@@ -296,28 +304,30 @@ u32 ext2_block_to_sector(u32 block, u32 block_size) {
 
 // starth (higher half lba) set to 0 for now, until we get bigger drives lol
 // NOTE - BUF MUST BE A PHYSICAL ADDRESS
-i32 ext2_read_block(HBA_PORT* p, u32 block_size, u32 block_number, void* buf) {
-    return ahci_read(p, ext2_block_to_sector(block_number, block_size), $u32 0, block_size / AHCI_SECTOR_SIZE, $u16* buf);
-}
-
-i32 ext2_write_block(HBA_PORT* p, u32 block_size, u32 block_number, void* buf) {
-    return ahci_write(p, ext2_block_to_sector(block_number, block_size), $u32 0, block_size / AHCI_SECTOR_SIZE, $u16* buf);
-}
-
 i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
-    return ext2_read_block(fs->p, fs->block_size, block_number, buf);
+    u32 startl = ext2_block_to_sector(block_number, fs->block_size) + $u32 fs->lba_start;
+    u32 starth = $u32 0;
+    u32 count = fs->block_size / AHCI_SECTOR_SIZE;
+    return ahci_read(fs->p, startl, starth, count, $u16* buf);
 }
 
 i32 ext2_write_block(ext2_fs* fs, u32 block_number, void* buf) {
-    return ext2_write_block(fs->p, fs->block_size, block_number, buf);
+    u32 startl = ext2_block_to_sector(block_number, fs->block_size) + $u32 fs->lba_start;
+    u32 starth = $u32 0;
+    u32 count = fs->block_size / AHCI_SECTOR_SIZE;
+    return ahci_write(fs->p, startl, starth, count, $u16* buf);
 }
 
-//scans a drive to see if there is a ext2 filesystem on it
-i32 ext2_mount(HBA_PORT* p, ext2_fs* fs) {
+//scans a drive partition to see if there is a ext2 filesystem on it
+//lba_start is the index of the first 512-byte sector in the partition
+//on success, populates fs and returns 0
+//on failure, returns 1
+i32 ext2_mount(HBA_PORT* p, u64 lba_start, ext2_fs* fs) {
     // Read super block
     void* buf = palloc();
     memset(buf, 0, PAGE_SIZE);
-    if(ext2_read_block(p, $u32 PAGE_SIZE, $u32 0, buf)) {
+
+    if(ahci_read(p, $u32 lba_start, $u32 0, $u32 PAGE_SIZE / AHCI_SECTOR_SIZE, $u16* buf)) {
         sout << "Block read failed\n";
         pfree(buf);
         return 1;
@@ -353,6 +363,7 @@ i32 ext2_mount(HBA_PORT* p, ext2_fs* fs) {
     fs->block_size = $u32 1024 << sb->log_block_size;
     fs->sb_block = $u32 1024 / fs->block_size;
     fs->sb_offset = $u32 1024 - fs->sb_block * fs->block_size;
+    fs->lba_start = lba_start;
     
     return 0;
 }
@@ -362,7 +373,7 @@ i32 ext2_refresh_sb(ext2_fs* fs) {
     // read sb
     void* buf = palloc();
     memset(buf, 0, PAGE_SIZE);
-    if(ext2_read_block(fs->p, fs->block_size, fs->sb_block, buf)) {
+    if(ext2_read_block(fs, fs->sb_block, buf)) {
         sout << "Block read failed\n";
         pfree(buf);
         return 1;
@@ -768,7 +779,7 @@ i32 ext2_dealloc_inode(ext2_fs* fs, u32 inode_num) {
 
 //only deallocs the block, doesn't do anything with the contents inside of the block
 i32 ext2_dealloc_block(ext2_fs* fs, u32 block) {
-    passert(block >= fs->sb->first_data_block && block < fs->sb->first_data_block + fs->sb->blocks_count, "ext2_dealloc_block() : trying to dealloc out of range block");
+    passert(block >= fs->sb->first_data_block && block < fs->sb->blocks_count, "ext2_dealloc_block() : trying to dealloc out of range block");
 
     void* sb_buf = palloc();
     void* gdt_buf = palloc();
@@ -873,6 +884,7 @@ i32 ext2_dealloc_inode_blocks(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
         }
         for(u32 i = $u32 0; i < B; i++) {
             u32 block_ptr = ($u32* singly_ind_block)[i];
+            if(block_ptr == $u32 0) continue;
             if(ext2_dealloc_block(fs, block_ptr)) {
                 panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
             }
@@ -899,6 +911,7 @@ i32 ext2_dealloc_inode_blocks(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
                 }
                 for(u32 i = $u32 0; i < B; i++) {
                     u32 block_ptr = ($u32* singly_ind_block)[i];
+                    if(block_ptr == $u32 0) continue;
                     if(ext2_dealloc_block(fs, block_ptr)) {
                         panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
                     }
@@ -938,6 +951,7 @@ i32 ext2_dealloc_inode_blocks(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
                         }
                         for(u32 i = $u32 0; i < B; i++) {
                             u32 block_ptr = ($u32* singly_ind_block)[i];
+                            if(block_ptr == $u32 0) continue;
                             if(ext2_dealloc_block(fs, block_ptr)) {
                                 panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
                             }
@@ -1269,7 +1283,7 @@ u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index
         u32 l0_index = file_block_index / B;
         u32 l1_index = file_block_index % B;
 
-        if(inode->singly_ind_block_ptr == $u32 0) return $u32 0;
+        if(inode->doubly_ind_block_ptr == $u32 0) return $u32 0;
         void* buf_l0 = palloc();
         if(ext2_read_block(fs, inode->doubly_ind_block_ptr, buf_l0)) panic("ext2_traverse_block_map() : read failed");
         u32* l0 = $u32* buf_l0;

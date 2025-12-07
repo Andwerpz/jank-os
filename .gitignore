@@ -2,6 +2,8 @@
 *.o
 *.s
 *.out
+*.bin
+*.elf
 .vscode
 drive_testing/*
 user/home/testing/sandbox/*

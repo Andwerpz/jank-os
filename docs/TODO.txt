@@ -1,16 +1,35 @@
 above all, WRITE MORE TESTS!!!
 
+overall goal : get jankos to run bare metal
+this means we need a graphic interface, and replace the bootloader with something I understand
+
 - TODO
-  - commandline text editor, something like nano or vim
-    - seems like this is much more involved than I thought
-    - need to create TTY fd for io modification
-    - also need to enable raw mode on linux side 
+  - route serial io through interrupts
+  - je optimizations
+    - reduce alloc in print
+  - shell improvements
+    - keep track of previous commands, up/down arrow to browse previous commands
+    - tab autocomplete current token in current dir
+    - color??
+    - shell pipes + redirects
+  - more userspace utils
+    - echo
+    - grep
   - get mutex and other locks to work
+    - specifically enable interrupts within system calls
   - get jjc to run on jankos
+    - rewrite compiler + assembler in jank
   - networking, able to make http requests to the outside world
-  - graphic interface? (very low priority)
+  - graphic interface
+    - implement vga terminal
+    - ability to get input directly from the keyboard
+  - replace bootboot with custom bootloader
 
 - done
   - finish rudimentary read/write filesystem
     - creating / removing / reading directories
     - creating / removing / reading / writing files
+  - commandline text editor, something like nano or vim
+    - seems like this is much more involved than I thought
+    - need to create TTY fd for io modification
+    - also need to enable raw mode on linux side 

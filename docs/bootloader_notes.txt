@@ -1,0 +1,45 @@
+time to replace the bootloader D:
+
+docs of BOOTBOOT
+https://gitlab.com/bztsrc/bootboot/-/blob/master/bootboot_spec_1st_ed.pdf?ref_type=heads
+
+how can I put the bootloader onto the disk
+
+how can I configure qemu to load the bootloader from the disk
+
+how does the level 1 bootloader load the level 2 bootloader from the disk
+is the level 2 bootloader an actual file on the disk, or just stored somewhere in memory 
+
+what state does the machine need to be in when the bootloader is done
+
+how can I initiate kernel code execution from the bootloader
+
+
+
+
+
+disk structure
+sector 1 : boot struct sector
+partition 1 : boot partition
+partition 2 : ext2 partition
+
+use MBR to denote partitions on disk
+for now, stage 1 bootloader assumes partition 1 is boot partition
+within stage 1 bootloader, hardcode size of stage 2 bootloader in sectors
+in stage 2 bootloader, setup kernel runtime
+  stage 2 also knows size and location of kernel, load kernel from 
+
+ - test if ext2 driver works on partition >= 2
+
+
+struct MbrPartitionEntry {
+    uint8_t  status;      // 0x80 = bootable, 0x00 = not
+    uint8_t  chs_first[3];
+    uint8_t  type;        // e.g. 0xAB for your boot partition
+    uint8_t  chs_last[3];
+    uint32_t lba_first;   // little-endian
+    uint32_t sectors;     // length in sectors
+};
+
+the partition table DOES NOT belong to the first partition
+if a disk does not have a partition table, then we can consider the entire disk as part of the first partition

@@ -736,6 +736,7 @@ void test_ahci_write(HBA_PORT* p) {
 }
 
 void init_ahci() {
+    //find ext2 filesystem and mount it to root
     vector<ahci_hba*> ahci_hbas;
     scan_for_ahci(ahci_hbas);
 	if(ahci_hbas.size() == 0x0) {
@@ -751,11 +752,54 @@ void init_ahci() {
 		for(u64 j = 0x0; j < hba_ports.size(); j++) {
             sout << "HBA PORT : " << hba_ports[j] << "\n";
 			print_drive_info(hba_ports[j]);
-            ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
-            if(!ext2_mount(hba_ports[j], fs)) {
-                sout << "found ext2 filesystem\n";
-                vfs_mount(new string("/"), $void* fs, VFS_EXT2_OPS);
+
+            //see if this drive is partitioned
+            mbr* mbr = $mbr* palloc();
+            if(ahci_read(hba_ports[j], $u32 0, $u32 0, $u32 1, $u16* mbr)) {
+                sout << "read MBR sector failed\n";
+                pfree($void* mbr);
+                continue;
             }
+
+            sout << "MBR SIGNATURE : \n";
+            sout << ($void* $u64 mbr->signature[0]) << " " << ($void* $u64 mbr->signature[1]) << "\n";
+            hexdump(mbr, sizeof(mbr));
+
+            if(mbr->signature[0] == $u8 0x55 && mbr->signature[1] == $u8 0xAA) {
+                sout << "found partitioned drive\n";
+
+                //look through each partition
+                for(u64 k = 0x0; k < 0x4; k++) {
+                    mbr_partition_entry* p = @mbr->partition_entries[k];
+                    if(p->type != MBR_PARTITION_TYPE_EXT2) continue;
+
+                    ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
+                    if(!ext2_mount(hba_ports[j], $u64 p->lba_first, fs)) {
+                        sout << "found ext2 filesystem\n";
+                        vfs_mount(new string("/"), $void* fs, VFS_EXT2_OPS);
+                        pfree($void* mbr);
+                        return;
+                    }
+                    free($void* fs, sizeof(ext2_fs));
+                }
+            }
+            else {
+                sout << "found unpartitioned drive\n";
+
+                //assume drive is one big partition
+                ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
+                if(!ext2_mount(hba_ports[j], 0x0, fs)) {
+                    sout << "found ext2 filesystem\n";
+                    vfs_mount(new string("/"), $void* fs, VFS_EXT2_OPS);
+                    pfree($void* mbr);
+                    return;
+                }
+                free($void* fs, sizeof(ext2_fs));
+            }
+
+            pfree($void* mbr);
 		}
 	}
+
+    panic("failed to find ext2 filesystem");
 }
