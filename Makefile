@@ -21,7 +21,7 @@ disk: initdir config/config.json
 # create drive from ./user folder
 .PHONY: drive
 drive:
-	@sudo bash ./build_drive_partitioned.sh
+	@bash ./build_drive_partitioned.sh
 
 normal: disk drive
 	qemu-system-x86_64 \
@@ -50,6 +50,7 @@ debug: disk drive
 boot: drive
 	qemu-system-x86_64 \
     -no-reboot \
+	-m 8G \
     -serial stdio \
     -device ich9-ahci,id=ahci \
     -drive file=drive.img,if=none,id=bootdisk,format=raw \

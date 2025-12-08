@@ -24,7 +24,7 @@ stage1_entry:
 
 start:
     cli
-    
+
     # clear data segments
     xorw    %ax, %ax
     movw    %ax, %ds
@@ -73,7 +73,6 @@ start:
     jc   error_disk         # BIOS indicates success via carry flag, 1 is error
 
     # jump to stage 2
-    # We loaded at STAGE2_LOAD_SEG:STAGE2_LOAD_OFF
     ljmp $STAGE2_LOAD_SEG, $STAGE2_LOAD_OFF
 
     jmp good

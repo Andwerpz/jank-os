@@ -76,7 +76,7 @@ i32 init_pma() {
                 //serial_println($void* base);
 
                 //assume that any page that is multiple of 2MB is a pagetable part of the kernel pt
-                if(base % 0x200000) {
+                if($i32 (base % 0x200000) || 1) {
                     freepg_cntr ++;
                     pfree($void* base);
                 }

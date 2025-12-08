@@ -1,0 +1,141 @@
+
+
+[__GLOBAL_FIRST__] u64 vga_cursor_row = 0x0;
+[__GLOBAL_FIRST__] u64 vga_cursor_col = 0x0;
+
+void write_to_vga_buf(u64 ind, u8 c) {
+    asm!("movq  $0xB8000, %rbx");   
+    asm!("mov   {ind}, %rcx");
+    asm!("leaq  (%rbx, %rcx, 2), %rdx");
+    asm!("mov   {c}, %rax");
+    asm!("movb  %al, (%rdx)");
+    asm!("movb  $0x07, 1(%rdx)");
+}
+
+void vga_print(u8 c) {
+    if(c == '\n') {
+        vga_cursor_row ++;
+    }
+    else if(c == '\r') {
+        vga_cursor_col = 0x0;
+    }
+    else {
+        u64 vga_cursor_pos = vga_cursor_row * $u64 80 + vga_cursor_col;
+        write_to_vga_buf(vga_cursor_pos, c);
+        vga_cursor_col ++;
+    }
+
+    if(vga_cursor_col == $u64 80) {
+        vga_cursor_col = 0x0;
+        vga_cursor_row ++;
+    }
+    if(vga_cursor_row == $u64 25) {
+        vga_cursor_row = 0x0;
+    }
+}
+
+void vga_print(u8* str) {
+    u64 i = 0x0;
+    while(str[i] != '\0') vga_print(str[i ++]);
+}   
+
+void vga_print(u64 x) {
+    vga_print("0x");
+    for(u64 i = $u64 15; ; i--) {
+        u64 dig = (x >> (i * 0x4)) & 0xF;
+        if(dig < $u64 10) vga_print('0' + $u8 dig);
+        else vga_print('A' + $u8 (dig - $u64 10));
+        if(i == 0x0) break;
+    }
+}
+
+void vga_print(u32 x) {
+    vga_print("0x");
+    for(u64 i = $u64 7; ; i--) {
+        u64 dig = ($u64 x >> (i * 0x4)) & 0xF;
+        if(dig < $u64 10) vga_print('0' + $u8 dig);
+        else vga_print('A' + $u8 (dig - $u64 10));
+        if(i == 0x0) break;
+    }
+}
+
+void vga_print(u16 x) {
+    vga_print("0x");
+    for(u64 i = $u64 3; ; i--) {
+        u64 dig = ($u64 x >> (i * 0x4)) & 0xF;
+        if(dig < $u64 10) vga_print('0' + $u8 dig);
+        else vga_print('A' + $u8 (dig - $u64 10));
+        if(i == 0x0) break;
+    }
+}
+
+void vga_move_cursor(u64 row, u64 col) {
+    vga_cursor_row = row;
+    vga_cursor_col = col;
+}
+
+void vga_reset_cursor() {
+    vga_move_cursor(0x0, 0x0);
+}   
+
+void vga_clear() {
+    //print 25 * 80 spaces
+    for(u64 i = 0x0; i < $u64 2000; i++) {
+        vga_print(' ');
+    }
+}
+
+void assert(i32 x) {
+    if(!x) {
+        vga_print("assert failed");
+        asm!("hlt");
+    }
+}
+
+[__GLOBAL_FIRST__] boot_info* boot_info = $boot_info* 0x1000;
+struct boot_info {
+    e820_ent* e820_mmap;        // 0
+    u16 e820_entry_count;       // 8
+}
+
+struct e820_ent {
+    u64 base;
+    u64 length;
+    u32 type;   // 1 = usable RAM
+    u32 attr;
+}
+
+i32 main() {
+    vga_print("bello from jank\r\n");
+
+    vga_print("E820 MMAP : \r\n");
+    for(u64 i = 0x0; i < $u64 (boot_info->e820_entry_count); i++) {
+        e820_ent* ent = @(boot_info->e820_mmap[i]);
+        vga_print("base : ");
+        vga_print(ent->base);
+        vga_print(", length : ");
+        vga_print(ent->length);
+        vga_print(", type : ");
+        vga_print(ent->type);
+        vga_print("\r\n");
+    }
+
+    // clean up E820 MMAP
+    // - ensure that all regions are non-overlapping
+    // - ensure that regions are sorted in ascending order
+    // TODO
+
+    // create identity mapping for memory above 1GB
+
+    // map higher half kernel
+
+    // load kernel into memory
+
+    // setup kernel stack
+
+    // jump to kernel
+
+    asm!("hlt");
+
+    return 0;
+}

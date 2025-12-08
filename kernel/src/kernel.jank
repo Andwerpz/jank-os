@@ -246,6 +246,13 @@ i32 main() {
     init_vfs();
     init_ahci();
 
+    sout << "PRINTING PAGETABLES :\n";
+    pagetable_t kernel_pt = pt_get_current();
+    pt_print(kernel_pt, 3, 0);
+
+    sout << "MMAP : \n";
+    print_mmap();
+
     // vfs_tests();
 
     // gp_handler_test();

@@ -11,7 +11,7 @@ typedef pte_t* pagetable_t;
 [__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;   //if set, user will be able to access
 [__GLOBAL_FIRST__] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
 [__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag, only valid on leaf PTEs?
-[__GLOBAL_FIRST__] u64 PTE_PCD        = $u64 1 << $u64 4;  // Cache Disable
+[__GLOBAL_FIRST__] u64 PTE_PCD        = $u64 1 << $u64 4;   // Cache Disable
 
 void enable_nx() {
     //check if nx is supported
@@ -269,6 +269,7 @@ void pt_print(pagetable_t pt, i32 level, i32 indent) {
     for(i32 i = 0; i < 512; i++){
         pte_t pte = pt[i];
         if(!(pte & PTE_PRESENT)) continue;
+        if(pte & PTE_HUGEPG) continue;
         if(level) pt_print($pagetable_t pte_get_addr(pte), level - 1, indent + 1);
     }
     for(i32 i = 0; i < indent; i++) serial_print("    ");

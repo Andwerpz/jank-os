@@ -7,7 +7,8 @@ USER_DIR="${1:-./user}"
 IMG="${2:-drive.img}"
 IMG_SIZE="${3:-64M}"
 MNT="${4:-.mnt_drive}"
-BOOTLOADER="${5:-./bootloader/stage1/mbr.bin}"   # <- your stage-1 MBR bootloader
+BOOT_MBR="${5:-./bootloader/stage1/mbr.bin}"   
+BOOT_STAGE2="${6:-./bootloader/stage2/bin/stage2.bin}"
 
 # Best effort to detect the "real" user even when script uses sudo internally
 REAL_USER="${SUDO_USER:-${USER}}"
@@ -18,8 +19,19 @@ if [[ ! -d "$USER_DIR" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$BOOTLOADER" ]]; then
-  echo "ERROR: BOOTLOADER '$BOOTLOADER' does not exist" >&2
+echo "[*] Building MBR bootloader"
+make -C ./bootloader/stage1
+
+echo "[*] Building stage2 bootloader"
+make -C ./bootloader/stage2
+
+if [[ ! -f "$BOOT_MBR" ]]; then
+  echo "ERROR: BOOT_MBR '$BOOT_MBR' does not exist" >&2
+  exit 1
+fi
+
+if [[ ! -f "$BOOT_STAGE2" ]]; then
+  echo "ERROR: BOOT_STAGE2 '$BOOT_STAGE2' does not exist" >&2
   exit 1
 fi
 
@@ -59,7 +71,7 @@ PART1="${LOOP}p1"
 PART2="${LOOP}p2"
 
 echo "[*] Writing stage2 bootloader to start of partition 1"
-sudo dd if=./bootloader/stage2/stage2.bin of="$PART1" bs=512 conv=notrunc
+sudo dd if=./bootloader/stage2/bin/stage2.bin of="$PART1" bs=512 conv=notrunc
 
 # Wait briefly for partition nodes to appear
 for _ in {1..10}; do
@@ -96,9 +108,9 @@ echo "[*] Detaching loop device"
 sudo losetup -d "$LOOP"
 LOOP=""
 
-echo "[*] Installing MBR bootloader from $BOOTLOADER into $IMG"
+echo "[*] Installing MBR bootloader from $BOOT_MBR into $IMG"
 # Overwrite only the first 446 bytes (boot code), keep partition table + signature
-dd if="$BOOTLOADER" of="$IMG" bs=446 count=1 conv=notrunc
+dd if="$BOOT_MBR" of="$IMG" bs=446 count=1 conv=notrunc
 
 echo "[*] Finalizing image permissions"
 sudo chown "${REAL_USER}:${REAL_GROUP}" "$IMG" || true
@@ -107,4 +119,4 @@ sudo chmod 0666 "$IMG" || true
 echo "[✓] Built bootable MBR-partitioned $IMG"
 echo "    - p1: dummy (8 MiB, type 0x83, bootable)"
 echo "    - p2: ext2 (rev 0, 1 KiB blocks) populated from $USER_DIR"
-echo "    - MBR boot code from: $BOOTLOADER"
+echo "    - MBR boot code from: $BOOT_MBR"
