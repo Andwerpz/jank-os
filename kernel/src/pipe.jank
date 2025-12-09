@@ -50,7 +50,7 @@ struct pipe_ref {
     }
 
     pipe_ref(pipe* pipe, i32 is_writer) {
-        passert(pipe != nullptr, "pipe_ref::pipe_ref() : pipe should not be nullptr");
+        assert(pipe != nullptr, "pipe_ref::pipe_ref() : pipe should not be nullptr");
         if(is_writer) pipe->writers ++;
         else pipe->readers ++;
 
@@ -67,7 +67,7 @@ struct pipe_ref {
     }
 
     i32 poll_char(u8& out) {
-        passert(this.pipe != nullptr, "pipe_ref::poll_char() : pipe must not be nullptr");
+        assert(this.pipe != nullptr, "pipe_ref::poll_char() : pipe must not be nullptr");
         if(this.is_writer) return -ERR_UNKNOWN;
         if(!this.pipe->has_char()) return -ERR_AGAIN;   //try again later
         out = this.pipe->read_char();
@@ -75,14 +75,14 @@ struct pipe_ref {
     }
 
     i32 read_char(u8& out) {
-        passert(this.pipe != nullptr, "pipe_ref::read_char() : pipe must not be nullptr");
+        assert(this.pipe != nullptr, "pipe_ref::read_char() : pipe must not be nullptr");
         if(this.is_writer) return -ERR_UNKNOWN;
         out = this.pipe->read_char();
         return 0;
     }
 
     i32 write_char(u8 c) {
-        passert(this.pipe != nullptr, "pipe_ref::write_char() : pipe must not be nullptr");
+        assert(this.pipe != nullptr, "pipe_ref::write_char() : pipe must not be nullptr");
         if(!this.is_writer) return -ERR_UNKNOWN;
         if(this.pipe->readers == 0x0) return -ERR_PIPE; //no readers will ever see this byte
         this.pipe->write_char(c);
@@ -90,18 +90,18 @@ struct pipe_ref {
     }
 
     i32 eof() {
-        passert(this.pipe != nullptr, "pipe_ref::eof() : pipe must not be nullptr");
+        assert(this.pipe != nullptr, "pipe_ref::eof() : pipe must not be nullptr");
         return this.pipe->eof();
     }
 
     void close() {
-        passert($void* this.pipe != nullptr, "pipe_ref::close() : pipe must not be nullptr");
+        assert($void* this.pipe != nullptr, "pipe_ref::close() : pipe must not be nullptr");
         if(this.is_writer) {
-            passert(this.pipe->writers != 0x0, "pipe_ref::close() : double writer free");
+            assert(this.pipe->writers != 0x0, "pipe_ref::close() : double writer free");
             this.pipe->writers --;
         }
         else {
-            passert(this.pipe->readers != 0x0, "pipe_ref::close() : double reader free");
+            assert(this.pipe->readers != 0x0, "pipe_ref::close() : double reader free");
             this.pipe->readers --;
         }
 

@@ -8,6 +8,7 @@
 # I want to be able to write the majority of this stage in jank, and to do so 64-bit mode has to be enabled. 
 # so this assembly stub is just responsible for enabling 64-bit mode and then jumping to jank code
 
+    .section .text
 
 # -- 16-bit mode --
     .code16
@@ -15,6 +16,9 @@
 stage2_start:
     # disable hardware interrupts
     cli
+
+    # save %dl 
+    movb %dl, boot_drive
 
     # clear data segments
     xorw    %ax, %ax
@@ -43,6 +47,10 @@ stage2_start:
     ljmp    $0x08, $pm32_entry
 
     jmp hlt_loop
+
+# gotten from MBR
+boot_drive:
+    .byte 0
 
 # enable A20 using the "fast A20" gate at port 0x92
 enable_a20:
@@ -370,7 +378,7 @@ pm32_entry:
     movl    %edx, %cr4
 
     # set CR3 to PML4 physical address
-    movl    pml4_table, %eax            
+    movl    $pml4_table, %eax            
     movl    %eax, %cr3
 
     # enable long mode in EFER (IA32_EFER.LME) 
@@ -390,8 +398,10 @@ pm32_entry:
     movl    %eax, 0(%esi)               
     xorl    %eax, %eax                  # e820_ent* e820_mmap, high 32 bits
     movl    %eax, 4(%esi)               
-    movw    e820_entry_count, %ax       # u16 e820_entry_count;
+    movw    e820_entry_count, %ax       # u16 e820_entry_count
     movw    %ax, 8(%esi)                
+    movb    boot_drive, %al             # u8 boot_drive
+    movb    %al, 10(%esi)       
 
     # far jump into 64-bit code segment 
     # CS = 0x18 (64-bit code), RIP = lm64_entry
@@ -549,6 +559,60 @@ vga_print_str:
     popl    %eax
     ret
 
+vga_print_0x:
+    pushw   %ax
+    movb    $'0', %al
+    call    vga_print_char
+    movb    $'x', %al
+    call    vga_print_char
+    popw    %ax
+    ret
+
+vga_print_hex_nibble:
+    pushw   %ax
+    andb    $0x0F, %al
+    cmpb    $9, %al
+    jbe     1f
+    addb    $7, %al         # 'A' - '0' - 10
+1:
+    addb    $'0', %al
+    call    vga_print_char
+    popw    %ax
+    ret
+
+vga_print_hex16:
+    pushw   %ax
+    pushw   %bx
+    pushw   %cx
+
+    movw    %ax, %bx        # copy value
+    movb    $4, %cl
+
+.vga_ph16_loop:
+    movw    %bx, %ax
+    shrw    $12, %ax        # top nibble into low 4 bits
+    call    vga_print_hex_nibble
+    shlw    $4, %bx         # shift next nibble up
+    decb    %cl
+    jnz     .vga_ph16_loop
+
+    popw    %cx
+    popw    %bx
+    popw    %ax
+    ret
+
+vga_print_hex32:
+    pushl   %eax
+
+    pushl   %eax
+    shrl    $16, %eax
+    call    vga_print_hex16
+    popl    %eax
+    call    vga_print_hex16
+
+    popl    %eax
+    ret
+
 # -- 64-bit mode --
     # defined during build process
     .extern _binary_build_64bit_bin_start
@@ -573,17 +637,24 @@ hlt_loop:
     hlt
     jmp hlt_loop
 
-# -- VGA CURSOR --
-# cursor position on VGA screen
-# VGA screen is 25 rows, 80 cols
-# each cell consists of 2 bytes, [char, attribute]
-# address of cell (r, c) is at 0xB8000 + 2 * (row * 80 + col)
-    .data
-vga_curr_pos:
-    .long 0
+# -- DATA --
+    .section .data
+
+# -- PAGETABLES --
+    .align 4096
+pml4_table:
+    .space 4096, 0
+
+    .align 4096
+pdpt_table:
+    .space 4096, 0
+
+    .align 4096
+pd_table:
+    .space 4096, 0
+
 
 # -- GDT --
-    .data
     .align 8
 gdt:
     # 0x00: null
@@ -626,16 +697,11 @@ gdt_descriptor:
     .long gdt
 gdt_end:
 
-# -- PAGETABLES --
-    .data
-    .align 4096
-pml4_table:
-    .space 4096, 0
 
-    .align 4096
-pdpt_table:
-    .space 4096, 0
-
-    .align 4096
-pd_table:
-    .space 4096, 0
+# -- VGA CURSOR --
+# cursor position on VGA screen
+# VGA screen is 25 rows, 80 cols
+# each cell consists of 2 bytes, [char, attribute]
+# address of cell (r, c) is at 0xB8000 + 2 * (row * 80 + col)
+vga_curr_pos:
+    .long 0

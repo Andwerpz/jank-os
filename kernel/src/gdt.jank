@@ -62,7 +62,7 @@ struct TSS {
 
 // https://wiki.osdev.org/Global_Descriptor_Table
 i32 init_gdt() {
-    serial_println("start init gdt");
+    println("start init gdt");
     pagetable_t kernel_pt = pt_get_current();
 
     //map page for GDT
@@ -104,7 +104,7 @@ i32 init_gdt() {
     asm!("mov $0x28, %ax"); 
     asm!("ltr %ax");
 
-    serial_println("done init gdt");
+    println("done init gdt");
     return 0;
 }
 

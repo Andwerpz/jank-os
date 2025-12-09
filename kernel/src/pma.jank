@@ -58,7 +58,7 @@ struct BOOTBOOT {
 //find all the memory that is marked as MMAP_FREE, and add it to the physical memory allocator. 
 //note that above 2MB, there might be a pagetable page every 2MB, so skip those pages to be safe. 
 i32 init_pma() {
-    serial_print("init_pma\n");
+    print("init_pma\n");
 
     BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
     MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
@@ -72,8 +72,8 @@ i32 init_pma() {
         if(type == $u64 1) {                             // MMAP_FREE is defined as 1
             u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
             while(base + PAGE_SIZE <= addr + size) {
-                //serial_print("PMA INIT : ");
-                //serial_println($void* base);
+                //print("PMA INIT : ");
+                //println($void* base);
 
                 //assume that any page that is multiple of 2MB is a pagetable part of the kernel pt
                 if($i32 (base % 0x200000) || 1) {
@@ -86,10 +86,10 @@ i32 init_pma() {
         mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
     }
 
-    serial_print("FREE PAGES : ");
-    serial_println($void* freepg_cntr);
+    print("FREE PAGES : ");
+    println($void* freepg_cntr);
 
-    serial_print("done init pma\n");
+    print("done init pma\n");
     return 0;
 }
 

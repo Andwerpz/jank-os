@@ -1,4 +1,3 @@
-#include "utils.jank";
 
 // https://wiki.osdev.org/AHCI
 // https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
@@ -202,7 +201,7 @@ u32 pci_read(u8 bus, u8 device, u8 function, u8 offset) {
 }
 
 void scan_for_ahci(vector<ahci_hba*>& ahci_hbas) {
-    sout << "scanning pci bus for ahci controller :O" << "\n";
+    cout << "scanning pci bus for ahci controller :O" << "\n";
     for(i32 bus = 0; bus < 256; bus++) {
         for(i32 device = 0; device < 32; device++) {
             u16 vendor_id = $u16 (pci_read($u8 bus, $u8 device, $u8 0, $u8 0) & $u32 0xffff);
@@ -219,7 +218,7 @@ void scan_for_ahci(vector<ahci_hba*>& ahci_hbas) {
                 u8 subclass = $u8 ((class_reg >> $u32 16) & $u32 0xff);
 
                 if(class_code == $u8 AHCI_CLASS_CODE && subclass == $u8 AHCI_SUBCLASS) {
-                    sout << "found ahci hba" << "\n";
+                    cout << "found ahci hba" << "\n";
 
 					ahci_hba* hba;
                     
@@ -233,10 +232,10 @@ void scan_for_ahci(vector<ahci_hba*>& ahci_hbas) {
                     if(bar_type == $u8 0x2) {
                         u32 bar5_upper = pci_read($u8 bus, $u8 device, $u8 function, $u8 0x28);
                         hba->abar_paddr = $u64 ((bar5_upper << $u32 32) | (bar5 & $u32 0xfffffff0));
-                        sout << "64 bit ABAR" << "\n";
+                        cout << "64 bit ABAR" << "\n";
                     } else {
                         hba->abar_paddr = $u64 (bar5 & $u32 0xfffffff0);
-                        sout << "32 bit ABAR" << "\n";
+                        cout << "32 bit ABAR" << "\n";
                     }
 
                     pt_map_page(pt_get_current(), $void* AHCI_ABAR_PAGE, $void* hba->abar_paddr, PTE_WRITEABLE | PTE_PCD);
@@ -253,43 +252,43 @@ void scan_for_ahci(vector<ahci_hba*>& ahci_hbas) {
 void hba_setup(ahci_hba* hba, vector<HBA_PORT*>& hba_ports) {
     HBA_MEM* h = $HBA_MEM* hba->abar_vaddr;
 
-    sout << "HBA Info:\n";
-    sout << "bus : device : function\n";
-    sout << $i32 hba->bus << ":" << $i32 hba->device << ":" << $i32 hba->function << "\n";
-    sout << "abar: " << $void* h << "\n";
+    cout << "HBA Info:\n";
+    cout << "bus : device : function\n";
+    cout << $i32 hba->bus << ":" << $i32 hba->device << ":" << $i32 hba->function << "\n";
+    cout << "abar: " << $void* h << "\n";
 
     u32 version = h->vs;
     u16 major = $u16 ((version >> $u32 16) & $u32 0xffff);
     u16 minor = $u16 (version & $u32 0xffff);
-    sout << "Version: " << major << "." << minor << "\n"; 
+    cout << "Version: " << major << "." << minor << "\n"; 
 
     u64 ports_implemented = $u64 h->pi;
     for(u64 i = 0x0; i < $u64 32; i++) {
         if(ports_implemented & ($u64 1 << i)) {
-            sout << "port: " << i << " is available\n";
+            cout << "port: " << i << " is available\n";
             HBA_PORT* p = @h->ports[i];
             u32 status = p->ssts;
             u8 detection = $u8 (status & $u32 0x0f);
             if(detection != $u8 3) {
-                sout << "  - no device detected on this port\n"; 
+                cout << "  - no device detected on this port\n"; 
                 continue;
             }
-            sout << "  + device detected on this port\n";
+            cout << "  + device detected on this port\n";
             
             u32 signature = p->sig;
             if(signature == SATA_SIG_ATA) {
-                sout << "  SATA drive\n";
+                cout << "  SATA drive\n";
             } else if(signature == SATA_SIG_ATAPI) {
-                sout << "  SATAPI drive\n";
+                cout << "  SATAPI drive\n";
             } else if(signature == SATA_SIG_SEMB) {
-                sout << "  SEMB drive\n";
+                cout << "  SEMB drive\n";
             } else if(signature == SATA_SIG_PM) {
-                sout << "  PM drive\n";
+                cout << "  PM drive\n";
             }
 
-            sout << "  > rebasing port\n";
+            cout << "  > rebasing port\n";
             rebase_port(p);
-			sout << $void* p << "\n";
+			cout << $void* p << "\n";
             hba_ports.push_back(p);
         }
     }
@@ -352,7 +351,7 @@ i32 find_cmdslot(HBA_PORT* p) {
 			return i;
 		slots >>= $u32 1;
 	}
-	sout << "Cannot find free command list entry\n";
+	cout << "Cannot find free command list entry\n";
 	return -1;
 }
 
@@ -422,7 +421,7 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 		spin++;
 	}
 	if(spin == 1000000) {
-		sout << "Port is hung\n";
+		cout << "Port is hung\n";
 		return 1;
 	}
 
@@ -435,14 +434,14 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
-			sout << "Read disk error\n";
+			cout << "Read disk error\n";
 			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
-		sout << "Read disk error\n";
+		cout << "Read disk error\n";
 		return 1;
 	}
 
@@ -514,7 +513,7 @@ i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 		spin++;
 	}
 	if(spin == 1000000) {
-		sout << "Port is hung\n";
+		cout << "Port is hung\n";
 		return 1;
 	}
 
@@ -527,14 +526,14 @@ i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
-			sout << "Write disk error\n";
+			cout << "Write disk error\n";
 			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
-		sout << "Write disk error\n";
+		cout << "Write disk error\n";
 		return 1;
 	}
 
@@ -579,7 +578,7 @@ i32 ahci_identify(HBA_PORT* p, u16* buf) {
 		spin++;
 	}
 	if(spin == 1000000) {
-		sout << "Port is hung\n";
+		cout << "Port is hung\n";
 		return 1;
 	}
 
@@ -592,14 +591,14 @@ i32 ahci_identify(HBA_PORT* p, u16* buf) {
 		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
 			break;
 		if (p->is & HBA_PxIS_TFES) { // Task file error
-			sout << "Identify disk error (task file error) \n";
+			cout << "Identify disk error (task file error) \n";
 			return 1;
 		}
 	}
 
 	// Check again
 	if (p->is & HBA_PxIS_TFES) {
-		sout << "Identify disk error\n";
+		cout << "Identify disk error\n";
 		return 1;
 	}
 
@@ -611,12 +610,12 @@ void print_drive_info(HBA_PORT* p) {
     memset(buffer, 0, PAGE_SIZE);
 
 	if(ahci_identify(p, $u16* buffer)) {
-		sout << "Identify command failed!\n";
+		cout << "Identify command failed!\n";
 		pfree(buffer);
 		return;
 	}
 
-    sout << "--- Drive Information ---\n";
+    cout << "--- Drive Information ---\n";
 
     u16* identify_data = $u16* buffer;
 
@@ -626,7 +625,7 @@ void print_drive_info(HBA_PORT* p) {
         model[i * 2 + 1] = $u8 identify_data[27 + i];
     }
     model[40] = '\0';
-    sout << "Model: " << $u8* @model << "\n";
+    cout << "Model: " << $u8* @model << "\n";
 
     u8[21] serial;
     for (i32 i = 0; i < 10; i++) {
@@ -634,14 +633,14 @@ void print_drive_info(HBA_PORT* p) {
         serial[i * 2 + 1] = $u8 identify_data[10 + i];
     }
     serial[20] = '\0';
-    sout << "Serial: " << $u8* @serial << "\n";
+    cout << "Serial: " << $u8* @serial << "\n";
     
     u64 total_sectors = *($u64* @identify_data[100]);
     u64 total_bytes = total_sectors * $u64 AHCI_SECTOR_SIZE;
     
-    sout << "Sectors: " << total_sectors << "\n";
-	sout << "Size: " << total_bytes / $u64 (1024 * 1024) << " MiB\n";
-    sout << "-----------------------\n";
+    cout << "Sectors: " << total_sectors << "\n";
+	cout << "Size: " << total_bytes / $u64 (1024 * 1024) << " MiB\n";
+    cout << "-----------------------\n";
 
     pfree(buffer);
 }
@@ -651,7 +650,7 @@ u64 get_drive_size(HBA_PORT* p) {
     memset(buffer, 0, PAGE_SIZE);
 
 	if(ahci_identify(p, $u16* buffer)) {
-		sout << "Identify command failed!\n";
+		cout << "Identify command failed!\n";
 		pfree(buffer);
 		return 0x0;
 	}
@@ -666,7 +665,7 @@ u64 get_drive_size(HBA_PORT* p) {
 }
 
 void test_ahci_read(HBA_PORT* p) {
-    sout << "Testing AHCI read on port\n";
+    cout << "Testing AHCI read on port\n";
 
     void* buffer_paddr = palloc();
 
@@ -674,61 +673,61 @@ void test_ahci_read(HBA_PORT* p) {
     i32 success = ahci_read(p, $u32 0, $u32 0, $u32 1, $u16* buffer_paddr);
 
     if(!success) {
-        sout << "Read command failed!\n";
+        cout << "Read command failed!\n";
         pfree(buffer_paddr);
         return;
     }
 
-    sout << "Read command succeeded. Verifying MBR signature\n";
+    cout << "Read command succeeded. Verifying MBR signature\n";
 
     // the signature is the last 16-bit word of the 512-byte sector?
     u16* signature = $u16* ($u8* ($u64 buffer_paddr + $u64 510));
 
     if(*signature == $u16 0xaa55) {
-        sout << "SUCCESS! MBR signature 0xAA55 found.\n";
+        cout << "SUCCESS! MBR signature 0xAA55 found.\n";
     } else {
-        sout << "FAILURE! MBR signature not found. Expected 0xAA55, got " << *signature <<  ".\n";
+        cout << "FAILURE! MBR signature not found. Expected 0xAA55, got " << *signature <<  ".\n";
     }
 
     pfree(buffer_paddr);
 }
 
 void test_ahci_write(HBA_PORT* p) {
-    sout << "Testing AHCI write on port\n";
+    cout << "Testing AHCI write on port\n";
 
     void* write_buffer = palloc();
     memset(write_buffer, 0, PAGE_SIZE);
     u8* test_string = "jello, am i mutted?\n";
     memcpy(write_buffer, $void* test_string, sizeof(u8) * (strlen(test_string) + 0x1));
-    sout << "Attempting to write: " << $u8* write_buffer << "\n"; 
+    cout << "Attempting to write: " << $u8* write_buffer << "\n"; 
 
     // test write to some large sector? (128mb image -> 250000 sectors?)
 	u32 test_sector = $u32 50000;
 
     i32 success = ahci_write(p, test_sector, $u32 0, $u32 1, $u16* write_buffer);
     if (!success) {
-        sout << "Write command failed!\n";
+        cout << "Write command failed!\n";
         pfree(write_buffer);
         return;
     }
 
-    sout << "Write command succeeded. Verifying by reading same sector\n";
+    cout << "Write command succeeded. Verifying by reading same sector\n";
 
     void* read_buffer = palloc();
     success = ahci_read(p, test_sector, $u32 0, $u32 1, $u16* read_buffer);
     if(!success) {
-        sout << "Read command failed!\n";
+        cout << "Read command failed!\n";
         pfree(read_buffer);
         return;
     }
     
-    sout << "Read command succeeded. Checking for match\n";
+    cout << "Read command succeeded. Checking for match\n";
 
-    sout << $u8* read_buffer << "\n";
+    cout << $u8* read_buffer << "\n";
     if (memcmp(write_buffer, read_buffer, $u64 512) == 0) {
-        sout << "SUCCESS! Data read back matches data written.\n";
+        cout << "SUCCESS! Data read back matches data written.\n";
     } else {
-        sout << "FAILURE! Data read back does not match.\n";
+        cout << "FAILURE! Data read back does not match.\n";
     }
 
     pfree(write_buffer);
@@ -740,33 +739,33 @@ void init_ahci() {
     vector<ahci_hba*> ahci_hbas;
     scan_for_ahci(ahci_hbas);
 	if(ahci_hbas.size() == 0x0) {
-		sout << "no ahci controller found" << "\n";
+		cout << "no ahci controller found" << "\n";
 		return;
 	}
-	sout << "found " << ahci_hbas.size() << " controllers\n"; 
+	cout << "found " << ahci_hbas.size() << " controllers\n"; 
 	for(u64 i = 0x0; i < ahci_hbas.size(); i++) {
 		vector<HBA_PORT*> hba_ports;
 		hba_setup(ahci_hbas[i], hba_ports);
 
-		sout << "found " << hba_ports.size() << " ports implemented on hba " << i << "\n"; 
+		cout << "found " << hba_ports.size() << " ports implemented on hba " << i << "\n"; 
 		for(u64 j = 0x0; j < hba_ports.size(); j++) {
-            sout << "HBA PORT : " << hba_ports[j] << "\n";
+            cout << "HBA PORT : " << hba_ports[j] << "\n";
 			print_drive_info(hba_ports[j]);
 
             //see if this drive is partitioned
             mbr* mbr = $mbr* palloc();
             if(ahci_read(hba_ports[j], $u32 0, $u32 0, $u32 1, $u16* mbr)) {
-                sout << "read MBR sector failed\n";
+                cout << "read MBR sector failed\n";
                 pfree($void* mbr);
                 continue;
             }
 
-            sout << "MBR SIGNATURE : \n";
-            sout << ($void* $u64 mbr->signature[0]) << " " << ($void* $u64 mbr->signature[1]) << "\n";
+            cout << "MBR SIGNATURE : \n";
+            cout << ($void* $u64 mbr->signature[0]) << " " << ($void* $u64 mbr->signature[1]) << "\n";
             hexdump(mbr, sizeof(mbr));
 
             if(mbr->signature[0] == $u8 0x55 && mbr->signature[1] == $u8 0xAA) {
-                sout << "found partitioned drive\n";
+                cout << "found partitioned drive\n";
 
                 //look through each partition
                 for(u64 k = 0x0; k < 0x4; k++) {
@@ -775,7 +774,7 @@ void init_ahci() {
 
                     ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
                     if(!ext2_mount(hba_ports[j], $u64 p->lba_first, fs)) {
-                        sout << "found ext2 filesystem\n";
+                        cout << "found ext2 filesystem\n";
                         vfs_mount(new string("/"), $void* fs, VFS_EXT2_OPS);
                         pfree($void* mbr);
                         return;
@@ -784,12 +783,12 @@ void init_ahci() {
                 }
             }
             else {
-                sout << "found unpartitioned drive\n";
+                cout << "found unpartitioned drive\n";
 
                 //assume drive is one big partition
                 ext2_fs* fs = $ext2_fs* malloc(sizeof(ext2_fs));
                 if(!ext2_mount(hba_ports[j], 0x0, fs)) {
-                    sout << "found ext2 filesystem\n";
+                    cout << "found ext2 filesystem\n";
                     vfs_mount(new string("/"), $void* fs, VFS_EXT2_OPS);
                     pfree($void* mbr);
                     return;

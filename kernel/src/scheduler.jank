@@ -52,27 +52,27 @@ struct trapframe {
 }
 
 export void print_trapframe(trapframe* tf) {
-    sout << "%rax   : " << $void* tf->rax << "\n";
-    sout << "%rbx   : " << $void* tf->rbx << "\n";
-    sout << "%rcx   : " << $void* tf->rcx << "\n";
-    sout << "%rdx   : " << $void* tf->rdx << "\n";
-    sout << "%rsi   : " << $void* tf->rsi << "\n";
-    sout << "%rdi   : " << $void* tf->rdi << "\n";
-    sout << "%rbp   : " << $void* tf->rbp << "\n";
-    sout << "%rsp   : " << $void* tf->rsp << "\n";
-    sout << "%r8    : " << $void* tf->r8 << "\n";
-    sout << "%r9    : " << $void* tf->r9 << "\n";
-    sout << "%r10   : " << $void* tf->r10 << "\n";
-    sout << "%r11   : " << $void* tf->r11 << "\n";
-    sout << "%r12   : " << $void* tf->r12 << "\n";
-    sout << "%r13   : " << $void* tf->r13 << "\n";
-    sout << "%r14   : " << $void* tf->r14 << "\n";
-    sout << "%r15   : " << $void* tf->r15 << "\n";
-    sout << "%rip   : " << $void* tf->rip << "\n";
-    sout << "rflags : " << $void* tf->rflags << "\n";
-    sout << "pt     : " << $void* tf->pt << "\n";
-    sout << "cs     : " << $void* tf->cs << "\n";
-    sout << "ss     : " << $void* tf->ss << "\n";
+    cout << "%rax   : " << $void* tf->rax << "\n";
+    cout << "%rbx   : " << $void* tf->rbx << "\n";
+    cout << "%rcx   : " << $void* tf->rcx << "\n";
+    cout << "%rdx   : " << $void* tf->rdx << "\n";
+    cout << "%rsi   : " << $void* tf->rsi << "\n";
+    cout << "%rdi   : " << $void* tf->rdi << "\n";
+    cout << "%rbp   : " << $void* tf->rbp << "\n";
+    cout << "%rsp   : " << $void* tf->rsp << "\n";
+    cout << "%r8    : " << $void* tf->r8 << "\n";
+    cout << "%r9    : " << $void* tf->r9 << "\n";
+    cout << "%r10   : " << $void* tf->r10 << "\n";
+    cout << "%r11   : " << $void* tf->r11 << "\n";
+    cout << "%r12   : " << $void* tf->r12 << "\n";
+    cout << "%r13   : " << $void* tf->r13 << "\n";
+    cout << "%r14   : " << $void* tf->r14 << "\n";
+    cout << "%r15   : " << $void* tf->r15 << "\n";
+    cout << "%rip   : " << $void* tf->rip << "\n";
+    cout << "rflags : " << $void* tf->rflags << "\n";
+    cout << "pt     : " << $void* tf->pt << "\n";
+    cout << "cs     : " << $void* tf->cs << "\n";
+    cout << "ss     : " << $void* tf->ss << "\n";
 }
 
 //we shouldn't store processes anywhere else. 
@@ -111,12 +111,12 @@ void erase_process(pid_t pid) {
 
 export process* get_cur_proc() {
     process* proc = find_process(get_cur_pid());
-    passert(proc != nullptr, "get_cur_proc() : failed to find current process");
+    assert(proc != nullptr, "get_cur_proc() : failed to find current process");
     return proc;
 }
 
 export pid_t get_cur_pid() {
-    passert(current_process != $pid_t 0, "get_cur_pid() : current_process is 0??");
+    assert(current_process != $pid_t 0, "get_cur_pid() : current_process is 0??");
     return current_process;
 }
 
@@ -125,7 +125,7 @@ process* schedule_next_process() {
     //go until you see PROCESS_READY
     //should probably add a check to see if there's actually some process that's READY in the queue
     while(1) {
-        passert(process_queue.size() != 0x0, "schedule_next_process() : no more processes!!");
+        assert(process_queue.size() != 0x0, "schedule_next_process() : no more processes!!");
         pid_t pid = process_queue.front();
         process_queue.push_back(process_queue.pop_front());
 
@@ -158,7 +158,7 @@ void scheduler(trapframe* tf) {
     if(proc->status == PROCESS_RUNNING) proc->status = PROCESS_READY;
     else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;
     else {
-        sout << "Unrecognized status : " << proc->status << "\n";
+        cout << "Unrecognized status : " << proc->status << "\n";
         panic("scheduler() : unrecognized runtime status");
     }
 
@@ -178,7 +178,7 @@ void scheduler(trapframe* tf) {
 void scheduler() {
     //look for next process to run
     process* proc = schedule_next_process();
-    passert(proc->status == PROCESS_READY, "scheduler() : should only schedule ready processes");
+    assert(proc->status == PROCESS_READY, "scheduler() : should only schedule ready processes");
     current_process = proc->pid;
     u64 proc_trapframe_off = proc->kstack_bottom + KSTACK_TRAPFRAME; 
 
@@ -187,7 +187,7 @@ void scheduler() {
 
     trapframe* tf = $trapframe* proc_trapframe_off;
 
-    // sout << "SCHEDULING PROCESS : " << proc->pid << " " << pt_get_current() << " " << proc->pt << " " << ($void* (proc->kstack_bottom + KSTACK_TOP)) << " " << process_queue.size() << "\n";
+    // cout << "SCHEDULING PROCESS : " << proc->pid << " " << pt_get_current() << " " << proc->pt << " " << ($void* (proc->kstack_bottom + KSTACK_TOP)) << " " << process_queue.size() << "\n";
     // print_trapframe(tf);
     // if(!pt_is_vaddr_mapped(proc->pt, $void* (proc->kstack_bottom + PAGE_SIZE))) {
     //     panic("ahhhh");
@@ -330,14 +330,14 @@ void iret_to_process(trapframe* tf) {
 
 //ends the current process's time slice, goes to the scheduler
 void yield() {
-    passert(irq_disable_count == 0x0, "yield() : interrupts should be enabled");
+    assert(irq_disable_count == 0x0, "yield() : interrupts should be enabled");
     asm!("int $0x20");
 }
 
 //once we call this, the initial kernel startup phase has finished
 //this function should never return. 
 void init_scheduler() {
-    sout << "start init scheduler\n";   
+    cout << "start init scheduler\n";   
 
     //initialize init process
     create_process(new string("/bin/sys/init"));

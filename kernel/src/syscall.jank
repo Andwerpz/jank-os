@@ -1,13 +1,13 @@
 
 i32 init_syscall() {
-    sout << "start init syscalls\n";
+    cout << "start init syscalls\n";
 
     //setup STAR
     //syscall and sysret automatically loads new segment from descriptor table based off of these values
     u64 SELECTOR_1 = 0x08;  //kernel code
     u64 SELECTOR_2 = 0x13;  //kernel data
     wrmsr(STAR_MSR, (SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48));
-    sout << "STAR : " << $void* ((SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48)) << "\n";
+    cout << "STAR : " << $void* ((SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48)) << "\n";
 
     //setup LSTAR
     wrmsr(LSTAR_MSR, $u64 @syscall_handler_entry);
@@ -28,7 +28,7 @@ i32 init_syscall() {
     gs_data->kernel_pt = kernel_pt;
     wrmsr(GS_BASE_MSR, $u64 gs_data);
 
-    sout << "done init syscalls\n";
+    cout << "done init syscalls\n";
     return 0;
 }
 
@@ -180,7 +180,7 @@ export u64 syscall_handler() {
     if(0) {
         pagetable_t user_pt = pt_get_current();
         pt_switch_to_kernel();
-        sout << "SYSCALL : " << sys_id << "\n";
+        cout << "SYSCALL : " << sys_id << "\n";
         pt_switch(user_pt);
     }
 
@@ -215,7 +215,7 @@ export u64 syscall_handler() {
 
     else {
         pt_switch_to_kernel();
-        sout << "SYS ID : " << sys_id << "\n";
+        cout << "SYS ID : " << sys_id << "\n";
         panic("syscall_handler() : unrecognized sys_id");
     }
 
@@ -224,7 +224,7 @@ export u64 syscall_handler() {
     if(0) {
         pagetable_t user_pt = pt_get_current();
         pt_switch_to_kernel();
-        sout << "DONE SYSCALL : " << sys_id << "\n";
+        cout << "DONE SYSCALL : " << sys_id << "\n";
         pt_switch(user_pt);
     }
 
@@ -238,7 +238,7 @@ u64 sys_clock_gettime(u64 clock_id, timespec* ts) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
-    passert(clock_id == CLOCK_REALTIME, "sys_clock_gettime() : currently only support CLOCK_REALTIME");
+    assert(clock_id == CLOCK_REALTIME, "sys_clock_gettime() : currently only support CLOCK_REALTIME");
 
     timespec* kts = $timespec* malloc(sizeof(timespec));
     hpet_get_sys_time(kts);
@@ -262,8 +262,8 @@ pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
-    passert(rusage == nullptr, "sys_wait4() : no support for rusage");
-    passert(pid > $pid_t -1 && pid != $pid_t 0, "sys_wait4() : pgids not supported");
+    assert(rusage == nullptr, "sys_wait4() : no support for rusage");
+    assert(pid > $pid_t -1 && pid != $pid_t 0, "sys_wait4() : pgids not supported");
 
     pid_t retval = $pid_t 0;
     process* proc = get_cur_proc();
@@ -690,7 +690,7 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     free($void* kpath_str, sizeof(string));
     if(walk_stat) {
         //path is not valid
-        sout << "INVALID PATH\n";
+        cout << "INVALID PATH\n";
         pt_switch(user_pt);
         return ERR_UNKNOWN;
     }
@@ -699,13 +699,13 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     i32 is_file;
     i32 is_file_stat = vfs_is_file(inode, is_file);
     if(is_file_stat) {
-        sout << "IS FILE CHECK FAILED\n";
+        cout << "IS FILE CHECK FAILED\n";
         vfs_dec_refcnt(inode);
         pt_switch(user_pt);
         return ERR_UNKNOWN;
     }
     if(!is_file) {
-        sout << "NOT A FILE\n";
+        cout << "NOT A FILE\n";
         vfs_dec_refcnt(inode);
         pt_switch(user_pt);
         return ERR_UNKNOWN;
@@ -715,7 +715,7 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     u64 file_len;
     if(vfs_get_size(inode, file_len)) {
         //getting size failed
-        sout << "GETTING FILE SIZE FAILED\n";
+        cout << "GETTING FILE SIZE FAILED\n";
         vfs_dec_refcnt(inode);
         pt_switch(user_pt);
         return ERR_UNKNOWN;
@@ -724,14 +724,14 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     u8* file_buf = $u8* malloc(file_len);
     if(vfs_read_file(inode, file_buf, file_len, 0x0, amt_read)) {
         //reading file failed
-        sout << "READ FILE FAILED\n";
+        cout << "READ FILE FAILED\n";
         free($void* file_buf, file_len);
         vfs_dec_refcnt(inode);
         pt_switch(user_pt);
         return ERR_UNKNOWN;
     }
     vfs_dec_refcnt(inode);
-    passert(amt_read == file_len, "sys_execve() : should always read entire file");
+    assert(amt_read == file_len, "sys_execve() : should always read entire file");
 
     //start building new process user_pt
     pagetable_t n_user_pt = pt_alloc_new();
@@ -743,7 +743,7 @@ i32 sys_execve(u8* path, u8** argv, u8** envp) {
     free($void* file_buf, file_len);
     if(elf_status) {
         //failed to load file as elf
-        sout << "FAILED TO LOAD ELF\n";
+        cout << "FAILED TO LOAD ELF\n";
         pt_free(n_user_pt);
         pt_switch(user_pt);
         return ERR_UNKNOWN;
@@ -1031,8 +1031,8 @@ i32 sys_pipe(i32[2]* fds) {
     new (write_ref) pipe_ref(pipe, 1);
 
     //create file descriptors
-    passert($void* proc->fd_table[fdind0] == nullptr, "sys_pipe() : this should be available");
-    passert($void* proc->fd_table[fdind1] == nullptr, "sys_pipe() : this should be available");
+    assert($void* proc->fd_table[fdind0] == nullptr, "sys_pipe() : this should be available");
+    assert($void* proc->fd_table[fdind1] == nullptr, "sys_pipe() : this should be available");
     proc->fd_table[fdind0] = file_create_pipe($u64 O_RDONLY, read_ref);
     proc->fd_table[fdind1] = file_create_pipe($u64 O_WRONLY, write_ref);
 

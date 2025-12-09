@@ -1,0 +1,35 @@
+#include "ahci.jank";
+
+// standard interface for block device drivers
+
+[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI = 0x0;
+
+struct blockdev_ops {
+    fn<i32(blockdev*, u64, u64, void*)> read;
+    fn<i32(blockdev*, u64, u64, void*)> write;
+}
+
+struct blockdev {
+    u64 type;
+    void* resource_ptr;
+    blockdev_ops* ops;
+}
+
+blockdev* blockdev_create_ahci(HBA_PORT* hba) {
+    blockdev* dev = $blockdev* malloc(sizeof(blockdev));
+    new (dev) blockdev();
+
+    dev->type = BLOCKDEV_TYPE_AHCI;
+    dev->resource_ptr = $void* hba;
+    dev->ops = BLOCKDEV_OPS_AHCI;
+
+    return dev;
+}
+
+i32 blockdev_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    return dev->ops->read#(dev, lba_start, count, buf);
+}
+
+i32 blockdev_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    return dev->ops->write#(dev, lba_start, count, buf);
+}

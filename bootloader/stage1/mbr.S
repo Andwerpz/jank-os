@@ -72,6 +72,9 @@ start:
     int  $0x13              # trigger BIOS interrupt vector 
     jc   error_disk         # BIOS indicates success via carry flag, 1 is error
 
+    # set %dl to boot_drive so that stage 2 can have it
+    movb boot_drive, %dl
+
     # jump to stage 2
     ljmp $STAGE2_LOAD_SEG, $STAGE2_LOAD_OFF
 
@@ -81,7 +84,9 @@ start:
 # where to load stage 2 and how many sectors
 STAGE2_LOAD_SEG = 0x0000
 STAGE2_LOAD_OFF = 0x8000
-STAGE2_SECTORS = 64         # 64 * 512 = 32 kb
+STAGE2_SECTORS = 127         # 127 * 512 = 63.5 kb
+# ran into errors when reading above 128 sectors
+# 128 flips the sign bit, so 127 seems relatively safe
 
 boot_drive:
     .byte 0

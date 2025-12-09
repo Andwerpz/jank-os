@@ -2,58 +2,58 @@
 
 [__GLOBAL_FIRST__] u16 COM1 = $u16 0x3f8;
 
-[SERIAL_STREAM] serial_ostream sout = new serial_ostream();
+[PRINTSTREAM] printstream cout = new printstream();
 
-struct serial_ostream {}
+struct printstream {}
 
-serial_ostream& operator<<(serial_ostream& stream, u8* s) {
-    serial_print(s);
+printstream& operator<<(printstream& stream, u8* s) {
+    print(s);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, u8 c) {
-    serial_print(c);
+printstream& operator<<(printstream& stream, u8 c) {
+    print(c);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, i64 x) {
-    serial_print(x);
+printstream& operator<<(printstream& stream, i64 x) {
+    print(x);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, i32 x) {
-    serial_print(x);
+printstream& operator<<(printstream& stream, i32 x) {
+    print(x);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, u64 x) {
-    serial_print(x);
+printstream& operator<<(printstream& stream, u64 x) {
+    print(x);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, u32 x) {
-    serial_print(x);
+printstream& operator<<(printstream& stream, u32 x) {
+    print(x);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, u16 x) {
-    serial_print(x);
+printstream& operator<<(printstream& stream, u16 x) {
+    print(x);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, string& s) {
-    serial_print(s);
+printstream& operator<<(printstream& stream, string& s) {
+    print(s);
     return stream;
 }
 
-serial_ostream& operator<<(serial_ostream& stream, string s) {
-    serial_print(s);
+printstream& operator<<(printstream& stream, string s) {
+    print(s);
     return stream;
 }
 
 template<T>
-serial_ostream& operator<<(serial_ostream& stream, T* p) {
-    serial_print(p);
+printstream& operator<<(printstream& stream, T* p) {
+    print(p);
     return stream;
 }
 
@@ -192,7 +192,7 @@ i64 serial_read(file* fd, u8* buf, u64 amt) {
     while(buf_ptr < amt) {
         i32 res = poll_serial();
         if(res < 0) break;
-        passert(res >= 0 && res < 256, "serial_read() : checking if res is in range");
+        assert(res >= 0 && res < 256, "serial_read() : checking if res is in range");
         buf[buf_ptr ++] = $u8 res;
     }
     if(buf_ptr == 0x0) {

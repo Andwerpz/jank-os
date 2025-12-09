@@ -14,13 +14,13 @@ struct mutex {
     }
 
     ~mutex() {
-        passert(this.locked == 0, "mutex::~() : cannot be locked when destructing");
+        assert(this.locked == 0, "mutex::~() : cannot be locked when destructing");
     }
     
     void lock() {
         irq_disable();
         if(this.locked) {
-            passert(this.owner != $pid_t 0, "mutex::lock() : must have owner when locked");
+            assert(this.owner != $pid_t 0, "mutex::lock() : must have owner when locked");
 
             //block process, if mutex becomes unlocked, will unblock a process from queue
             process* proc = get_cur_proc();
@@ -31,10 +31,10 @@ struct mutex {
             yield();
 
             irq_disable();
-            passert(!this.locked, "mutex::lock() : should be unlocked when woken up");
+            assert(!this.locked, "mutex::lock() : should be unlocked when woken up");
         }
 
-        passert(this.owner == $pid_t 0, "mutex::lock() : must not have owner");
+        assert(this.owner == $pid_t 0, "mutex::lock() : must not have owner");
 
         this.locked = 1;
         this.owner = get_cur_pid();
@@ -44,16 +44,16 @@ struct mutex {
     void unlock() {
         irq_disable();
         
-        passert(this.locked, "mutex::unlock() : should be locked when trying to unlock");
-        passert(this.owner != $pid_t 0, "mutex::unlock() : there has to be an owner");
-        passert(this.owner == get_cur_pid(), "mutex::unlock() : only owner can unlock");
+        assert(this.locked, "mutex::unlock() : should be locked when trying to unlock");
+        assert(this.owner != $pid_t 0, "mutex::unlock() : there has to be an owner");
+        assert(this.owner == get_cur_pid(), "mutex::unlock() : only owner can unlock");
         this.locked = 0;
         this.owner = $pid_t 0;
 
         //if there are blocked processes, unblock one
         if(this.wait_queue.size()){
             process* nextp = find_process(this.wait_queue.pop_front());
-            passert(nextp->status == PROCESS_BLOCKED, "mutex::unlock() : process in queue should be blocked");
+            assert(nextp->status == PROCESS_BLOCKED, "mutex::unlock() : process in queue should be blocked");
             nextp->status = PROCESS_READY;
         }
 

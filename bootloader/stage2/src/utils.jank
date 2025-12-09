@@ -1,0 +1,31 @@
+
+void print(u8 c) {
+    vga_print(c);
+} 
+
+void print(u8* str) {
+    vga_print(str);
+}
+
+void print(u64 x) {
+    vga_print(x);
+}
+
+void print(u32 x){
+    vga_print(x);
+}
+
+void print(u16 x) {
+    vga_print(x);
+}
+
+template<T>
+void print(T* ptr) {
+    vga_print($u64 ptr);
+}
+
+template<T>
+void println(T x) {
+    print(x);
+    print("\n");
+}

@@ -1,5 +1,6 @@
 
-[__GLOBAL_FIRST__] u64 PAGE_SIZE = $u64 4096;
+[__GLOBAL_FIRST__] u64 PAGE_SIZE    = $u64 0x001000;
+[__GLOBAL_FIRST__] u64 HUGEPG_SIZE  = $u64 0x200000;
 
 struct GSData {
     pagetable_t kernel_pt;              //0
@@ -30,10 +31,10 @@ struct GSData {
 [__GLOBAL_FIRST__] u64 AHCI_ABAR_PAGE       = 0xfffffffff7004000;   // AHCI ABAR (2 pages)
 [__GLOBAL_FIRST__] u64 KERNEL_DATA_TOP      = 0xfffffffff7006000;
 
-[__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO        = 0xfffffffff8000000;   // memory mapped IO virtual address
+// [__GLOBAL_FIRST__] u64 BOOTBOOT_MMIO        = 0xfffffffff8000000;   // memory mapped IO virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_FB          = 0xfffffffffc000000;   // frame buffer virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_INFO        = 0xffffffffffe00000;   // bootboot struct virtual address
-[__GLOBAL_FIRST__] u64 BOOTBOOT_ENV         = 0xffffffffffe01000;   // environment string virtual address
+// [__GLOBAL_FIRST__] u64 BOOTBOOT_ENV         = 0xffffffffffe01000;   // environment string virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_CORE        = 0xffffffffffe02000;   // core loadable segment start
 [__GLOBAL_FIRST__] u64 BOOTBOOT_STACK_TOP   = 0x0000000000000000;   // initial kernel stack
 

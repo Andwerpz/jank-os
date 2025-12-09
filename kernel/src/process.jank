@@ -39,7 +39,7 @@ void process_pt_map_kernel(process* proc, pagetable_t user_pt) {
     //map kernel data
     for(u64 i = KERNEL_DATA_BOTTOM; i < KERNEL_DATA_TOP; i += PAGE_SIZE) {
         void* vaddr = $void* i;
-        passert(pt_is_vaddr_mapped(kernel_pt, vaddr), "process_pt_map_kernel() : kernel data should be mapped");
+        assert(pt_is_vaddr_mapped(kernel_pt, vaddr), "process_pt_map_kernel() : kernel data should be mapped");
         u64 perm_flags;
         void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
         pt_map_page(user_pt, vaddr, paddr, perm_flags);
@@ -49,7 +49,7 @@ void process_pt_map_kernel(process* proc, pagetable_t user_pt) {
     for(u64 i = PAGE_SIZE; i < KSTACK_SIZE; i += PAGE_SIZE) {
         u64 perm_flags;
         void* vaddr = $void* (proc->kstack_bottom + i);
-        passert(pt_is_vaddr_mapped(kernel_pt, vaddr), "process_pt_map_kernel() : kstack should be mapped");
+        assert(pt_is_vaddr_mapped(kernel_pt, vaddr), "process_pt_map_kernel() : kstack should be mapped");
         void* paddr = pt_translate(kernel_pt, vaddr, perm_flags);
         pt_map_page(user_pt, vaddr, paddr, PTE_WRITEABLE);
     }
@@ -109,8 +109,8 @@ void process_populate_stack(process* proc, u8** argv, u8** envp) {
     arg_sz += 0x8;      //argc
 
     //build arg buffer
-    passert(arg_sz % 0x8 == 0x0, "process_populate_stack() : arg_sz should be 8-byte aligned");
-    passert(arg_sz <= USER_STACK_TOP - USER_STACK_BOTTOM, "process_populate_stack() : arg_sz exceeds stack size");
+    assert(arg_sz % 0x8 == 0x0, "process_populate_stack() : arg_sz should be 8-byte aligned");
+    assert(arg_sz <= USER_STACK_TOP - USER_STACK_BOTTOM, "process_populate_stack() : arg_sz exceeds stack size");
     u64* arg_buf = $u64* malloc(arg_sz);
     u64 buf_pos = USER_STACK_TOP - arg_sz;
     u64 buf_ptr = 0x0;
@@ -141,7 +141,7 @@ void process_populate_stack(process* proc, u8** argv, u8** envp) {
             buf_ptr += (sz + 0x7) / 0x8;
         }
     }
-    passert(buf_ptr * 0x8 == arg_sz, "process_populate_stack() : buf_ptr should be at end of buffer");
+    assert(buf_ptr * 0x8 == arg_sz, "process_populate_stack() : buf_ptr should be at end of buffer");
 
     //copy arg buffer to user stack
     copy_to_user(proc->pt, $u8* arg_buf, $u8* buf_pos, arg_sz);
@@ -187,7 +187,7 @@ process* create_process(u64 flags) {
     proc->status = PROCESS_NEW;
 
     //alloc new kstack for process, need to map in kernel
-    passert(kstack_ptr + KSTACK_SIZE <= KSTACK_AREA_TOP, "create_process() : ran out of room for kstacks");
+    assert(kstack_ptr + KSTACK_SIZE <= KSTACK_AREA_TOP, "create_process() : ran out of room for kstacks");
     proc->kstack_bottom = kstack_ptr;
     for(u64 i = PAGE_SIZE; i < KSTACK_SIZE; i += PAGE_SIZE) {
         void* paddr = palloc();
@@ -202,7 +202,7 @@ process* create_process(u64 flags) {
     process_pt_alloc_userspace(proc, proc->pt, flags);
 
     if(flags & PROCESS_CREATE_FDTABLE) {
-        passert(proc->pid == $pid_t 0x1, "create_process() : should only create new fdtable for init process");
+        assert(proc->pid == $pid_t 0x1, "create_process() : should only create new fdtable for init process");
         
         tty* tty = $tty* malloc(sizeof(tty));
         new (tty) tty();
@@ -246,7 +246,7 @@ process* create_process(string path, u8** argv, u8** envp) {
     if(vfs_read_file(path, elf_buf, elf_size, 0x0, read_amt)) {
         panic("create_process() : failed to read file");
     }
-    passert(read_amt == elf_size, "create_process() : should read entire binary");
+    assert(read_amt == elf_size, "create_process() : should read entire binary");
     
     //map elf
     u64 entry_off;
@@ -324,7 +324,7 @@ process* create_process(process* parent, trapframe* parent_tf) {
     process* child = create_process(0x0);
 
     //make sure this process is alive
-    passert(parent->status != PROCESS_ZOMBIE, "create_process() : can only clone from alive process");
+    assert(parent->status != PROCESS_ZOMBIE, "create_process() : can only clone from alive process");
 
     //set child's parent 
     child->parent = parent;
@@ -337,7 +337,7 @@ process* create_process(process* parent, trapframe* parent_tf) {
     child->fd_table = parent->fd_table;
 
     //copy CWD
-    passert($void* parent->cwd != nullptr, "create_process() : alive process should have CWD");
+    assert($void* parent->cwd != nullptr, "create_process() : alive process should have CWD");
     child->cwd = parent->cwd;
     vfs_inc_refcnt(child->cwd);
 
@@ -365,12 +365,12 @@ process* create_process(process* parent, trapframe* parent_tf) {
 //does some last checks and setup
 //panics on failure
 void make_process_ready(process* proc) {
-    passert(proc->status == PROCESS_NEW, "make_process_ready() : should only receive new processes");
+    assert(proc->status == PROCESS_NEW, "make_process_ready() : should only receive new processes");
 
     proc->status = PROCESS_READY;
     process_queue.push_back(proc->pid);
 
-    // sout << "MAKING PROCESS READY : " << proc->pid << " : " << process_queue.size() << "\n";
+    // cout << "MAKING PROCESS READY : " << proc->pid << " : " << process_queue.size() << "\n";
 }
 
 //marks process as dead, cleans up process. 
@@ -381,7 +381,7 @@ void kill_process(pid_t pid, i32 status) {
 
     //update process status
     process* proc = find_process(pid);
-    passert(proc != nullptr, "kill_process() : should be able to find process");
+    assert(proc != nullptr, "kill_process() : should be able to find process");
     proc->status = PROCESS_ZOMBIE;
     proc->exit_status = status;
 
@@ -409,7 +409,7 @@ void kill_process(pid_t pid, i32 status) {
     }
 
     //free cwd
-    passert($void* proc->cwd != nullptr, "kill_process() : alive process should always have CWD");
+    assert($void* proc->cwd != nullptr, "kill_process() : alive process should always have CWD");
     vfs_dec_refcnt(proc->cwd);
     proc->cwd = $vfs_inode* nullptr;
 }
@@ -422,7 +422,7 @@ void remove_process(pid_t pid) {
     process* proc = find_process(pid);
 
     //make sure process is a zombie process
-    passert(proc->status == PROCESS_ZOMBIE, "remove_process() : process must be zombie");
+    assert(proc->status == PROCESS_ZOMBIE, "remove_process() : process must be zombie");
 
     //dealloc kstack
     pagetable_t kernel_pt = pt_get_current();
@@ -438,11 +438,11 @@ void remove_process(pid_t pid) {
         u64 ind = proc->parent->children.size();
         for(u64 i = 0x0; i < proc->parent->children.size(); i++) {
             if(proc->parent->children[i]->pid == pid) {
-                passert(ind == proc->parent->children.size(), "remove_process() : parent should only contain child once");
+                assert(ind == proc->parent->children.size(), "remove_process() : parent should only contain child once");
                 ind = i;
             }
         }
-        passert(ind != proc->parent->children.size(), "remove_process() : should be able to find child in parent");
+        assert(ind != proc->parent->children.size(), "remove_process() : should be able to find child in parent");
         proc->parent->children.erase(ind);
     }
 

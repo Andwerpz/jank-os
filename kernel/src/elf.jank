@@ -72,11 +72,11 @@ struct ELF64_Sym {
 //entry point virtual address is returned through out_entry_off
 //returns 0 on success
 i32 elf_load(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
-    // sout << "Loading ELF ...\n";
+    // cout << "Loading ELF ...\n";
 
     //check if there's even enough room for the ELF header
     if(size < sizeof(ELF64_Ehdr)) {
-        sout << "Not enough room for ELF header\n";
+        cout << "Not enough room for ELF header\n";
         return 1;
     }
 
@@ -86,24 +86,24 @@ i32 elf_load(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
         elf_header->e_ident[1] != ELFMAG1 ||
         elf_header->e_ident[2] != ELFMAG2 ||
         elf_header->e_ident[3] != ELFMAG3) {
-        sout << "Magic values are incorrect\n";
+        cout << "Magic values are incorrect\n";
         return 1;
     }
 
     //make sure program header table fits within ELF
     u64 phnum = $u64 elf_header->e_phnum;
     if(elf_header->e_phoff + $u64 elf_header->e_phentsize * phnum > size) {
-        sout << "Program header table does not fit within ELF\n";
+        cout << "Program header table does not fit within ELF\n";
         return 1;
     }
 
     //TODO load actual program header num if phnum == 0xffff
-    passert(phnum != 0xffff, "need to load in actual program header num");
+    assert(phnum != 0xffff, "need to load in actual program header num");
 
-    // sout << "Entry point : " << ($void* elf_header->e_entry) << "\n";
+    // cout << "Entry point : " << ($void* elf_header->e_entry) << "\n";
 
     //go through program header table
-    // sout << "Program header count : " << elf_header->e_phnum << "\n";
+    // cout << "Program header count : " << elf_header->e_phnum << "\n";
     ELF64_Phdr* p_headers = $ELF64_Phdr* @(buf[elf_header->e_phoff]);
     for(u64 i = 0x0; i < phnum; i++){
         ELF64_Phdr* p_header = @(p_headers[i]);
@@ -114,23 +114,23 @@ i32 elf_load(u8* buf, u64 size, pagetable_t pt, u64& out_entry_off) {
         u64 memsz = p_header->p_memsz;
         u64 align = p_header->p_align;
 
-        // sout << "Program header " << i << " :\n";
-        // sout << "flags : " << flags << "\n";
-        // sout << "offset : " << $void* offset << "\n";
-        // sout << "vaddr : " << $void* vaddr << "\n";
-        // sout << "filesz : " << filesz << "\n";
-        // sout << "memsz : " << memsz << "\n";
-        // sout << "align : " << align << "\n";
+        // cout << "Program header " << i << " :\n";
+        // cout << "flags : " << flags << "\n";
+        // cout << "offset : " << $void* offset << "\n";
+        // cout << "vaddr : " << $void* vaddr << "\n";
+        // cout << "filesz : " << filesz << "\n";
+        // cout << "memsz : " << memsz << "\n";
+        // cout << "align : " << align << "\n";
 
         if(align != 0x0 && offset % align != vaddr % align) {
-            sout << "Program header incorrect alignment\n";
+            cout << "Program header incorrect alignment\n";
             return 1;
         }
 
         u64 pte_flags = PTE_USER | PTE_NX;
         if(flags & ELF_PF_X) pte_flags ^= PTE_NX;   //turn off PTE_NX if it's executable
         if(flags & ELF_PF_W) pte_flags ^= PTE_WRITEABLE;
-        passert(flags & ELF_PF_R, "elf_load() : segments should always be readable??");
+        assert(flags & ELF_PF_R, "elf_load() : segments should always be readable??");
 
         //where we are in the current program segment
         u64 ptr = 0x0;

@@ -21,7 +21,7 @@
 [__GLOBAL_FIRST__] u16 PIT_COMMAND          = $u16 0x0043;
 
 i32 init_pic() {
-    sout << "start init pic\n";
+    cout << "start init pic\n";
 
     //initialize PIC (send signal 0x11)
     //after this, both PICs will wait for 3 extra initialization bytes:
@@ -58,6 +58,6 @@ i32 init_pic() {
         outb(PIT_CHANNEL0, $u8 ((divisor >> 0x8) & 0xff));  //high byte
     }
 
-    sout << "done init pic\n";
+    cout << "done init pic\n";
     return 0;
 }

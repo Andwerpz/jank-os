@@ -1,101 +1,28 @@
+#include <memory>;
 
+#include "vga.jank";
+#include "panic.jank";
+#include "utils.jank";
 
-[__GLOBAL_FIRST__] u64 vga_cursor_row = 0x0;
-[__GLOBAL_FIRST__] u64 vga_cursor_col = 0x0;
+#include "../../../lib/pagetable.jank";
+#include "../../../lib/utils.jank";
 
-void write_to_vga_buf(u64 ind, u8 c) {
-    asm!("movq  $0xB8000, %rbx");   
-    asm!("mov   {ind}, %rcx");
-    asm!("leaq  (%rbx, %rcx, 2), %rdx");
-    asm!("mov   {c}, %rax");
-    asm!("movb  %al, (%rdx)");
-    asm!("movb  $0x07, 1(%rdx)");
-}
+[__GLOBAL_FIRST__] u64 PAGE_SIZE    = $u64 0x001000;
+[__GLOBAL_FIRST__] u64 HUGEPG_SIZE  = $u64 0x200000;
 
-void vga_print(u8 c) {
-    if(c == '\n') {
-        vga_cursor_row ++;
-    }
-    else if(c == '\r') {
-        vga_cursor_col = 0x0;
-    }
-    else {
-        u64 vga_cursor_pos = vga_cursor_row * $u64 80 + vga_cursor_col;
-        write_to_vga_buf(vga_cursor_pos, c);
-        vga_cursor_col ++;
-    }
-
-    if(vga_cursor_col == $u64 80) {
-        vga_cursor_col = 0x0;
-        vga_cursor_row ++;
-    }
-    if(vga_cursor_row == $u64 25) {
-        vga_cursor_row = 0x0;
-    }
-}
-
-void vga_print(u8* str) {
-    u64 i = 0x0;
-    while(str[i] != '\0') vga_print(str[i ++]);
-}   
-
-void vga_print(u64 x) {
-    vga_print("0x");
-    for(u64 i = $u64 15; ; i--) {
-        u64 dig = (x >> (i * 0x4)) & 0xF;
-        if(dig < $u64 10) vga_print('0' + $u8 dig);
-        else vga_print('A' + $u8 (dig - $u64 10));
-        if(i == 0x0) break;
-    }
-}
-
-void vga_print(u32 x) {
-    vga_print("0x");
-    for(u64 i = $u64 7; ; i--) {
-        u64 dig = ($u64 x >> (i * 0x4)) & 0xF;
-        if(dig < $u64 10) vga_print('0' + $u8 dig);
-        else vga_print('A' + $u8 (dig - $u64 10));
-        if(i == 0x0) break;
-    }
-}
-
-void vga_print(u16 x) {
-    vga_print("0x");
-    for(u64 i = $u64 3; ; i--) {
-        u64 dig = ($u64 x >> (i * 0x4)) & 0xF;
-        if(dig < $u64 10) vga_print('0' + $u8 dig);
-        else vga_print('A' + $u8 (dig - $u64 10));
-        if(i == 0x0) break;
-    }
-}
-
-void vga_move_cursor(u64 row, u64 col) {
-    vga_cursor_row = row;
-    vga_cursor_col = col;
-}
-
-void vga_reset_cursor() {
-    vga_move_cursor(0x0, 0x0);
-}   
-
-void vga_clear() {
-    //print 25 * 80 spaces
-    for(u64 i = 0x0; i < $u64 2000; i++) {
-        vga_print(' ');
-    }
-}
-
-void assert(i32 x) {
-    if(!x) {
-        vga_print("assert failed");
-        asm!("hlt");
-    }
-}
+[__GLOBAL_FIRST__] u64 MB = 0x100000;   
+[__GLOBAL_FIRST__] u64 GB = 0x40000000;
 
 [__GLOBAL_FIRST__] boot_info* boot_info = $boot_info* 0x1000;
 struct boot_info {
-    e820_ent* e820_mmap;        // 0
-    u16 e820_entry_count;       // 8
+    // populated by 16/32 bit mode
+    e820_ent*   e820_mmap;              // 0
+    u16         e820_entry_count;       // 8
+    u8          boot_drive;             // 10
+
+    // populated by 64 bit mode
+    void*       reserved_start;
+    u64         reserved_sz;
 }
 
 struct e820_ent {
@@ -105,10 +32,37 @@ struct e820_ent {
     u32 attr;
 }
 
-i32 main() {
-    vga_print("bello from jank\r\n");
+u64 malloc_ptr;
+void* malloc(u64 sz) {
+    void* ret = $void* malloc_ptr;
+    malloc_ptr += sz;
+    return ret;
+}
 
-    vga_print("E820 MMAP : \r\n");
+i32 free(void* addr, u64 sz) {
+    //do nothing
+    return 0;
+}
+
+u64 palloc_ptr;
+void* palloc() {
+    void* ret = $void* palloc_ptr;
+    palloc_ptr += PAGE_SIZE;
+    return ret;
+}
+
+void pfree(void* page) {
+    //do nothing (for now)
+}
+
+i32 main() {
+    vga_print("bello from jank\n");
+
+    vga_print("Boot drive : ");
+    vga_print($u16 (boot_info->boot_drive));
+    vga_print("\n");
+
+    vga_print("E820 MMAP : \n");
     for(u64 i = 0x0; i < $u64 (boot_info->e820_entry_count); i++) {
         e820_ent* ent = @(boot_info->e820_mmap[i]);
         vga_print("base : ");
@@ -117,7 +71,7 @@ i32 main() {
         vga_print(ent->length);
         vga_print(", type : ");
         vga_print(ent->type);
-        vga_print("\r\n");
+        vga_print("\n");
     }
 
     // clean up E820 MMAP
@@ -125,17 +79,100 @@ i32 main() {
     // - ensure that regions are sorted in ascending order
     // TODO
 
-    // create identity mapping for memory above 1GB
+    // find and reserve a 5MB zone
+    // - 1MB for malloc
+    // - 1MB for palloc
+    // - 2MB for kernel code
+    // - 1MB for kernel stack
+    // just inform the kernel that everything is fine to use for pma except for this zone
+    boot_info->reserved_start = nullptr;
+    boot_info->reserved_sz = 0x5 * MB;
+    for(u64 i = 0x0; i < $u64 (boot_info->e820_entry_count); i++) {
+        e820_ent* ent = @(boot_info->e820_mmap[i]);
+        u64 base = ent->base;
+        u64 length = ent->length;
+        
+        //make sure segment is usable
+        if(ent->type != $u32 0x1) {
+            continue;
+        }
 
-    // map higher half kernel
+        //round up base to nearest PAGE_SIZE
+        base = ((base + PAGE_SIZE - 0x1) / PAGE_SIZE) * PAGE_SIZE;
+        if(base >= ent->base + ent->length) {
+            //base is now past segment end
+            continue;
+        }
+        assert(base >= ent->base);
+        length -= base - ent->base;
+
+        //round down length to nearest PAGE_SIZE
+        length = (length / PAGE_SIZE) * PAGE_SIZE;
+
+        //reserve beginning of section if it's long enough
+        if(length >= boot_info->reserved_sz) {
+            boot_info->reserved_start = $void* base;
+            break;
+        }
+    }
+    vga_print("Reserved : ");
+    vga_print($u64 (boot_info->reserved_start));
+    vga_print(", ");
+    vga_print(boot_info->reserved_sz);
+    vga_print("\n");
+    
+    if(boot_info->reserved_start == nullptr) {
+        vga_print("failed to reserve\n");
+        assert(0);
+    }
+
+    // init malloc / palloc
+    malloc_ptr = $u64 boot_info->reserved_start + 0x0 * MB;
+    palloc_ptr = $u64 boot_info->reserved_start + 0x1 * MB;
+    u64 code_ptr = $u64 boot_info->reserved_start + 0x2 * MB;
+    u64 stack_ptr = $u64 boot_info->reserved_start + 0x4 * MB;
+
+    pagetable_t pt = pt_get_current();
+    print("CR3 : ");
+    println(pt);
+
+    println("PAGETABLE");
+    pt_print(pt);
+
+    // create identity mapping for memory above 1GB
+    // stub should've already mapped everything below 1GB
+    u64 max_phys = 0x0;
+    for(u64 i = 0x0; i < $u64 (boot_info->e820_entry_count); i++) {
+        e820_ent* ent = @(boot_info->e820_mmap[i]);
+        if(ent->type == $u32 0x1 && ent->base + ent->length > max_phys) {
+            max_phys = ent->base + ent->length;
+        }
+    }
+    for(u64 i = GB; i + HUGEPG_SIZE <= max_phys; i += HUGEPG_SIZE) {
+        pt_map_hugepg(pt, $void* i, $void* i, PTE_WRITEABLE);
+    }
+
+    vga_clear();
+    vga_reset_cursor();
+    print("MAX PHYS : ");
+    println(max_phys);
+    println("PAGETABLE");
+    pt_print(pt);
+
+    // find boot drive, setup block device
 
     // load kernel into memory
 
-    // setup kernel stack
+    // map higher half kernel
+    // - code
+    // - stack
+    // - framebuffer
 
     // jump to kernel
 
-    asm!("hlt");
+    while(1) {
+        asm!("hlt");
+    }
 
     return 0;
 }

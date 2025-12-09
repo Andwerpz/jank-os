@@ -121,14 +121,14 @@ void* rsdt_find_entry(RSDT* rsdt, u8* exp_sig) {
 }
 
 i32 init_acpi() {
-    sout << "start init acpi\n";
+    cout << "start init acpi\n";
 
     //find RSDP struct. It should be 16 byte aligned
     RSDP* rsdp;
     {
         //retrieve Extended Bios Data Area base address (EBDA)
         u64 ebda = (($u64 ($u16* 0x040e)[0]) << 0x4);
-        sout << "EBDA : " << $void* ebda << "\n";
+        cout << "EBDA : " << $void* ebda << "\n";
 
         //look in first page of EBDA
         for(u64 i = 0x0; i < 0x1000; i += 0x10){
@@ -146,30 +146,30 @@ i32 init_acpi() {
             }
         }
     }
-    passert(rsdp != nullptr, "init_acpi() : could not find RSDP");
-    sout << "ACPI REVISION : " << ($u64 rsdp->revision) << "\n";
+    assert(rsdp != nullptr, "init_acpi() : could not find RSDP");
+    cout << "ACPI REVISION : " << ($u64 rsdp->revision) << "\n";
 
     // right now, only support ACPI v1.0
-    passert(rsdp->revision == $u8 0x0, "init_acpi() : only support ACPI v1.0");
+    assert(rsdp->revision == $u8 0x0, "init_acpi() : only support ACPI v1.0");
 
     //find RSDT struct. 
     RSDT* rsdt = $RSDT* $u64 rsdp->rsdt_address;
-    passert(acpi_validate(@rsdt->header, "RSDT"), "init_acpi() : could not validate RSDT");
+    assert(acpi_validate(@rsdt->header, "RSDT"), "init_acpi() : could not validate RSDT");
     {
-        sout << "RSDT CONTENTS : ";
+        cout << "RSDT CONTENTS : ";
         u32* ptrs = $u32* @(rsdt->pstart);
         for(u64 i = 0x0; i < ($u64 rsdt->header.length - sizeof(ACPIHeader)) / sizeof(u32); i++) {
             ACPIHeader* nheader = $ACPIHeader* $u64 ptrs[i];
-            for(u64 j = 0x0; j < 0x4; j++) sout << nheader->signature[j];
-            sout << " ";
+            for(u64 j = 0x0; j < 0x4; j++) cout << nheader->signature[j];
+            cout << " ";
         }
-        sout << "\n";
+        cout << "\n";
     }
     
     //initialize HPET
     init_hpet(rsdt);
 
-    sout << "done init acpi\n";
+    cout << "done init acpi\n";
     return 0;
 }
 
@@ -195,7 +195,7 @@ void hpet_get_sys_time(timespec* ts) {
 i32 init_hpet(RSDT* rsdt) {
     //find HPET entry
     HPET* hpet = $HPET* rsdt_find_entry(rsdt, "HPET");
-    passert(hpet != nullptr, "init_hpet() : could not find HPET");
+    assert(hpet != nullptr, "init_hpet() : could not find HPET");
 
     //find HPET registers
     HPETRegisters* regs = $HPETRegisters* hpet->address.address;
@@ -205,7 +205,7 @@ i32 init_hpet(RSDT* rsdt) {
 
     //get frequency in femtoseconds (10^15 seconds)
     HPET_FREQUENCY_FS = regs->capabilities >> $u64 32;
-    sout << "HPET FREQUENCY FS : " << HPET_FREQUENCY_FS << "\n";
+    cout << "HPET FREQUENCY FS : " << HPET_FREQUENCY_FS << "\n";
 
     //get main counter address
     HPET_MAIN_COUNTER = @regs->main_counter;

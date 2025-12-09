@@ -1,57 +1,4 @@
 
-void wrmsr(u32 reg, u64 val) {
-    u32 low = $u32 val;
-    u32 high = $u32 (val >> $u64 32);
-    asm!("movl {reg}, %ecx");
-    asm!("movl {low}, %eax");
-    asm!("movl {high}, %edx");
-    asm!("wrmsr");
-}
-
-u64 rdmsr(u32 reg) {
-    u32 low;
-    u32 high;
-    asm!("movl {reg}, %ecx");   
-    asm!("rdmsr");              
-    asm!("movl %eax, {low}");
-    asm!("movl %edx, {high}");
-    return ($u64 high << $u64 32) | ($u64 low);
-}
-
-void outb(u16 port, u8 val) {
-    asm!("movw {port}, %dx");
-    asm!("movb {val}, %al");
-    asm!("outb %al, %dx");
-}
-
-void outw(u16 port, u16 val) {
-    asm!("movw {port}, %dx");
-    asm!("movw {val}, %ax");
-    asm!("outw %ax, %dx");
-}
-
-void outl(u16 port, u32 val) {
-    asm!("movw {port}, %dx");
-    asm!("movl {val}, %eax");
-    asm!("outl %eax, %dx");
-}
-
-u8 inb(u16 port) {
-    u8 ret;
-    asm!("movw {port}, %dx");
-    asm!("inb %dx, %al");
-    asm!("movb %al, {ret}");
-    return ret;
-}
-
-u32 inl(u16 port) {
-    u32 ret;
-    asm!("movw {port}, %dx");
-    asm!("inl %dx, %eax");
-    asm!("movl %eax, {ret}");
-    return ret;
-}
-
 [__GLOBAL_FIRST__] u64 irq_disable_count = 0x0;
 [__GLOBAL_FIRST__] u64 irq_saved_rflags;
 
@@ -65,29 +12,12 @@ void irq_disable() {
 }
 
 void irq_enable() {
-    passert(irq_disable_count != 0x0, "irq_enable() : unmatched irq_enable");
+    assert(irq_disable_count != 0x0, "irq_enable() : unmatched irq_enable");
     irq_disable_count --;
     if(irq_disable_count == 0x0) {
         asm!("pushq irq_saved_rflags(%rip)");
         asm!("popfq");
     }
-}
-
-//prints 16 separated bytes on a line
-template<T>
-void hexdump(T* _buf, u64 amt_bytes) {
-    u8* buf = $u8* _buf;
-    for(u64 i = 0x1; i <= amt_bytes; i++){
-        u64 low = ($u64 buf[i - 0x1]) & 0xf;
-        u64 high = ($u64 buf[i - 0x1] >> $u64 4) & 0xf;
-        if(high < $u64 10) sout << ('0' + $u8 high);
-        else sout << ('a' + $u8 high - $u8 10);
-        if(low < $u64 10) sout << ('0' + $u8 low);
-        else sout << ('a' + $u8 low - $u8 10);
-        sout << " ";
-        if(i % 0x10 == 0x0) sout << "\n";
-    }
-    if(amt_bytes % 0x10) sout << "\n";
 }
 
 //returns 0 on success, negative on failure
@@ -158,17 +88,46 @@ i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
     return 0;
 }
 
-//assumes that the lowest significant bits in each byte come first
-i32 bitmap_get_bit(void* bitmap, u64 index) {
-    return $i32 ((($u8* bitmap)[index / $u64 8] >> $u8 (index % $u64 8)) & $u8 1);
+
+void print(u8 c) {
+    serial_print(c);
+} 
+
+void print(u8* str) {
+    serial_print(str);
 }
 
-void bitmap_set_bit(void* bitmap, u64 index) {
-    ($u8* bitmap)[index / $u64 8] |= ($u8 1 << $u8 (index % $u64 8));
+void print(string s) {
+    serial_print(s);
 }
 
-void bitmap_unset_bit(void* bitmap, u64 index) {
-    bitmap_set_bit(bitmap, index);
-    ($u8* bitmap)[index / $u64 8] ^= ($u8 1 << $u8 (index % $u64 8));
+void print(u64 x) {
+    serial_print(x);
 }
 
+void print(u32 x){
+    serial_print(x);
+}
+
+void print(u16 x) {
+    serial_print(x);
+}
+
+void print(i64 x) {
+    serial_print(x);
+}
+
+void print(i32 x) {
+    serial_print(x);
+}
+
+template<T>
+void print(T* ptr) {
+    serial_print(ptr);
+}
+
+template<T>
+void println(T x) {
+    print(x);
+    print("\n");
+}

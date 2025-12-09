@@ -140,7 +140,7 @@ i64 file_getdents(file* fd, u8* buf, u64 amt) {
 }
 
 i32 file_close(file* fd) {
-    passert(fd->refcount > 0x0, "file_close() : file descriptors with 0 references should be already dealloced");
+    assert(fd->refcount > 0x0, "file_close() : file descriptors with 0 references should be already dealloced");
     fd->refcount --;
     i32 retval = 0;
     if(fd->refcount == 0x0) {

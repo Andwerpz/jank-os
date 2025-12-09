@@ -73,7 +73,7 @@ i64 tty_read(tty* tty, u8* buf, u64 amt) {
         while(1) {
             i32 res = poll_serial();
             if(res < 0) break;
-            passert(res >= 0 && res < 256, "tty_read() : checking if res is in range");
+            assert(res >= 0 && res < 256, "tty_read() : checking if res is in range");
             serial_buf.push_back($u8 res);
         }
         u8* jstr = serial_buf.jstr();
@@ -85,7 +85,7 @@ i64 tty_read(tty* tty, u8* buf, u64 amt) {
             }
             bufptr += $u64 ret;
         }
-        passert(bufptr == serial_buf.size(), "tty_read() : bufptr should be at end of buffer");
+        assert(bufptr == serial_buf.size(), "tty_read() : bufptr should be at end of buffer");
     }
 
     //read to buf from outq
@@ -126,7 +126,7 @@ i64 tty_write(tty* tty, u8* buf, u64 amt) {
         }
 
         //write to backend
-        passert($void* fmt != nullptr, "tty_write() : should be assigned by now");
+        assert($void* fmt != nullptr, "tty_write() : should be assigned by now");
         u64 fmt_sz = strlen(fmt);
         u64 fmt_ptr = 0x0;
         while(fmt_ptr < fmt_sz) {
@@ -136,7 +136,7 @@ i64 tty_write(tty* tty, u8* buf, u64 amt) {
             }
             fmt_ptr += $u64 stat;
         }
-        passert(fmt_ptr == fmt_sz, "tty_write() : should be done writing here");
+        assert(fmt_ptr == fmt_sz, "tty_write() : should be done writing here");
         bytes_written ++;
     }
     return $i64 bytes_written;
@@ -229,7 +229,7 @@ i32 tty_get_termios(tty* tty, termios* out_termios) {
 }
 
 i32 tty_close(tty* tty) {
-    passert(tty->refcount != 0x0, "tty_close() : tty with 0 references should already be dealloced");
+    assert(tty->refcount != 0x0, "tty_close() : tty with 0 references should already be dealloced");
     tty->refcount --;
     i32 retval = 0;
     if(tty->refcount == 0x0) {
@@ -255,15 +255,15 @@ void init_tty_file_ops() {
 }
 
 i64 tty_read(file* fd, u8* buf, u64 amt) {
-    passert(fd->type == FILE_TYPE_TTY, "tty_read() : mismatching type");
-    passert(fd->resource_ptr != nullptr, "tty_read() : resource must be not null");
+    assert(fd->type == FILE_TYPE_TTY, "tty_read() : mismatching type");
+    assert(fd->resource_ptr != nullptr, "tty_read() : resource must be not null");
     tty* tty = $tty* fd->resource_ptr;
     return tty_read(tty, buf, amt);
 }
 
 i64 tty_write(file* fd, u8* buf, u64 amt) {
-    passert(fd->type == FILE_TYPE_TTY, "tty_write() : mismatching type");
-    passert(fd->resource_ptr != nullptr, "tty_write() : resource must be not null");
+    assert(fd->type == FILE_TYPE_TTY, "tty_write() : mismatching type");
+    assert(fd->resource_ptr != nullptr, "tty_write() : resource must be not null");
     tty* tty = $tty* fd->resource_ptr;
     return tty_write(tty, buf, amt);
 }
@@ -279,8 +279,8 @@ i64 tty_getdents(file* fd, u8* buf, u64 amt) {
 }
 
 i32 tty_close(file* fd){ 
-    passert(fd->type == FILE_TYPE_TTY, "tty_close() : mismatching type");
-    passert(fd->resource_ptr != nullptr, "tty_close() : resource must be not null");
+    assert(fd->type == FILE_TYPE_TTY, "tty_close() : mismatching type");
+    assert(fd->resource_ptr != nullptr, "tty_close() : resource must be not null");
     tty* tty = $tty* fd->resource_ptr;
     return tty_close(tty);
 }

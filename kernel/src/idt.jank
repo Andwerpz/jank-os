@@ -29,7 +29,7 @@ struct IDTEntry {
 [__GLOBAL_FIRST__] u64 INTNO_TIMER              = 0x20;
 
 i32 init_idt() {
-    serial_println("start init idt");
+    println("start init idt");
     pagetable_t kernel_pt = pt_get_current();
 
     //map page for IDT
@@ -52,7 +52,7 @@ i32 init_idt() {
     //flush changes
     idt_flush(idt_ptr);
 
-    serial_println("done init idt");
+    println("done init idt");
     return 0;
 }
 
@@ -217,7 +217,7 @@ export void interrupt_handler_disambiguator(trapframe* tf, u64 trap_id, u64 erro
 void general_protection_fault_handler(trapframe* tf, u64 error_code) {
     if(tf->cs & 0x03) { //user mode
         asm!("cli");
-        sout << "user mode general protection fault handler\n";
+        cout << "user mode general protection fault handler\n";
 
         //terminate the offending process
         pid_t pid = get_cur_pid();
@@ -227,13 +227,13 @@ void general_protection_fault_handler(trapframe* tf, u64 error_code) {
         scheduler();
     }
     else {              //kernel mode
-        sout << "KERNEL MODE GENERAL PROTECTION FAULT!!!\n";
-        sout << "ERROR CODE : " << $void* error_code << "\n";
-        sout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
+        cout << "KERNEL MODE GENERAL PROTECTION FAULT!!!\n";
+        cout << "ERROR CODE : " << $void* error_code << "\n";
+        cout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
         u64 cr2;
         asm!("mov %cr2, %rax");
         asm!("movq %rax, {cr2}");
-        sout << "CR2 : " << ($void* cr2) << "\n";
+        cout << "CR2 : " << ($void* cr2) << "\n";
         print_trapframe(tf);
         panic("KERNEL MODE GENERAL PROTECTION FAULT!!!");
     }
@@ -243,7 +243,7 @@ void page_fault_handler(trapframe* tf, u64 error_code) {
     if(tf->cs & 0x03) { //user mode
         //disable interrupts
         asm!("cli");    
-        sout << "user mode page fault handler\n";
+        cout << "user mode page fault handler\n";
 
         //terminate the offending process
         pid_t pid = get_cur_pid();
@@ -253,13 +253,13 @@ void page_fault_handler(trapframe* tf, u64 error_code) {
         scheduler();
     }
     else {              //kernel mode
-        sout << "KERNEL MODE PAGE FAULT!!!\n";
-        sout << "ERROR CODE : " << $void* error_code << "\n";
-        sout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
+        cout << "KERNEL MODE PAGE FAULT!!!\n";
+        cout << "ERROR CODE : " << $void* error_code << "\n";
+        cout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
         u64 cr2;
         asm!("mov %cr2, %rax");
         asm!("movq %rax, {cr2}");
-        sout << "CR2 : " << ($void* cr2) << "\n";
+        cout << "CR2 : " << ($void* cr2) << "\n";
         print_trapframe(tf);
         panic("KERNEL MODE PAGE FAULT!!!");
     }

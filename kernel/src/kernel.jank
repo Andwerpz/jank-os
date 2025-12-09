@@ -28,6 +28,9 @@
 #include "tty.jank";
 #include "mbr.jank";
 
+#include "../../lib/utils.jank";
+#include "../../lib/pagetable.jank";
+
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
 [GDT] i32 INIT_GDT_STATUS = init_gdt();
@@ -40,8 +43,8 @@ void check_paging_enabled() {
     u64 cr0;
     asm!("mov %cr0, %rax");
     asm!("mov %rax, {cr0}");
-    if(cr0 & ($u64 1 << $u64 31)) serial_println("paging enabled");
-    else serial_println("paging disabled");
+    if(cr0 & ($u64 1 << $u64 31)) println("paging enabled");
+    else println("paging disabled");
 }   
 
 void check_syscall_enabled() {
@@ -49,19 +52,19 @@ void check_syscall_enabled() {
     asm!("mov $0x80000001, %eax");
     asm!("cpuid");
     asm!("mov %edx, {x}");
-    passert(x & $u64 (1 << 11), "syscall instruction should be supported");
+    assert(x & $u64 (1 << 11), "syscall instruction should be supported");
 }
 
 void mem_touch(u64 low, u64 high) {
-    serial_print("TOUCHING : ");
-    serial_print($void* low);
-    serial_print(" ");
-    serial_println($void* high);
+    print("TOUCHING : ");
+    print($void* low);
+    print(" ");
+    println($void* high);
     u8* mem = $u8* $u64 0;
     for(u64 i = low; i < high; i++){
         mem[i];
     }
-    serial_println("done touching");
+    println("done touching");
 }
 
 void print_mmap() {
@@ -73,14 +76,14 @@ void print_mmap() {
         u64 addr = mmap->ptr;                            // physical address
         u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
 
-        serial_println("");
-        serial_println("Found: ");
-        serial_print("Addr: ");
-        serial_println($void* addr);
-        serial_print("Size: ");
-        serial_println($void* size);
-        serial_print("Type: ");
-        serial_println($void* type);
+        println("");
+        println("Found: ");
+        print("Addr: ");
+        println($void* addr);
+        print("Size: ");
+        println($void* size);
+        print("Type: ");
+        println($void* type);
 
         mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
     }
@@ -96,11 +99,11 @@ void tests() {
     if(1) {
         pagetable_t kernel_pt = pt_get_current();
         void* fb_phys = pt_translate(kernel_pt, $void* BOOTBOOT_FB);
-        serial_print("FB PHYS : ");
-        serial_println(fb_phys);
+        print("FB PHYS : ");
+        println(fb_phys);
         void* info_phys = pt_translate(kernel_pt, $void* BOOTBOOT_INFO);
-        serial_print("INFO PHYS : ");
-        serial_println(info_phys);
+        print("INFO PHYS : ");
+        println(info_phys);
     }
     
     if(0) {
@@ -108,10 +111,10 @@ void tests() {
         u64 thigh = 0x0000000007fe0000;
 
         pagetable_t kernel_pt = pt_get_current();
-        serial_print("kernel pt addr : ");
-        serial_println(kernel_pt);
+        print("kernel pt addr : ");
+        println(kernel_pt);
 
-        passert(pt_is_vaddr_mapped(kernel_pt, $void* 0x10000), "bruh");
+        assert(pt_is_vaddr_mapped(kernel_pt, $void* 0x10000), "bruh");
 
         mem_touch(tlow, thigh);
     }
@@ -132,7 +135,7 @@ void tests() {
 
                 u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
                 while(base + PAGE_SIZE <= addr + size) {
-                    passert(pt_is_vaddr_mapped(kernel_pt, $void* base), "this should be mapped");
+                    assert(pt_is_vaddr_mapped(kernel_pt, $void* base), "this should be mapped");
                     base += PAGE_SIZE;
                 }
             }   
@@ -146,8 +149,8 @@ void tests() {
         u64 low  = 0x0000000100000000;
         u64 high = 0x0000000100100000;
         for(u64 i = low; i < high; i += PAGE_SIZE) {
-            serial_print("MAP : ");
-            serial_println($void* i);
+            print("MAP : ");
+            println($void* i);
             pt_map_page(kernel_pt, $void* i, $void* (i - low), PTE_WRITEABLE);
         }
         mem_touch(low, high);
@@ -160,7 +163,7 @@ void tests() {
     //check if malloc works 
     if(1) {
         for(i32 i = 0; i < 10; i++){
-            serial_println(i);
+            println(i);
         }
 
         i32 N = 10;
@@ -177,14 +180,14 @@ void tests() {
         }
         for(i32 i = 0; i < N; i = i + 1) {
             for(i32 j = 0; j < N; j = j + 1) {
-                serial_print(dp[i][j]);
-                serial_print(" ");
+                print(dp[i][j]);
+                print(" ");
             }
-            serial_print("\n");
+            print("\n");
         }
 
-        serial_print("KHEAP PTR : ");
-        serial_println($void* kheap_brk);
+        print("KHEAP PTR : ");
+        println($void* kheap_brk);
     }
 }
 
@@ -195,19 +198,19 @@ void shutdown_qemu() {
 }   
 
 void vfs_tests() {
-    sout << "=== PRINTING FS TREE ===\n";
+    cout << "=== PRINTING FS TREE ===\n";
     vfs_print_tree(new string("/"));
 
-    sout << "=== READ SHELL.JANK ===\n";
+    cout << "=== READ SHELL.JANK ===\n";
     while(1) {
         string path = new string("/sys/shell.jank");
         u64 size;
         if(vfs_get_size(path, size)) {
-            sout << "get_size failed\n";
+            cout << "get_size failed\n";
             break;
         }
-        sout << "GET SIZE SUCCESS\n";
-        sout << "FILE SIZE : " << size << "\n";
+        cout << "GET SIZE SUCCESS\n";
+        cout << "FILE SIZE : " << size << "\n";
         //read file in small chunks
         u64 chunk = $u64 17;
         u8* buf = $u8* malloc(chunk + 0x1);
@@ -215,15 +218,15 @@ void vfs_tests() {
         while(ptr != size) {
             u64 read_amt;
             if(vfs_read_file(path, buf, chunk, ptr, read_amt)) {
-                sout << "\nfile read failed\n";
+                cout << "\nfile read failed\n";
                 break;
             }
             ptr += read_amt;
             buf[read_amt] = '\0';
-            sout << buf;
-            // sout << "PTR : " << ptr << " " << read_amt << "\n";
+            cout << buf;
+            // cout << "PTR : " << ptr << " " << read_amt << "\n";
         }
-        sout << "\n";
+        cout << "\n";
         free($void* buf, chunk + 0x1);
 
         break;
@@ -246,11 +249,11 @@ i32 main() {
     init_vfs();
     init_ahci();
 
-    sout << "PRINTING PAGETABLES :\n";
+    cout << "PRINTING PAGETABLES :\n";
     pagetable_t kernel_pt = pt_get_current();
     pt_print(kernel_pt, 3, 0);
 
-    sout << "MMAP : \n";
+    cout << "MMAP : \n";
     print_mmap();
 
     // vfs_tests();

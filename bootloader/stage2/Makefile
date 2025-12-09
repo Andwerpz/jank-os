@@ -5,7 +5,7 @@ JJC      = jjc
 CC64     = x86_64-elf-gcc
 
 ASFLAGS   = --32
-LDFLAGS32 = -m elf_i386 -Ttext 0x8000 -nostdlib -e stage2_start
+LDFLAGS32 = -m elf_i386 -T ./src/stub.ld -nostdlib -e stage2_start
 
 BUILD    = build
 SRC      = src
