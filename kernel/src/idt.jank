@@ -245,6 +245,14 @@ void page_fault_handler(trapframe* tf, u64 error_code) {
         asm!("cli");    
         cout << "user mode page fault handler\n";
 
+        cout << "error code : " << $void* error_code << "\n";
+        cout << "active process : " << get_cur_pid() << "\n";
+        u64 cr2;
+        asm!("mov %cr2, %rax");
+        asm!("movq %rax, {cr2}");
+        cout << "CR2 : " << ($void* cr2) << "\n";
+        print_trapframe(tf);
+
         //terminate the offending process
         pid_t pid = get_cur_pid();
         kill_process(pid, 1);

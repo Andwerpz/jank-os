@@ -6,10 +6,10 @@ typedef u64 pte_t;
 typedef pte_t* pagetable_t;
 
 [__GLOBAL_FIRST__] u64 PTE_PRESENT    = $u64 1 << $u64 0;
-[__GLOBAL_FIRST__] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;
-[__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;   //if set, user will be able to access
+[__GLOBAL_FIRST__] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;   //can only write if every entry along the walk has this flag 
+[__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;   //user can only access if every entry along the walk has this flag 
 [__GLOBAL_FIRST__] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
-[__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag, only valid on leaf PTEs?
+[__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag, can only execute if no entry along the walk has this flag
 [__GLOBAL_FIRST__] u64 PTE_PCD        = $u64 1 << $u64 4;   // Cache Disable
 
 void enable_nx() {
@@ -40,7 +40,7 @@ u64 pte_get_permission_flags(pte_t pte) {
 
 pte_t pte_create_new(u64 flags) {
     pagetable_t pt = pt_alloc_new();
-    return ($u64 pt) | flags | PTE_PRESENT | PTE_USER;
+    return ($u64 pt) | flags | PTE_PRESENT;
 }
 
 pte_t pte_create_new(void* paddr, u64 flags) {
@@ -95,6 +95,16 @@ pte_t pt_walk(pagetable_t pt, void* vaddr, i32& level, i32 create, u64 flags, u6
             if(level != 0) pt[ind] = pte_create_new(flags);
             else pt[ind] = pte_create_new(leaf_flags);
             pte = pt[ind];
+        }
+
+        //if create flag is on and leaf_flags includes PTE_USER, add PTE_USER to flags
+        if($i32 (leaf_flags & PTE_USER) && create) {
+            pt[ind] |= PTE_USER;
+        }
+
+        //if create flag is on and leaf_flags includes PTE_WRITEABLE, add PTE_WRITEABLE to flags
+        if($i32 (leaf_flags & PTE_WRITEABLE) && create) {
+            pt[ind] |= PTE_WRITEABLE;
         }
 
         //check if this is a huge page
