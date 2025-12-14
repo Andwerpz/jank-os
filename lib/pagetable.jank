@@ -1,6 +1,28 @@
 
-// should probably double check hugepg handling
-// i remember it being relatively scuffed
+//pagetables allow for mapping virtual addresses to physical addresses
+//if long mode is enabled, then all memory accesses are treated as virtual addresses and go through
+//the pagetable to be translated into a physical address which then gets accessed
+
+//the translation process happens like this:
+// the cpu gets a 64-bit virtual address:
+// XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX
+//   60   56   52   48   44   40   36   32   28   24   20   16   12    8    4    0
+// It splits the address into 6 chunks (big endian):
+// XXXXXXXXXXXXXXXX XXXXXXXXX XXXXXXXXX XXXXXXXXX XXXXXXXXX XXXXXXXXXXXX
+// |------16------| |---9---| |---9---| |---9---| |---9---| |----12----|
+// first, it ensures the address is 'canonical', the most significant 16 bits must be a valid sign extension
+//  of the 47th bit (0-indexed)
+// then it uses the first 9-bit chunk to index into the top level pagetable stored in the CR3 register. 
+// each pagetable takes up one page (4096 bytes) and each table can store up to 512 entries (512 = 2^9)
+// the pagetable entry will contain information pointing to the physical address of the next pagetable
+//  page, and the process repeats until we get to the last 9-bit chunk. 
+// this last entry will have the physical address of the actual page we want to access. Then, the last
+//  12-bit chunk can be used to index into the page to find the exact byte we want (4096 = 2^12)
+
+//some caveats to this process:
+// - if in the middle somewhere, the PTE_HUGEPG flag is turned on, the pagetable walk terminates early
+// - if you don't have the correct permissions (currently on a user data segment and PTE_USER is off), 
+//    a page fault happens
 
 typedef u64 pte_t;              
 typedef pte_t* pagetable_t;

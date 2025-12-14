@@ -19,13 +19,22 @@ void print(u16 x) {
     vga_print(x);
 }
 
-template<T>
-void print(T* ptr) {
-    vga_print($u64 ptr);
+void print(i64 x) {
+    vga_print("i64");
+}
+
+void print(i32 x) {
+    vga_print("i32");
 }
 
 template<T>
-void println(T x) {
-    print(x);
-    print("\n");
+T max(T x, T y) {
+    if(x > y) return x;
+    return y;
+}
+
+template<T>
+T min(T x, T y) {
+    if(x < y) return x;
+    return y;
 }

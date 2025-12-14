@@ -2,6 +2,7 @@
 // structure that occupies the first sector of a partitioned drive
 // sizeof(mbr) == 512 should be true
 
+[__GLOBAL_FIRST__] u8 MBR_PARTITION_TYPE_EMPTY = $u8 0x00;
 [__GLOBAL_FIRST__] u8 MBR_PARTITION_TYPE_EXT2 = $u8 0x83;
 [__GLOBAL_FIRST__] u8 MBR_PARTITION_TYPE_JANK_BOOT = $u8 0xAB;
 

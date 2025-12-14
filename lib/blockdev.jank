@@ -5,31 +5,54 @@
 [__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI = 0x0;
 
 struct blockdev_ops {
-    fn<i32(blockdev*, u64, u64, void*)> read;
-    fn<i32(blockdev*, u64, u64, void*)> write;
+    fn<i32(blockdev*, u64, u64, void*)> read;       //reads some sectors from the block device into the provided buffer
+    fn<i32(blockdev*, u64, u64, void*)> write;      //writes some sectors to the provided block device from the provided buffer
 }
 
 struct blockdev {
     u64 type;
     void* resource_ptr;
     blockdev_ops* ops;
+
+    u64 lba_start;          //start of this device partition
+    u64 block_size;         //block size in bytes of underlying driver
+    u8 partition_type;      //partition type indicator from MBR (GPT has different structure)
 }
 
-blockdev* blockdev_create_ahci(HBA_PORT* hba) {
-    blockdev* dev = $blockdev* malloc(sizeof(blockdev));
+i32 blockdev_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    return dev->ops->read#(dev, dev->lba_start + lba_start, count, buf);
+}
+
+i32 blockdev_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    return dev->ops->write#(dev, dev->lba_start + lba_start, count, buf);
+}
+
+[__GLOBAL_FIRST__] u64 BLOCKDEV_BUF_CNT = $u64 0;
+[__GLOBAL_FIRST__] u64 BLOCKDEV_BUF_MAX = $u64 32;
+[__GLOBAL_FIRST__] blockdev* BLOCKDEV_BUF;
+
+//these should create a block device and add it to the block device buffer
+void blockdev_create_ahci(HBA_PORT* hba, u64 lba_start, u64 block_size, u8 partition_type) {
+    assert(BLOCKDEV_BUF_CNT < BLOCKDEV_BUF_MAX, "blockdev_create_ahci() : too many block devices!!");
+
+    blockdev* dev = $blockdev* @(BLOCKDEV_BUF[BLOCKDEV_BUF_CNT ++]);
     new (dev) blockdev();
 
     dev->type = BLOCKDEV_TYPE_AHCI;
     dev->resource_ptr = $void* hba;
     dev->ops = BLOCKDEV_OPS_AHCI;
 
-    return dev;
+    dev->lba_start = lba_start;
+    dev->block_size = block_size;
+    dev->partition_type = partition_type;
 }
 
-i32 blockdev_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
-    return dev->ops->read#(dev, lba_start, count, buf);
-}
+//initializes all drivers
+//tries to find all supported block devices 
+//populates blockdev buffer, up to BLOCKDEV_BUF_MAX devices
+void init_blockdev() {
+    BLOCKDEV_BUF = $blockdev* malloc(sizeof(blockdev) * BLOCKDEV_BUF_MAX);
 
-i32 blockdev_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
-    return dev->ops->write#(dev, lba_start, count, buf);
+    init_ahci();
+    ahci_find();
 }

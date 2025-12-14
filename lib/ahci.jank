@@ -1,0 +1,774 @@
+
+// https://wiki.osdev.org/AHCI
+// https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
+
+// https://wiki.osdev.org/PCI#Configuration_Space_Access_Mechanism_#1
+// Bit 31       Bits 30-24  Bits 23-16  Bits 15-11      Bits 10-8           Bits 7-0
+// Enable Bit   Reserved    Bus Number  Device Number   Function Number     Register Offset
+[__GLOBAL_FIRST__] u64 PCI_CONFIG_ADDRESS           = 0xcf8;
+[__GLOBAL_FIRST__] u64 PCI_CONFIG_DATA              = 0xcfc;
+[__GLOBAL_FIRST__] u64 AHCI_CLASS_CODE              = 0x1;
+[__GLOBAL_FIRST__] u64 AHCI_SUBCLASS                = 0x6;
+
+// https://wiki.osdev.org/AHCI#Detect_attached_SATA_devices
+[__GLOBAL_FIRST__] u32 SATA_SIG_ATA      = $u32 0x00000101;
+[__GLOBAL_FIRST__] u32 SATA_SIG_ATAPI    = $u32 0xeb140101;
+[__GLOBAL_FIRST__] u32 SATA_SIG_SEMB	 = $u32 0xc33c0101;
+[__GLOBAL_FIRST__] u32 SATA_SIG_PM	     = $u32 0x96690101;
+
+// https://wiki.osdev.org/AHCI#AHCI_port_memory_space_initialization
+[__GLOBAL_FIRST__] u32 HBA_PxCMD_ST    = $u32 0x0001;
+[__GLOBAL_FIRST__] u32 HBA_PxCMD_FRE   = $u32 0x0010;
+[__GLOBAL_FIRST__] u32 HBA_PxCMD_FR    = $u32 0x4000;
+[__GLOBAL_FIRST__] u32 HBA_PxCMD_CR    = $u32 0x8000;
+
+// https://wiki.osdev.org/AHCI#Example_-_Read_hard_disk_sectors
+[__GLOBAL_FIRST__] u32 ATA_DEV_BUSY     = $u32 0x80;
+[__GLOBAL_FIRST__] u32 ATA_DEV_DRQ      = $u32 0x08;
+
+[__GLOBAL_FIRST__] u8 FIS_TYPE_REG_H2D     = $u8 0x27; // Register FIS - host to device
+[__GLOBAL_FIRST__] u8 FIS_TYPE_REG_D2H     = $u8 0x34; // Register FIS - device to host
+[__GLOBAL_FIRST__] u8 FIS_TYPE_DMA_ACT     = $u8 0x39; // DMA activate FIS - device to host
+[__GLOBAL_FIRST__] u8 FIS_TYPE_DMA_SETUP   = $u8 0x41; // DMA setup FIS - bidirectional
+[__GLOBAL_FIRST__] u8 FIS_TYPE_DATA        = $u8 0x46; // Data FIS - bidirectional
+[__GLOBAL_FIRST__] u8 FIS_TYPE_BIST        = $u8 0x58; // BIST activate FIS - bidirectional
+[__GLOBAL_FIRST__] u8 FIS_TYPE_PIO_SETUP   = $u8 0x5f; // PIO setup FIS - device to host
+[__GLOBAL_FIRST__] u8 FIS_TYPE_DEV_BITS    = $u8 0xa1; // Set device bits FIS - device to host
+
+// some spec t13 vs sata-io?
+[__GLOBAL_FIRST__] u8 ATA_CMD_READ_DMA_EX   = $u8 0x25;
+[__GLOBAL_FIRST__] u8 ATA_CMD_WRITE_DMA_EX  = $u8 0x35;
+[__GLOBAL_FIRST__] u8 ATA_CMD_IDENTIFY      = $u8 0xec;
+
+[__GLOBAL_FIRST__] u32 HBA_PxIS_TFES = $u32 1 << $u32 30;
+
+// For now, ill only support 512 sector drives. 4k wont work teehee
+[__GLOBAL_FIRST__] u32 AHCI_SECTOR_SIZE = $u32 512;
+
+struct ahci_hba {
+    u8  bus;
+    u8  device;
+    u8  function;
+    u64 abar_paddr; // AHCI Base Address Register :O
+    u64 abar_vaddr;
+}
+
+struct HBA_PORT {
+	u32         clb;		// 0x00, command list base address, 1K-byte aligned
+	u32         clbu;		// 0x04, command list base address upper 32 bits
+	u32         fb;		    // 0x08, FIS base address, 256-byte aligned
+	u32         fbu;		// 0x0C, FIS base address upper 32 bits
+	u32         is;		    // 0x10, interrupt status
+	u32         ie;		    // 0x14, interrupt enable
+	u32         cmd;		// 0x18, command and status
+	u32         rsv0;		// 0x1C, Reserved
+	u32         tfd;		// 0x20, task file data
+	u32         sig;		// 0x24, signature
+	u32         ssts;		// 0x28, SATA status (SCR0:SStatus)
+	u32         sctl;		// 0x2C, SATA control (SCR2:SControl)
+	u32         serr;		// 0x30, SATA error (SCR1:SError)
+	u32         sact;		// 0x34, SATA active (SCR3:SActive)
+	u32         ci;		    // 0x38, command issue
+	u32         sntf;		// 0x3C, SATA notification (SCR4:SNotification)
+	u32         fbs;		// 0x40, FIS-based switch control
+	u32[11]     rsv1;	    // 0x44 ~ 0x6F, Reserved
+	u32[4]      vendor;	    // 0x70 ~ 0x7F, vendor specific
+}
+
+struct HBA_MEM {
+	// 0x00 - 0x2B, Generic Host Control
+	u32             cap;		// 0x00, Host capability
+	u32             ghc;		// 0x04, Global host control
+	u32             is;		    // 0x08, Interrupt status
+	u32             pi;		    // 0x0C, Port implemented
+	u32             vs;		    // 0x10, Version
+	u32             ccc_ctl;	// 0x14, Command completion coalescing control
+	u32             ccc_pts;	// 0x18, Command completion coalescing ports
+	u32             em_loc;		// 0x1C, Enclosure management location
+	u32             em_ctl;		// 0x20, Enclosure management control
+	u32             cap2;		// 0x24, Host capabilities extended
+	u32             bohc;		// 0x28, BIOS/OS handoff control and status
+
+	// 0x2C - 0x9F, Reserved
+	u8[116]         rsv;        // 0xa0-0x2c = 0x74
+
+	// 0xA0 - 0xFF, Vendor specific registers
+	u8[96]          vendor;     // 0x100-0xa0 = 0x60
+
+	// 0x100 - 0x10FF, Port control registers
+	HBA_PORT[1]     ports;	    // 1 ~ 32
+}
+
+struct FIS_REG_H2D {
+	// DWORD 0
+	u8          fis_type;   // FIS_TYPE_REG_H2D
+
+    u8          pm_n_stuff; // I dont have a name for this
+	// uint8_t  pmport:4;   // Port multiplier
+	// uint8_t  rsv0:3;     // Reserved
+	// uint8_t  c:1;        // 1: Command, 0: Control
+
+	u8          command;    // Command register
+	u8          featurel;   // Feature register, 7:0
+	
+	// DWORD 1
+	u8          lba0;       // LBA low register, 7:0
+	u8          lba1;       // LBA mid register, 15:8
+	u8          lba2;       // LBA high register, 23:16
+	u8          device;     // Device register
+
+	// DWORD 2
+	u8          lba3;       // LBA register, 31:24
+	u8          lba4;       // LBA register, 39:32
+	u8          lba5;       // LBA register, 47:40
+	u8          featureh;   // Feature register, 15:8
+
+	// DWORD 3
+	u8          countl;     // Count register, 7:0
+	u8          counth;     // Count register, 15:8
+	u8          icc;        // Isochronous command completion
+	u8          control;    // Control register
+
+	// DWORD 4
+	u8[4]       rsv1;       // Reserved
+}
+
+struct HBA_CMD_HEADER {
+	// DW0
+    u32 DW0;
+	// uint8_t  cfl:5;      // Command FIS length in DWORDS, 2 ~ 16
+	// uint8_t  a:1;        // ATAPI
+	// uint8_t  w:1;        // Write, 1: H2D, 0: D2H
+	// uint8_t  p:1;        // Prefetchable
+
+	// uint8_t  r:1;        // Reset
+	// uint8_t  b:1;        // BIST
+	// uint8_t  c:1;        // Clear busy upon R_OK
+	// uint8_t  rsv0:1;     // Reserved
+	// uint8_t  pmp:4;      // Port multiplier port
+
+	// uint16_t prdtl;      // Physical region descriptor table length in entries
+
+	// DW1
+	u32 prdbc;              // Physical region descriptor byte count transferred
+
+	// DW2, 3
+	u32 ctba;               // Command table descriptor base address
+	u32 ctbau;              // Command table descriptor base address upper 32 bits
+
+	// DW4 - 7
+	u32[4] rsv1;            // Reserved
+}
+
+struct HBA_PRDT_ENTRY {
+	u32 dba;                // Data base address
+	u32 dbau;               // Data base address upper 32 bits
+	u32 rsv0;               // Reserved
+
+	// DW3
+    u32 DW3;
+	// uint32_t dbc:22;     // Byte count, 4M max
+	// uint32_t rsv1:9;     // Reserved
+	// uint32_t i:1;        // Interrupt on completion
+}
+
+struct HBA_CMD_TBL {
+	// 0x00
+	u8[64]              cfis;           // Command FIS
+
+	// 0x40
+	u8[16]              acmd;           // ATAPI command, 12 or 16 bytes
+
+	// 0x50
+	u8[48]              rsv;            // Reserved
+
+	// 0x80
+	HBA_PRDT_ENTRY[1]   prdt_entry;     // Physical region descriptor table entries, 0 ~ 65535
+}
+
+u32 pci_read(u8 bus, u8 device, u8 function, u8 offset) {
+    u32 enabled = ($u32 1) << $u32 31;
+    u32 busl = ($u32 bus) << $u32 16;
+    u32 devicel = ($u32 device) << $u32 11;
+    u32 functionl = ($u32 function) << $u32 8;
+    u32 offsetl = ($u32 offset) & $u32 0xfc; // the two lowest bits of CONFIG_ADDRESS must always be zero (?)
+
+    u32 addr = enabled | busl | devicel | functionl | offsetl;
+
+    outl($u16 PCI_CONFIG_ADDRESS, addr);
+
+    return inl($u16 PCI_CONFIG_DATA); // vendor in lower 16 bits, device in upper 16 bits
+}
+
+void scan_for_ahci(vector<ahci_hba*>& ahci_hbas) {
+    println("scanning pci bus for ahci controller :O");
+    for(i32 bus = 0; bus < 256; bus++) {
+        for(i32 device = 0; device < 32; device++) {
+            u16 vendor_id = $u16 (pci_read($u8 bus, $u8 device, $u8 0, $u8 0) & $u32 0xffff);
+            if(vendor_id == $u16 0xffff) continue;
+
+            u8 header_type = $u8 ((pci_read($u8 bus, $u8 device, $u8 0, $u8 0xc) >> $u32 16) & $u32 0xff); // Common Header Fields -> Header type offset
+            
+            i32 max_functions = 1;
+            if(header_type & $u8 0x80) max_functions = 8; // Multi-function Devices - bit 7 of the header type field set
+            for(i32 function = 0; function < max_functions; function++) {
+                // Common Header Fields -> Class code offset
+                u32 class_reg = pci_read($u8 bus, $u8 device, $u8 function, $u8 0x8);
+                u8 class_code = $u8 ((class_reg >> $u32 24) & $u32 0xff);
+                u8 subclass = $u8 ((class_reg >> $u32 16) & $u32 0xff);
+
+                if(class_code == $u8 AHCI_CLASS_CODE && subclass == $u8 AHCI_SUBCLASS) {
+                    println("found ahci hba");
+
+					ahci_hba* hba;
+                    
+                    u32 bar5 = pci_read($u8 bus, $u8 device, $u8 function, $u8 0x24); // Base Address Registers -> Memory Space BAR Layout 
+                    u8 bar_type = $u8 ((bar5 >> $u32 1) & $u32 0x3); // 0x0 = 32bit; 0x2 = 64bit
+
+                    hba->bus = $u8 bus;
+                    hba->device = $u8 device;
+                    hba->function = $u8 function;
+                    
+                    if(bar_type == $u8 0x2) {
+                        u32 bar5_upper = pci_read($u8 bus, $u8 device, $u8 function, $u8 0x28);
+                        hba->abar_paddr = $u64 ((bar5_upper << $u32 32) | (bar5 & $u32 0xfffffff0));
+                        println("64 bit ABAR");
+                    } else {
+                        hba->abar_paddr = $u64 (bar5 & $u32 0xfffffff0);
+                        println("32 bit ABAR");
+                    }
+
+                    pt_map_page(pt_get_current(), $void* AHCI_ABAR_PAGE, $void* hba->abar_paddr, PTE_WRITEABLE | PTE_PCD);
+                    pt_map_page(pt_get_current(), $void* (AHCI_ABAR_PAGE + PAGE_SIZE), $void* (hba->abar_paddr + PAGE_SIZE), PTE_WRITEABLE | PTE_PCD);
+                    hba->abar_vaddr = AHCI_ABAR_PAGE;
+                    
+					ahci_hbas.push_back(hba);
+                }
+            }
+        }
+    }
+}
+
+void hba_setup(ahci_hba* hba, vector<HBA_PORT*>& hba_ports) {
+    HBA_MEM* h = $HBA_MEM* hba->abar_vaddr;
+
+    println("HBA Info:");
+    println("bus      : ", $i32 hba->bus);
+    println("device   : ", $i32 hba->device);
+    println("function : ", $i32 hba->function);
+    println("abar     : ", $void* h);
+
+    u32 version = h->vs;
+    u16 major = $u16 ((version >> $u32 16) & $u32 0xffff);
+    u16 minor = $u16 (version & $u32 0xffff);
+    println("Version : ", major, ".", minor);
+
+    u64 ports_implemented = $u64 h->pi;
+    for(u64 i = 0x0; i < $u64 32; i++) {
+        if(ports_implemented & ($u64 1 << i)) {
+            println("port : ", i, " is available");
+            HBA_PORT* p = @h->ports[i];
+            u32 status = p->ssts;
+            u8 detection = $u8 (status & $u32 0x0f);
+            if(detection != $u8 3) {
+                println("  - no device detected on this port");
+                continue;
+            }
+            println("  + device detected on this port");
+            
+            u32 signature = p->sig;
+            if(signature == SATA_SIG_ATA) {
+                println("  SATA drive");
+            } else if(signature == SATA_SIG_ATAPI) {
+                println("  SATAPI drive");
+            } else if(signature == SATA_SIG_SEMB) {
+                println("  SEMB drive");
+            } else if(signature == SATA_SIG_PM) {
+                println("  PM drive");
+            }
+
+            println("  > rebasing port");
+            rebase_port(p);
+            hba_ports.push_back(p);
+        }
+    }
+}
+
+void stop_cmd(HBA_PORT* p) {
+    p->cmd &= ~HBA_PxCMD_ST; // clear ST
+    p->cmd &= ~HBA_PxCMD_FRE; // clear FRE
+    
+    // busy wait until FR and CR are cleared
+    while((p->cmd & HBA_PxCMD_FR) || (p->cmd & HBA_PxCMD_CR)) {}
+}
+
+void start_cmd(HBA_PORT* p) {
+    // busy wait until CR is cleared
+    while(p->cmd & HBA_PxCMD_CR) {}
+
+	p->cmd |= HBA_PxCMD_FRE; // set FRE
+	p->cmd |= HBA_PxCMD_ST; // set ST
+}
+
+void rebase_port(HBA_PORT* p) {
+    stop_cmd(p);
+
+    // clb and fb will fit on one page.    
+    void* p_base = palloc();
+    memset(p_base, 0, PAGE_SIZE);
+
+	p->clb = $u32 ($u64 p_base & 0xffffffff);
+	p->clbu = $u32 (($u64 p_base >> $u64 32) & 0xffffffff);
+
+	p->fb = $u32 (($u64 p_base + $u64 1024) & 0xffffffff);
+	p->fbu = $u32 ((($u64 p_base + $u64 1024) >> $u64 32) & 0xffffffff);
+    
+    void* temp = palloc();
+    memset(temp, 0, PAGE_SIZE);
+	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
+    for(i32 i = 0; i < 32; i++) {
+        if($u64 i * sizeof(HBA_CMD_HEADER) >= PAGE_SIZE) {
+            temp = palloc();
+            memset(temp, 0, PAGE_SIZE);
+        }
+
+        u64 addr = $u64 temp + ($u64 i * sizeof(HBA_CMD_HEADER));
+
+        cmdheader[i].DW0 |= ($u32 8 << $u32 16);
+		cmdheader[i].ctba = $u32 (addr & 0xffffffff);
+		cmdheader[i].ctbau = $u32 ((addr >> $u64 32) & 0xffffffff);
+    }
+
+    start_cmd(p);
+}
+
+// Find a free command list slot
+i32 find_cmdslot(HBA_PORT* p) {
+	// If not set in SACT and CI, the slot is free
+	u32 slots = (p->sact | p->ci);
+	for(i32 i = 0; i < 32; i++) {
+		if ((slots & $u32 1) == $u32 0)
+			return i;
+		slots >>= $u32 1;
+	}
+	println("Cannot find free command list entry");
+	return -1;
+}
+
+// startl + (starth << 32) is start sector address?
+// buf is physical address
+i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
+    p->is = $u32 -1; // clear pending interrupt bits
+	i32 spin = 0; // Spin lock timeout counter
+	i32 slot = find_cmdslot(p);
+	if(slot == -1) return 1;
+
+	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
+	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
+
+	cmdheader->DW0 &= $u32 ~0x1f;  // Command FIS size (cfl)
+	cmdheader->DW0 |= $u32 (0x1f & (sizeof(FIS_REG_H2D) / sizeof(u32)));  // Command FIS size (cfl)
+	
+    cmdheader->DW0 &= $u32 ~0x40; // Read from device (w)
+
+	cmdheader->DW0 &= $u32 ~0xffff0000; // PRDT entries count (prdtl)
+	cmdheader->DW0 |= $u32 (0xffff0000 & $u64 ((((count - $u32 1) >> $u32 4) + $u32 1) << $u32 16) ); // PRDT entries count (prdtl)
+
+	HBA_CMD_TBL* cmdtbl = $HBA_CMD_TBL* ($u64 cmdheader->ctba | ($u64 cmdheader->ctbau << $u64 32));
+	memset($void* cmdtbl, 0, sizeof(HBA_CMD_TBL) + ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1) * sizeof(HBA_PRDT_ENTRY));
+
+	// 8K bytes (16 sectors) per PRDT
+    u64 i = 0x0;
+	for (; i < ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1); i++) {
+		cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+
+		cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
+		cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 (8*1024-1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
+
+		cmdtbl->prdt_entry[i].DW3 |= $u32 0x80000000;
+
+		buf = $u16* ($u64 buf + $u64 (4*1024));	// 4K words
+		count -= $u32 16;	// 16 sectors
+	}
+    // Last entry
+	cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+    cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
+    cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 ((count << $u32 9) - $u32 1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
+
+    cmdtbl->prdt_entry[i].DW3 |= $u32 0x80000000;
+
+	// Setup command
+	FIS_REG_H2D* cmdfis = $FIS_REG_H2D* @cmdtbl->cfis;
+
+	cmdfis->fis_type = FIS_TYPE_REG_H2D;
+	cmdfis->pm_n_stuff |= $u8 0x80;	// Command (c)
+	cmdfis->command = ATA_CMD_READ_DMA_EX;
+
+	cmdfis->lba0 = $u8 startl;
+	cmdfis->lba1 = $u8 (startl >> $u32 8);
+	cmdfis->lba2 = $u8 (startl >> $u32 16);
+	cmdfis->device = $u8 (1 << 6); // LBA mode
+
+	cmdfis->lba3 = $u8 (startl >> $u32 24);
+	cmdfis->lba4 = $u8 starth;
+	cmdfis->lba5 = $u8 (starth >> $u32 8);
+
+	cmdfis->countl = $u8 (count & $u32 0xff);
+	cmdfis->counth = $u8 ((count >> $u32 8) & $u32 0xff);
+
+	// The below loop waits until the port is no longer busy before issuing a new command
+	while((p->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && $u32 (spin < 1000000)) {
+		spin++;
+	}
+	if(spin == 1000000) {
+        println("Port is hung");
+		return 1;
+	}
+
+	p->ci = $u32 1 << $u32 slot;	// Issue command
+
+	// Wait for completion
+	while(1) {
+		// In some longer duration reads, it may be helpful to spin on the DPS bit 
+		// in the PxIS port field as well (1 << 5)
+		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
+			break;
+		if (p->is & HBA_PxIS_TFES) { // Task file error
+			println("Read disk error");
+			return 1;
+		}
+	}
+
+	// Check again
+	if (p->is & HBA_PxIS_TFES) {
+		println("Read disk error");
+		return 1;
+	}
+
+	return 0;
+}
+
+// buf is physical address
+i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
+    p->is = $u32 -1; // clear pending interrupt bits
+	i32 spin = 0; // Spin lock timeout counter
+	i32 slot = find_cmdslot(p);
+	if(slot == -1) return 1;
+
+	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
+	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
+
+	cmdheader->DW0 &= $u32 ~0x1f;  // Command FIS size (cfl)
+	cmdheader->DW0 |= $u32 (0x1f & (sizeof(FIS_REG_H2D) / sizeof(u32)));  // Command FIS size (cfl)
+	
+    cmdheader->DW0 |= $u32 0x40; // Write to device (w)
+
+	cmdheader->DW0 &= $u32 ~0xffff0000; // PRDT entries count (prdtl)
+	cmdheader->DW0 |= $u32 (0xffff0000 & $u64 ((((count - $u32 1) >> $u32 4) + $u32 1) << $u32 16) ); // PRDT entries count (prdtl)
+
+	HBA_CMD_TBL* cmdtbl = $HBA_CMD_TBL* ($u64 cmdheader->ctba | ($u64 cmdheader->ctbau << $u64 32));
+	memset($void* cmdtbl, 0, sizeof(HBA_CMD_TBL) + ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1) * sizeof(HBA_PRDT_ENTRY));
+
+	// 8K bytes (16 sectors) per PRDT
+    u64 i = 0x0;
+	for (; i < ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1); i++) {
+		cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+
+		cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
+		cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 (8*1024-1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
+
+		cmdtbl->prdt_entry[i].DW3 |= $u32 0x80000000;
+
+		buf = $u16* ($u64 buf + $u64 (4*1024));	// 4K words
+		count -= $u32 16;	// 16 sectors
+	}
+    // Last entry
+	cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+    cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
+    cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 ((count << $u32 9) - $u32 1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
+
+    cmdtbl->prdt_entry[i].DW3 |= $u32 0x80000000;
+
+	// Setup command
+	FIS_REG_H2D* cmdfis = $FIS_REG_H2D* @cmdtbl->cfis;
+
+	cmdfis->fis_type = FIS_TYPE_REG_H2D;
+	cmdfis->pm_n_stuff |= $u8 0x80;	// Command (c)
+	cmdfis->command = ATA_CMD_WRITE_DMA_EX;
+
+	cmdfis->lba0 = $u8 startl;
+	cmdfis->lba1 = $u8 (startl >> $u32 8);
+	cmdfis->lba2 = $u8 (startl >> $u32 16);
+	cmdfis->device = $u8 (1 << 6); // LBA mode
+
+	cmdfis->lba3 = $u8 (startl >> $u32 24);
+	cmdfis->lba4 = $u8 starth;
+	cmdfis->lba5 = $u8 (starth >> $u32 8);
+
+	cmdfis->countl = $u8 (count & $u32 0xff);
+	cmdfis->counth = $u8 ((count >> $u32 8) & $u32 0xff);
+
+	// The below loop waits until the port is no longer busy before issuing a new command
+	while((p->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && $u32 (spin < 1000000)) {
+		spin++;
+	}
+	if(spin == 1000000) {
+		println("Port is hung");
+		return 1;
+	}
+
+	p->ci = $u32 1 << $u32 slot;	// Issue command
+
+	// Wait for completion
+	while(1) {
+		// In some longer duration reads, it may be helpful to spin on the DPS bit 
+		// in the PxIS port field as well (1 << 5)
+		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
+			break;
+		if (p->is & HBA_PxIS_TFES) { // Task file error
+            println("Write disk error");
+			return 1;
+		}
+	}
+
+	// Check again
+	if (p->is & HBA_PxIS_TFES) {
+		println("Write disk error");
+		return 1;
+	}
+
+	return 0;
+}
+
+i32 ahci_identify(HBA_PORT* p, u16* buf) {
+    p->is = $u32 -1; // clear pending interrupt bits
+	i32 spin = 0; // Spin lock timeout counter
+	i32 slot = find_cmdslot(p);
+	if(slot == -1) return 1;
+
+	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
+	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
+
+	cmdheader->DW0 &= $u32 ~0x1f;  // Command FIS size (cfl)
+	cmdheader->DW0 |= $u32 (0x1f & (sizeof(FIS_REG_H2D) / sizeof(u32)));  // Command FIS size (cfl)
+	
+	cmdheader->DW0 &= $u32 ~0x40; // Read from device (w)
+
+	cmdheader->DW0 &= $u32 ~0xffff0000; // PRDT entries count (prdtl)
+	cmdheader->DW0 |= $u32 (0xffff0000 & $u64 (1 << 16) ); // PRDT entries count (prdtl)
+
+	HBA_CMD_TBL* cmdtbl = $HBA_CMD_TBL* ($u64 cmdheader->ctba | ($u64 cmdheader->ctbau << $u64 32));
+	memset($void* cmdtbl, 0, sizeof(HBA_CMD_TBL) + ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1) * sizeof(HBA_PRDT_ENTRY));
+
+	cmdtbl->prdt_entry[0].dba = $u32 $u64 buf; // ???
+    cmdtbl->prdt_entry[0].DW3 &= $u32 ~0x3ffff;
+    cmdtbl->prdt_entry[0].DW3 |= $u32 (0x3ffff & $u64 (($u32 1 << $u32 9) - $u32 1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
+
+    cmdtbl->prdt_entry[0].DW3 |= $u32 0x80000000;
+
+	// Setup command
+	FIS_REG_H2D* cmdfis = $FIS_REG_H2D* @cmdtbl->cfis;
+
+	cmdfis->fis_type = FIS_TYPE_REG_H2D;
+	cmdfis->pm_n_stuff |= $u8 0x80;	// Command (c)
+	cmdfis->command = ATA_CMD_IDENTIFY;
+
+	// The below loop waits until the port is no longer busy before issuing a new command
+	while((p->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && $u32 (spin < 1000000)) {
+		spin++;
+	}
+	if(spin == 1000000) {
+		println("Port is hung");
+		return 1;
+	}
+
+	p->ci = $u32 1 << $u32 slot;	// Issue command
+
+	// Wait for completion
+	while(1) {
+		// In some longer duration reads, it may be helpful to spin on the DPS bit 
+		// in the PxIS port field as well (1 << 5)
+		if ((p->ci & ($u32 1 << $u32 slot)) == $u32 0) 
+			break;
+		if (p->is & HBA_PxIS_TFES) { // Task file error
+			println("Identify disk error (task file error)");
+			return 1;
+		}
+	}
+
+	// Check again
+	if (p->is & HBA_PxIS_TFES) {
+		println("Identify disk error");
+		return 1;
+	}
+
+	return 0;
+}
+
+void ahci_print_drive_info(HBA_PORT* p) {
+    void* buffer = palloc();
+    memset(buffer, 0, PAGE_SIZE);
+
+	if(ahci_identify(p, $u16* buffer)) {
+		println("Identify command failed!");
+		pfree(buffer);
+		return;
+	}
+
+    println("--- Drive Information ---");
+
+    u16* identify_data = $u16* buffer;
+
+    u8[41] model;
+    for (i32 i = 0; i < 20; i++) {
+        model[i * 2] = $u8 (identify_data[27 + i] >> $u16 8);
+        model[i * 2 + 1] = $u8 identify_data[27 + i];
+    }
+    model[40] = '\0';
+    println("Model: ", $u8* @model);
+
+    u8[21] serial;
+    for (i32 i = 0; i < 10; i++) {
+        serial[i * 2] = $u8 (identify_data[10 + i] >> $u16 8);
+        serial[i * 2 + 1] = $u8 identify_data[10 + i];
+    }
+    serial[20] = '\0';
+    println("Serial: ", $u8* @serial);
+    
+    u64 total_sectors = *($u64* @identify_data[100]);
+    u64 total_bytes = total_sectors * $u64 AHCI_SECTOR_SIZE;
+    
+    println("Sectors: ", total_sectors);
+	println("Size: ", total_bytes / $u64 (1024 * 1024), " MiB");
+    println("-----------------------");
+
+    pfree(buffer);
+}
+
+u64 ahci_get_drive_size(HBA_PORT* p) {
+    void* buffer = palloc();
+    memset(buffer, 0, PAGE_SIZE);
+
+	if(ahci_identify(p, $u16* buffer)) {
+		println("Identify command failed!");
+		pfree(buffer);
+		return 0x0;
+	}
+
+    u16* identify_data = $u16* buffer;
+
+    u64 total_sectors = *($u64* @identify_data[100]);
+    
+    pfree(buffer);
+
+	return total_sectors;
+}
+
+[__GLOBAL_FIRST__] blockdev_ops* BLOCKDEV_OPS_AHCI;
+void init_ahci() {
+    BLOCKDEV_OPS_AHCI = $blockdev_ops* malloc(sizeof(blockdev_ops));
+    new (BLOCKDEV_OPS_AHCI) blockdev_ops();
+    BLOCKDEV_OPS_AHCI->read = #<ahci_read(blockdev*, u64, u64, void*)>;
+    BLOCKDEV_OPS_AHCI->write = #<ahci_write(blockdev*, u64, u64, void*)>;
+}
+
+i32 ahci_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    assert(dev->type == BLOCKDEV_TYPE_AHCI, "ahci_read() : type must match");
+    assert(dev->block_size == $u64 AHCI_SECTOR_SIZE, "ahci_read() : sector size must match");
+    assert(PAGE_SIZE % dev->block_size == 0x0, "ahci_read() : only support up to page sized blocks");
+    HBA_PORT* port = $HBA_PORT* dev->resource_ptr;
+    
+    //incrementally copy stuff over from physical buffer 
+    void* pbuf = palloc();
+    u64 ptr = 0x0;
+    while(ptr < count) {
+        u32 startl = $u32 (lba_start & 0xFFFFFFFF);
+        u32 starth = $u32 (lba_start >> $u64 32);
+        u64 amt = min(count, PAGE_SIZE / dev->block_size);
+
+        i32 status = ahci_read(port, startl, starth, $u32 amt, $u16* pbuf);
+        if(status) {
+            pfree(pbuf);
+            return status;
+        }
+        memcpy($void* @(($u8* buf)[ptr * dev->block_size]), pbuf, amt * dev->block_size);
+
+        ptr += amt;
+        lba_start += amt;
+    }
+    pfree(pbuf);
+
+    return 0;
+}
+
+i32 ahci_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    assert(dev->type == BLOCKDEV_TYPE_AHCI, "ahci_write() : type must match");
+    assert(dev->block_size == $u64 AHCI_SECTOR_SIZE, "ahci_write() : sector size must match");
+    assert(PAGE_SIZE % dev->block_size == 0x0, "ahci_write() : only support up to page sized blocks");
+    HBA_PORT* port = $HBA_PORT* dev->resource_ptr;
+
+    //incrementally copy stuff over to physical buffer
+    void* pbuf = palloc();
+    u64 ptr = 0x0;
+    while(ptr < count) {
+        u32 startl = $u32 (lba_start & 0xFFFFFFFF);
+        u32 starth = $u32 (lba_start >> $u64 32);
+        u64 amt = min(count, PAGE_SIZE / dev->block_size);
+
+        memcpy(pbuf, $void* @(($u8* buf)[ptr * dev->block_size]), amt * dev->block_size);
+        i32 status = ahci_write(port, startl, starth, $u32 amt, $u16* pbuf);
+        if(status) {
+            pfree(pbuf);
+            return status;
+        }
+
+        ptr += amt;
+        lba_start += amt;
+    }
+    pfree(pbuf);
+
+    return 0;
+}
+
+void ahci_find() {
+    println("scanning for ahci block devices");
+    vector<ahci_hba*> ahci_hbas;
+    scan_for_ahci(ahci_hbas);
+    if(ahci_hbas.size() == 0x0) {
+        println("no ahci controller found");
+        return;
+    }
+	for(u64 i = 0x0; i < ahci_hbas.size(); i++) {
+		vector<HBA_PORT*> hba_ports;
+		hba_setup(ahci_hbas[i], hba_ports);
+
+		for(u64 j = 0x0; j < hba_ports.size(); j++) {
+            //see if this drive is partitioned
+            mbr* mbr = $mbr* palloc();
+            if(ahci_read(hba_ports[j], $u32 0, $u32 0, $u32 1, $u16* mbr)) {
+                println("read MBR sector failed");
+                pfree($void* mbr);
+                continue;
+            }
+
+            if(mbr->signature[0] == $u8 0x55 && mbr->signature[1] == $u8 0xAA) {
+                println("found partitioned drive");
+
+                //look through each partition
+                for(u64 k = 0x0; k < 0x4; k++) {
+                    mbr_partition_entry* p = @mbr->partition_entries[k];
+                    if(p->type == MBR_PARTITION_TYPE_EMPTY) continue;
+                    blockdev_create_ahci(hba_ports[j], $u64 p->lba_first, $u64 AHCI_SECTOR_SIZE, p->type);
+                }
+            }
+            else {
+                println("found unpartitioned drive");
+
+                //assume drive is one big partition
+                blockdev_create_ahci(hba_ports[j], 0x0, $u64 AHCI_SECTOR_SIZE, $u8 0x00);
+            }
+
+            pfree($void* mbr);
+		}
+	}
+}

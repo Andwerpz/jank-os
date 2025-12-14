@@ -121,13 +121,4 @@ void print(i32 x) {
     serial_print(x);
 }
 
-template<T>
-void print(T* ptr) {
-    serial_print(ptr);
-}
 
-template<T>
-void println(T x) {
-    print(x);
-    print("\n");
-}

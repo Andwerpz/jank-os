@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-umask 022   # or 000 if you want group/others write by default
+umask 022
 
 USER_DIR="${1:-./user}"
 IMG="${2:-drive.img}"
 IMG_SIZE="${3:-64M}"
 MNT="${4:-.mnt_drive}"
-BOOT_MBR="${5:-./bootloader/stage1/mbr.bin}"   
-BOOT_STAGE2="${6:-./bootloader/stage2/bin/stage2.bin}"
+BOOT_MBR="${BOOT_MBR:-}"   # optional; set env var BOOT_MBR=/path/to/mbr.bin if you want boot code installed
 
 # Best effort to detect the "real" user even when script uses sudo internally
 REAL_USER="${SUDO_USER:-${USER}}"
@@ -16,22 +15,6 @@ REAL_GROUP="$(id -gn "${REAL_USER}")"
 
 if [[ ! -d "$USER_DIR" ]]; then
   echo "ERROR: USER_DIR '$USER_DIR' does not exist" >&2
-  exit 1
-fi
-
-echo "[*] Building MBR bootloader"
-make -C ./bootloader/stage1
-
-echo "[*] Building stage2 bootloader"
-make -C ./bootloader/stage2
-
-if [[ ! -f "$BOOT_MBR" ]]; then
-  echo "ERROR: BOOT_MBR '$BOOT_MBR' does not exist" >&2
-  exit 1
-fi
-
-if [[ ! -f "$BOOT_STAGE2" ]]; then
-  echo "ERROR: BOOT_STAGE2 '$BOOT_STAGE2' does not exist" >&2
   exit 1
 fi
 
@@ -52,15 +35,10 @@ trap cleanup EXIT
 echo "[*] Creating sparse disk image: $IMG ($IMG_SIZE)"
 truncate -s "$IMG_SIZE" "$IMG"
 
-echo "[*] Writing MBR with two partitions (p1 dummy, p2 ext2)"
-# Partition layout:
-#   - p1: starts at 1 MiB (LBA 2048), size 8 MiB, type 0xAB, marked bootable
-#   - p2: rest of disk, type 0x83 (Linux filesystem / ext2)
+echo "[*] Writing MBR with one Linux (0x83) partition spanning the disk"
 sudo sfdisk "$IMG" <<EOF
 label: dos
-
-2048,8M,0xAB,*
-,,0x83
+,,0x83,*
 EOF
 
 echo "[*] Attaching loop device (with partition scan)"
@@ -68,33 +46,29 @@ LOOP="$(sudo losetup --find --show -P "$IMG")"
 echo "    -> loop device: $LOOP"
 
 PART1="${LOOP}p1"
-PART2="${LOOP}p2"
 
-echo "[*] Writing stage2 bootloader to start of partition 1"
-sudo dd if=./bootloader/stage2/bin/stage2.bin of="$PART1" bs=512 conv=notrunc
-
-# Wait briefly for partition nodes to appear
-for _ in {1..10}; do
-  if [[ -b "$PART2" ]]; then
+# Wait briefly for partition node to appear
+for _ in {1..20}; do
+  if [[ -b "$PART1" ]]; then
     break
   fi
   sleep 0.2
 done
 
-if [[ ! -b "$PART2" ]]; then
-  echo "ERROR: Partition device $PART2 not found" >&2
+if [[ ! -b "$PART1" ]]; then
+  echo "ERROR: Partition device $PART1 not found" >&2
   exit 1
 fi
 
-echo "[*] Formatting ext2 on partition 2 (rev 0, 1 KiB blocks): $PART2"
-sudo mkfs.ext2 -F -b 1024 -r 0 "$PART2" >/dev/null
+echo "[*] Formatting ext2 on $PART1 (rev 0, 1 KiB blocks)"
+sudo mkfs.ext2 -F -b 1024 -r 0 "$PART1" >/dev/null
 
 echo "[*] Preparing mountpoint $MNT"
 sudo mkdir -p "$MNT"
 sudo chmod 0755 "$MNT"
 
-echo "[*] Mounting partition 2 at $MNT"
-sudo mount "$PART2" "$MNT"
+echo "[*] Mounting $PART1 at $MNT"
+sudo mount "$PART1" "$MNT"
 
 echo "[*] Syncing $USER_DIR -> $MNT"
 sudo rsync -aHAX --delete --inplace "$USER_DIR/" "$MNT/"
@@ -108,15 +82,24 @@ echo "[*] Detaching loop device"
 sudo losetup -d "$LOOP"
 LOOP=""
 
-echo "[*] Installing MBR bootloader from $BOOT_MBR into $IMG"
-# Overwrite only the first 446 bytes (boot code), keep partition table + signature
-dd if="$BOOT_MBR" of="$IMG" bs=446 count=1 conv=notrunc
+if [[ -n "$BOOT_MBR" ]]; then
+  if [[ ! -f "$BOOT_MBR" ]]; then
+    echo "ERROR: BOOT_MBR '$BOOT_MBR' not found" >&2
+    exit 1
+  fi
+  echo "[*] Installing MBR bootloader from $BOOT_MBR into $IMG"
+  # Overwrite only the first 446 bytes (boot code), keep partition table + signature
+  dd if="$BOOT_MBR" of="$IMG" bs=446 count=1 conv=notrunc status=none
+else
+  echo "[*] BOOT_MBR not set; leaving default MBR boot code unchanged"
+fi
 
 echo "[*] Finalizing image permissions"
 sudo chown "${REAL_USER}:${REAL_GROUP}" "$IMG" || true
 sudo chmod 0666 "$IMG" || true
 
-echo "[✓] Built bootable MBR-partitioned $IMG"
-echo "    - p1: dummy (8 MiB, type 0x83, bootable)"
-echo "    - p2: ext2 (rev 0, 1 KiB blocks) populated from $USER_DIR"
-echo "    - MBR boot code from: $BOOT_MBR"
+echo "[✓] Built MBR-partitioned $IMG"
+echo "    - p1: ext2 (rev 0, 1 KiB blocks) populated from $USER_DIR"
+if [[ -n "$BOOT_MBR" ]]; then
+  echo "    - MBR boot code from: $BOOT_MBR"
+fi

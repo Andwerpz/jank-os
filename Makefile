@@ -51,6 +51,7 @@ boot: drive
 	qemu-system-x86_64 \
     -no-reboot \
 	-m 8G \
+	-d int,cpu_reset \
     -serial stdio \
     -device ich9-ahci,id=ahci \
     -drive file=drive.img,if=none,id=bootdisk,format=raw \

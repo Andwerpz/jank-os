@@ -89,3 +89,66 @@ void bitmap_unset_bit(void* bitmap, u64 index) {
     bitmap_set_bit(bitmap, index);
     ($u8* bitmap)[index / $u64 8] ^= ($u8 1 << $u8 (index % $u64 8));
 }
+
+
+template<T>
+void print(T* ptr) {
+    u64 val = $u64 ptr;
+    u64 mask = 0b1111;
+    for(i32 i = 15; i >= 0; i--){
+        u64 dig = (val & (mask << ($u64 i * $u64 4))) >> ($u64 i * $u64 4);
+        u8 c;
+        if(dig < $u64 10) {
+            c = '0' + $u8 dig;
+        }
+        else {
+            c = 'a' + $u8 dig - $u8 10;
+        }
+        print(c);
+    }
+}
+
+template<T>
+void println(T x) {
+    print(x);
+    print("\n");
+}
+
+template<T, U>
+void print(T a, U b) {
+    print(a);
+    print(b);
+}
+
+template<T, U>
+void println(T a, U b) {
+    print(a, b);
+    print("\n");
+}
+
+template<T, U, V>
+void print(T a, U b, V c) {
+    print(a);
+    print(b);
+    print(c);
+}
+
+template<T, U, V>
+void println(T a, U b, V c) {
+    print(a, b, c);
+    print("\n");
+}
+
+template<T, U, V, W>
+void print(T a, U b, V c, W d) {
+    print(a);
+    print(b);
+    print(c);
+    print(d);
+}
+
+template<T, U, V, W>
+void println(T a, U b, V c, W d) {
+    print(a, b, c, d);
+    print("\n");
+}

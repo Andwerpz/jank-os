@@ -87,6 +87,7 @@ STAGE2_LOAD_OFF = 0x8000
 STAGE2_SECTORS = 127         # 127 * 512 = 63.5 kb
 # ran into errors when reading above 128 sectors
 # 128 flips the sign bit, so 127 seems relatively safe
+# if we want a larger stage 2 bootloader, will have to do some sort of loop
 
 boot_drive:
     .byte 0

@@ -1,4 +1,5 @@
 #include <memory>;
+#include <jstring>;
 
 #include "vga.jank";
 #include "panic.jank";
@@ -6,9 +7,12 @@
 
 #include "../../../lib/pagetable.jank";
 #include "../../../lib/utils.jank";
+#include "../../../lib/mbr.jank";
 
 [__GLOBAL_FIRST__] u64 PAGE_SIZE    = $u64 0x001000;
 [__GLOBAL_FIRST__] u64 HUGEPG_SIZE  = $u64 0x200000;
+
+[__GLOBAL_FIRST__] u64 AHCI_ABAR_PAGE;  //AHCI driver needs physical buf of size PAGE_SIZE * 2
 
 [__GLOBAL_FIRST__] u64 MB = 0x100000;   
 [__GLOBAL_FIRST__] u64 GB = 0x40000000;
@@ -20,9 +24,10 @@ struct boot_info {
     u16         e820_entry_count;       // 8
     u8          boot_drive;             // 10
 
-    // populated by 64 bit mode
-    void*       reserved_start;
-    u64         reserved_sz;
+    void*       reserved_start;         // 11
+    u64         reserved_sz;            // 19
+
+    u64         kcode_start;            // 27
 }
 
 struct e820_ent {
@@ -79,52 +84,19 @@ i32 main() {
     // - ensure that regions are sorted in ascending order
     // TODO
 
-    // find and reserve a 5MB zone
-    // - 1MB for malloc
-    // - 1MB for palloc
-    // - 2MB for kernel code
-    // - 1MB for kernel stack
-    // just inform the kernel that everything is fine to use for pma except for this zone
-    boot_info->reserved_start = nullptr;
-    boot_info->reserved_sz = 0x5 * MB;
-    for(u64 i = 0x0; i < $u64 (boot_info->e820_entry_count); i++) {
-        e820_ent* ent = @(boot_info->e820_mmap[i]);
-        u64 base = ent->base;
-        u64 length = ent->length;
-        
-        //make sure segment is usable
-        if(ent->type != $u32 0x1) {
-            continue;
-        }
-
-        //round up base to nearest PAGE_SIZE
-        base = ((base + PAGE_SIZE - 0x1) / PAGE_SIZE) * PAGE_SIZE;
-        if(base >= ent->base + ent->length) {
-            //base is now past segment end
-            continue;
-        }
-        assert(base >= ent->base);
-        length -= base - ent->base;
-
-        //round down length to nearest PAGE_SIZE
-        length = (length / PAGE_SIZE) * PAGE_SIZE;
-
-        //reserve beginning of section if it's long enough
-        if(length >= boot_info->reserved_sz) {
-            boot_info->reserved_start = $void* base;
-            break;
-        }
-    }
     vga_print("Reserved : ");
     vga_print($u64 (boot_info->reserved_start));
     vga_print(", ");
     vga_print(boot_info->reserved_sz);
     vga_print("\n");
+
+    println("Kernel code start : ", boot_info->kcode_start);
     
     if(boot_info->reserved_start == nullptr) {
-        vga_print("failed to reserve\n");
-        assert(0);
+        panic("failed to reserve");
     }
+
+    panic();
 
     // init malloc / palloc
     malloc_ptr = $u64 boot_info->reserved_start + 0x0 * MB;
@@ -158,10 +130,6 @@ i32 main() {
     println(max_phys);
     println("PAGETABLE");
     pt_print(pt);
-
-    // find boot drive, setup block device
-
-    // load kernel into memory
 
     // map higher half kernel
     // - code

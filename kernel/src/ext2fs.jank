@@ -1,5 +1,3 @@
-#include "ahci.jank";
-#include <string>;
 
 // https://wiki.osdev.org/Ext2
 
@@ -36,12 +34,11 @@
 // for now, I'll just update the primary copies. 
 
 struct ext2_fs {
-    HBA_PORT*           p;
+    blockdev*           dev;
     ext2_super_block*   sb;
-    u32                 block_size; 
+    u32                 block_size; // ext2 filesystem block size, same as 2^(10 + sb->block_size)
     u32                 sb_block;   // number of block that contains superblock struct
     u32                 sb_offset;  // offset of superblock struct within sb_block
-    u64                 lba_start;  // index of 512-byte sector where this partition starts
 }
 
 struct ext2_super_block {
@@ -298,37 +295,33 @@ void ext2_print_dir_entry(ext2_dir_entry* dir) {
     cout << "========================\n\n";
 }
 
-u32 ext2_block_to_sector(u32 block, u32 block_size) {
-    return (block * block_size) / AHCI_SECTOR_SIZE;
-}
-
-// starth (higher half lba) set to 0 for now, until we get bigger drives lol
-// NOTE - BUF MUST BE A PHYSICAL ADDRESS
+//read a single block from the underlying block device
 i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
-    u32 startl = ext2_block_to_sector(block_number, fs->block_size) + $u32 fs->lba_start;
-    u32 starth = $u32 0;
-    u32 count = fs->block_size / AHCI_SECTOR_SIZE;
-    return ahci_read(fs->p, startl, starth, count, $u16* buf);
+    assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
+    u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
+    u64 count = $u64 fs->block_size / fs->dev->block_size;
+    return blockdev_read(fs->dev, lba_start, count, buf);
 }
 
+//write a single block to the underlying block device
 i32 ext2_write_block(ext2_fs* fs, u32 block_number, void* buf) {
-    u32 startl = ext2_block_to_sector(block_number, fs->block_size) + $u32 fs->lba_start;
-    u32 starth = $u32 0;
-    u32 count = fs->block_size / AHCI_SECTOR_SIZE;
-    return ahci_write(fs->p, startl, starth, count, $u16* buf);
+    assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
+    assert($u64 fs->block_size % fs->dev->block_size == 0x0);
+    u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
+    u64 count = $u64 fs->block_size / fs->dev->block_size;
+    return blockdev_write(fs->dev, lba_start, count, buf);
 }
 
-//scans a drive partition to see if there is a ext2 filesystem on it
-//lba_start is the index of the first 512-byte sector in the partition
+//scans a block device to see if there is a ext2 filesystem on it
 //on success, populates fs and returns 0
 //on failure, returns 1
-i32 ext2_mount(HBA_PORT* p, u64 lba_start, ext2_fs* fs) {
-    // Read super block
+i32 ext2_probe(blockdev* dev, ext2_fs* fs) {
+    // read super block
     void* buf = palloc();
     memset(buf, 0, PAGE_SIZE);
 
-    if(ahci_read(p, $u32 lba_start, $u32 0, $u32 PAGE_SIZE / AHCI_SECTOR_SIZE, $u16* buf)) {
-        cout << "Block read failed\n";
+    if(blockdev_read(dev, 0x0, PAGE_SIZE / dev->block_size, buf)) {
+        cout << "ext2 probe block read failed" << "\n";
         pfree(buf);
         return 1;
     }
@@ -358,12 +351,11 @@ i32 ext2_mount(HBA_PORT* p, u64 lba_start, ext2_fs* fs) {
 
     ext2_print_super_block(sb);
 
-    fs->p = p;
+    fs->dev = dev;
     fs->sb = sb;
     fs->block_size = $u32 1024 << sb->log_block_size;
     fs->sb_block = $u32 1024 / fs->block_size;
     fs->sb_offset = $u32 1024 - fs->sb_block * fs->block_size;
-    fs->lba_start = lba_start;
     
     return 0;
 }
