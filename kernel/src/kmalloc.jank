@@ -18,6 +18,18 @@ void* malloc(u64 sz) {
     return addr;
 }
 
+//only allocs virtual memory space, no attached physical memory
+//you need to manually map physical memory 
+void* vmalloc(u64 sz) {
+    //round sz up to nearest page size
+    sz = (sz + PAGE_SIZE - $u64 1) / PAGE_SIZE * PAGE_SIZE;
+    MEM_USED += sz;
+
+    void* addr = $void* kheap_brk;
+    kheap_brk += sz;
+    return addr;
+}
+
 i32 free(void* addr, u64 sz) {
     //addr must be page aligned
     if($u64 addr % PAGE_SIZE) {

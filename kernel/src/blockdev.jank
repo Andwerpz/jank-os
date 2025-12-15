@@ -1,5 +1,3 @@
-#include "ahci.jank";
-
 // standard interface for block device drivers
 
 [__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI = 0x0;

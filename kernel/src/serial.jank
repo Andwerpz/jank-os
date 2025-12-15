@@ -77,6 +77,8 @@ i32 init_serial() {
     // (not-loopback with IRQs enabled and OUT#1 and OUT#2 bits enabled)
     outb(COM1 + $u16 4, $u8 0x0f);
 
+    serial_print("init serial success\n");
+
     return $i32 0;
 }
 

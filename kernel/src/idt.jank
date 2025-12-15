@@ -229,11 +229,11 @@ void general_protection_fault_handler(trapframe* tf, u64 error_code) {
     else {              //kernel mode
         cout << "KERNEL MODE GENERAL PROTECTION FAULT!!!\n";
         cout << "ERROR CODE : " << $void* error_code << "\n";
-        cout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
         u64 cr2;
         asm!("mov %cr2, %rax");
         asm!("movq %rax, {cr2}");
         cout << "CR2 : " << ($void* cr2) << "\n";
+        cout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
         print_trapframe(tf);
         panic("KERNEL MODE GENERAL PROTECTION FAULT!!!");
     }
@@ -263,11 +263,11 @@ void page_fault_handler(trapframe* tf, u64 error_code) {
     else {              //kernel mode
         cout << "KERNEL MODE PAGE FAULT!!!\n";
         cout << "ERROR CODE : " << $void* error_code << "\n";
-        cout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
         u64 cr2;
         asm!("mov %cr2, %rax");
         asm!("movq %rax, {cr2}");
         cout << "CR2 : " << ($void* cr2) << "\n";
+        cout << "ACTIVE PROCESS : " << get_cur_pid() << "\n";
         print_trapframe(tf);
         panic("KERNEL MODE PAGE FAULT!!!");
     }

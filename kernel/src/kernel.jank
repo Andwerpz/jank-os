@@ -25,11 +25,9 @@
 #include "vfs.jank";
 #include "pipe.jank";
 #include "tty.jank";
-
-#include "../../lib/utils.jank";
-#include "../../lib/pagetable.jank";
-#include "../../lib/mbr.jank";
-#include "../../lib/blockdev.jank";
+#include "blockdev.jank";
+#include "ahci.jank";
+#include "mbr.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -68,25 +66,25 @@ void mem_touch(u64 low, u64 high) {
 }
 
 void print_mmap() {
-    BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
-    MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
-    u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
-    while($u64 mmap < $u64 end) {
-        u64 type = mmap->size & $u64 0xf;
-        u64 addr = mmap->ptr;                            // physical address
-        u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
+    // BootInfo* bootinfo = $BootInfo* BOOTBOOT_INFO;
+    // MMapEnt* mmap = $MMapEnt* @(bootinfo->mmap);
+    // u8* end = $u8* ($u64 bootinfo + $u64 bootinfo->size);
+    // while($u64 mmap < $u64 end) {
+    //     u64 type = mmap->size & $u64 0xf;
+    //     u64 addr = mmap->ptr;                            // physical address
+    //     u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
 
-        println("");
-        println("Found: ");
-        print("Addr: ");
-        println($void* addr);
-        print("Size: ");
-        println($void* size);
-        print("Type: ");
-        println($void* type);
+    //     println("");
+    //     println("Found: ");
+    //     print("Addr: ");
+    //     println($void* addr);
+    //     print("Size: ");
+    //     println($void* size);
+    //     print("Type: ");
+    //     println($void* type);
 
-        mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
-    }
+    //     mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
+    // }
 }
 
 void tests() {
@@ -121,26 +119,26 @@ void tests() {
 
     //check if all MMAP_FREE pages can be touched and are actually mapped
     if(0) {
-        pagetable_t kernel_pt = pt_get_current();
-        BOOTBOOT* bootboot = $BOOTBOOT* BOOTBOOT_INFO;
-        MMapEnt* mmap = $MMapEnt* @(bootboot->mmap);
-        u8* end = $u8* ($u64 bootboot + $u64 bootboot->size);
-        while($u64 mmap < $u64 end) {
-            u64 type = mmap->size & $u64 0xf;
-            u64 addr = mmap->ptr;                            // physical address
-            u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
+        // pagetable_t kernel_pt = pt_get_current();
+        // BootInfo* bootinfo = $BootInfo* BOOTBOOT_INFO;
+        // MMapEnt* mmap = $MMapEnt* @(bootinfo->mmap);
+        // u8* end = $u8* ($u64 bootinfo + $u64 bootinfo->size);
+        // while($u64 mmap < $u64 end) {
+        //     u64 type = mmap->size & $u64 0xf;
+        //     u64 addr = mmap->ptr;                            // physical address
+        //     u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
 
-            if(type == $u64 1) {                      
-                mem_touch(addr, addr + size);
+        //     if(type == $u64 1) {                      
+        //         mem_touch(addr, addr + size);
 
-                u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
-                while(base + PAGE_SIZE <= addr + size) {
-                    assert(pt_is_vaddr_mapped(kernel_pt, $void* base), "this should be mapped");
-                    base += PAGE_SIZE;
-                }
-            }   
-            mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
-        }
+        //         u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
+        //         while(base + PAGE_SIZE <= addr + size) {
+        //             assert(pt_is_vaddr_mapped(kernel_pt, $void* base), "this should be mapped");
+        //             base += PAGE_SIZE;
+        //         }
+        //     }   
+        //     mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
+        // }
     }
 
     //check if we can map new pages

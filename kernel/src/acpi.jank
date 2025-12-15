@@ -1,20 +1,30 @@
 // Advanced Configuration and Power Interface (ACPI)
 // to use the ACPI, we first must find the RSDP
+
 // Root System Description Pointer (RSDP)
-struct RSDP {   //this is for ACPI 1.0. For ACPI 2.0+, use XSDP
-    u8[8]   signature;  //"RSD PTR " (note the trailing space)
-    u8      checksum;
-    u8[6]   OEMID;
-    u8      revision;
-    u32     rsdt_address;
+// with revision >= 2, the RSDP struct has been extended
+struct RSDP {
+    u8[8] signature;        // "RSD PTR "
+    u8    checksum;         // checksum of first 20 bytes
+    u8[6] OEMID;
+    u8    revision;         // 0 = ACPI 1.0, 2+ = ACPI 2.0+
+    u32   rsdt_address;     // 32-bit RSDT address (still present)
+
+    // ACPI 2.0+ only:
+    u32   length;               // total length of RSDP structure
+    u64   xsdt_address;         // 64-bit XSDT address
+    u8    extended_checksum;    // checksum of entire table (length bytes)
+    u8[3] reserved;
 }
 
 // Root System Description Table (RSDT)
+// eXtended System Description Table (XSDT)
 // contains pointers to all the other System Description Tables
 struct RSDT {
     ACPIHeader  header;
 
-    //usage : $u32* @(RSDT->pstart). There will be header->length of them
+    //usage (RSDT) : $u32* @(RSDT->pstart). There will be header->length of them
+    //usage (XSDT) : $u64* @(XSDT->pstart)
     u8          pstart; 
 }
 
@@ -76,13 +86,18 @@ i32 rsdp_validate(RSDP* rsdp) {
         return 0;
     }
 
-    // checksum
-    u64 sum = 0x0;
-    for(u64 i = 0x0; i < sizeof(RSDP); i++){
-        sum += $u64 ($u8* rsdp)[i];
-    }
-    if($u8 sum != $u8 0x0) {
-        return 0;
+    // v1 checksum
+    u8 sum1 = $u8 0;
+    for (u64 i = 0x0; i < $u64 20; i++) sum1 += ($u8* rsdp)[i];
+    if (sum1 != $u8 0) return 0;
+
+    // v2+ extended checksum
+    if (rsdp->revision >= $u8 2) {
+        u32 len = rsdp->length;
+        if (len < $u32 36) return 0;
+        u8 sum2 = $u8 0;
+        for(u64 i = 0x0; i < $u64 len; i++) sum2 += ($u8* rsdp)[i];
+        if (sum2 != $u8 0) return 0;
     }
 
     return 1;
@@ -100,74 +115,62 @@ i32 acpi_validate(ACPIHeader* header, u8* exp_sig) {
     for(u64 i = 0x0; i < $u64 header->length; i++) {
         sum += $u64 ($u8* header)[i];
     }
-    if($u8 sum != $u8 0x0) {
-        return 0;
-    }
+    if($u8 sum != $u8 0x0) return 0;
 
     return 1;
 }
 
 //on success, returns a pointer to the struct with the provided signature
 //on failure, returns nullptr
-void* rsdt_find_entry(RSDT* rsdt, u8* exp_sig) {
-    u32* ptrs = $u32* @(rsdt->pstart);
-    for(u64 i = 0x0; i < ($u64 rsdt->header.length - sizeof(ACPIHeader)) / sizeof(u32); i++) {
-        ACPIHeader* nheader = $ACPIHeader* $u64 ptrs[i];
-        if(acpi_validate(nheader, exp_sig)) {
-            return $void* nheader;
-        }
+void* sdt_find_entry(void* sdt, i32 is_xsdt, u8* exp_sig) {
+    ACPIHeader* hdr = $ACPIHeader* sdt;
+    if(is_xsdt) assert(acpi_validate(hdr, "XSDT"), "sdt_find_entry() : xsdt failed to validate");
+    else assert(acpi_validate(hdr, "RSDT"), "sdt_find_entry() : rsdt failed to validate");
+
+    u64 entries_bytes = $u64 hdr->length - sizeof(ACPIHeader);
+    u64 count;
+    if(is_xsdt) count = entries_bytes / $u64 8;
+    else count = entries_bytes / $u64 4;
+    u8* base = $u8* ($u64 sdt + sizeof(ACPIHeader));
+
+    for (u64 i = 0x0; i < count; i++) {
+        u64 addr;
+        if(is_xsdt) addr = ($u64* base)[i];
+        else addr = $u64 ($u32* base)[i];
+        ACPIHeader* th = $ACPIHeader* addr;
+        if (acpi_validate(th, exp_sig)) return $void* th;
     }
+
     return nullptr;
 }
 
 i32 init_acpi() {
     cout << "start init acpi\n";
 
-    //find RSDP struct. It should be 16 byte aligned
-    RSDP* rsdp;
-    {
-        //retrieve Extended Bios Data Area base address (EBDA)
-        u64 ebda = (($u64 ($u16* 0x040e)[0]) << 0x4);
-        cout << "EBDA : " << $void* ebda << "\n";
-
-        //look in first page of EBDA
-        for(u64 i = 0x0; i < 0x1000; i += 0x10){
-            RSDP* ptr = $RSDP* (ebda + i);
-            if(rsdp_validate(ptr)) {
-                rsdp = ptr;
-            }
-        }
-
-        //look in 0x000E0000 to 0x000FFFFF
-        for(u64 i = 0xe0000; i < 0x100000; i += 0x10) {
-            RSDP* ptr = $RSDP* i;
-            if(rsdp_validate(ptr)) {
-                rsdp = ptr;
-            }
-        }
-    }
+    //get physical location of RSDP struct from bootinfo
+    RSDP* rsdp = $RSDP* bootinfo->rsdp_phys;
     assert(rsdp != nullptr, "init_acpi() : could not find RSDP");
+    assert(rsdp_validate(rsdp), "init_acpi() : RSDP failed to validate");
     cout << "ACPI REVISION : " << ($u64 rsdp->revision) << "\n";
 
-    // right now, only support ACPI v1.0
-    assert(rsdp->revision == $u8 0x0, "init_acpi() : only support ACPI v1.0");
-
-    //find RSDT struct. 
-    RSDT* rsdt = $RSDT* $u64 rsdp->rsdt_address;
-    assert(acpi_validate(@rsdt->header, "RSDT"), "init_acpi() : could not validate RSDT");
-    {
-        cout << "RSDT CONTENTS : ";
-        u32* ptrs = $u32* @(rsdt->pstart);
-        for(u64 i = 0x0; i < ($u64 rsdt->header.length - sizeof(ACPIHeader)) / sizeof(u32); i++) {
-            ACPIHeader* nheader = $ACPIHeader* $u64 ptrs[i];
-            for(u64 j = 0x0; j < 0x4; j++) cout << nheader->signature[j];
-            cout << " ";
-        }
-        cout << "\n";
+    //validate RSDT / XSDT
+    void* sdt = nullptr;
+    i32 is_xsdt = 0;
+    if ($i32 rsdp->revision >= 2 && rsdp->xsdt_address != 0x0) {
+        sdt = $void* $u64 rsdp->xsdt_address;
+        is_xsdt = 1;
+        assert(acpi_validate($ACPIHeader* sdt, "XSDT"), "init_acpi: bad XSDT");
+    } 
+    else {
+        sdt = $void* $u64 rsdp->rsdt_address;
+        is_xsdt = 0;
+        assert(acpi_validate($ACPIHeader* sdt, "RSDT"), "init_acpi: bad RSDT");
     }
-    
+
     //initialize HPET
-    init_hpet(rsdt);
+    HPET* hpet = $HPET* sdt_find_entry(sdt, is_xsdt, "HPET");
+    assert(hpet != nullptr, "init_acpi() : failed to find HPET");
+    init_hpet(hpet);
 
     cout << "done init acpi\n";
     return 0;
@@ -192,13 +195,21 @@ void hpet_get_sys_time(timespec* ts) {
     ts->tv_nsec = $i64 (hpet_ns % $u64 1000000000);
 }
 
-i32 init_hpet(RSDT* rsdt) {
-    //find HPET entry
-    HPET* hpet = $HPET* rsdt_find_entry(rsdt, "HPET");
-    assert(hpet != nullptr, "init_hpet() : could not find HPET");
+i32 init_hpet(HPET* hpet) {
+    println("start init HPET");
+    assert(hpet != nullptr, "init_hpet() : HPET should not be null");
 
     //find HPET registers
     HPETRegisters* regs = $HPETRegisters* hpet->address.address;
+
+    //if not mapped, identity map HPET MMIO memory
+    {
+        pagetable_t pt = pt_get_current();
+        void* vaddr = $void* (($u64 regs / PAGE_SIZE) * PAGE_SIZE);
+        if(!pt_is_vaddr_mapped(pt, vaddr)) {
+            pt_map_page(pt, vaddr, vaddr, PTE_WRITEABLE);
+        }
+    }
 
     //enable counter
     regs->config |= 0x01;
@@ -217,6 +228,7 @@ i32 init_hpet(RSDT* rsdt) {
     HPET_SECONDS_BASE = cmos_epoch_sec;
     HPET_MAIN_COUNTER[0] = 0x0;
 
+    println("done init HPET");
     return 0;
 }
 

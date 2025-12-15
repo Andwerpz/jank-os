@@ -220,7 +220,8 @@ void scan_for_ahci(vector<ahci_hba*>& ahci_hbas) {
                 if(class_code == $u8 AHCI_CLASS_CODE && subclass == $u8 AHCI_SUBCLASS) {
                     println("found ahci hba");
 
-					ahci_hba* hba;
+					ahci_hba* hba = $ahci_hba* malloc(sizeof(ahci_hba));
+                    new (hba) ahci_hba();
                     
                     u32 bar5 = pci_read($u8 bus, $u8 device, $u8 function, $u8 0x24); // Base Address Registers -> Memory Space BAR Layout 
                     u8 bar_type = $u8 ((bar5 >> $u32 1) & $u32 0x3); // 0x0 = 32bit; 0x2 = 64bit
@@ -238,11 +239,14 @@ void scan_for_ahci(vector<ahci_hba*>& ahci_hbas) {
                         println("32 bit ABAR");
                     }
 
-                    pt_map_page(pt_get_current(), $void* AHCI_ABAR_PAGE, $void* hba->abar_paddr, PTE_WRITEABLE | PTE_PCD);
-                    pt_map_page(pt_get_current(), $void* (AHCI_ABAR_PAGE + PAGE_SIZE), $void* (hba->abar_paddr + PAGE_SIZE), PTE_WRITEABLE | PTE_PCD);
-                    hba->abar_vaddr = AHCI_ABAR_PAGE;
+                    u64 abar_nr_pages = 0x2;
+                    void* abar_buf = vmalloc(PAGE_SIZE * abar_nr_pages);
+                    for(u64 i = 0x0; i < abar_nr_pages; i++) {
+                        pt_map_page(pt_get_current(), $void* ($u64 abar_buf + i * PAGE_SIZE), $void* (hba->abar_paddr + i * PAGE_SIZE), PTE_WRITEABLE | PTE_PCD);
+                    }
+                    hba->abar_vaddr = $u64 abar_buf;
                     
-					ahci_hbas.push_back(hba);
+                    ahci_hbas.push_back(hba);
                 }
             }
         }

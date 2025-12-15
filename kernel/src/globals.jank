@@ -1,5 +1,6 @@
 
-#global_node SERIAL;
+#global_node BOOTINFO;
+#global_node SERIAL [BOOTINFO];
 #global_node PMA [SERIAL];
 #global_node PAGING [SERIAL, PMA];
 #global_node MALLOC [PMA, PAGING];
@@ -8,3 +9,29 @@
 #global_node IDT [MALLOC, PRINTSTREAM];
 #global_node PIC [MALLOC, PRINTSTREAM];
 #global_node SYSCALL [MALLOC, PRINTSTREAM];
+
+[BOOTINFO] BootInfo* bootinfo = $BootInfo* BOOTBOOT_INFO;
+
+struct MMapEnt {
+    u64 base;
+    u64 size;
+    u32 type;
+}
+
+struct BootInfo {
+    u8[4]   magic;          // 'BOOT' magic
+    
+    u64     fb_base;        // physical base address
+    u32     fb_size;        
+    u32     fb_width;       
+    u32     fb_height;
+    u32     fb_ppsl;        // pixels per scan line, can be greater than width
+
+    u64     rsdp_phys;
+
+    // usage : MMapEnt2 *mmap_ent = &bootinfo.mmap; mmap_ent ++;
+    u32     mmap_entries;   // mmap entry count
+    MMapEnt mmap;       
+}
+
+

@@ -47,15 +47,19 @@ debug: disk drive
 
 # boot directly from partitioned drive
 .PHONY: boot
-boot: drive
+boot: jankos drive
+	@mkdir -p build
+	@cp /usr/share/OVMF/OVMF_VARS_4M.fd ./build/OVMF_VARS_4M.work.fd
 	qemu-system-x86_64 \
-    -no-reboot \
-	-m 8G \
-	-d int,cpu_reset \
-    -serial stdio \
-    -device ich9-ahci,id=ahci \
-    -drive file=drive.img,if=none,id=bootdisk,format=raw \
-    -device ide-hd,bus=ahci.0,drive=bootdisk
+		-machine q35 \
+		-m 2G \
+		-no-reboot \
+		-serial stdio \
+		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
+		-device ich9-ahci,id=ahci \
+		-drive file=drive.img,if=none,id=bootdisk,format=raw \
+		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0
 
 # clean up
 clean:
