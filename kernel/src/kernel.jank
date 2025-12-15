@@ -4,6 +4,8 @@
 #include <vector>;
 #include <deque>;
 
+#include "memlayout.jank";
+#include "panic.jank";
 #include "serial.jank";
 #include "vga.jank";
 #include "pma.jank";
@@ -66,25 +68,18 @@ void mem_touch(u64 low, u64 high) {
 }
 
 void print_mmap() {
-    // BootInfo* bootinfo = $BootInfo* BOOTBOOT_INFO;
-    // MMapEnt* mmap = $MMapEnt* @(bootinfo->mmap);
-    // u8* end = $u8* ($u64 bootinfo + $u64 bootinfo->size);
-    // while($u64 mmap < $u64 end) {
-    //     u64 type = mmap->size & $u64 0xf;
-    //     u64 addr = mmap->ptr;                            // physical address
-    //     u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
+    MMapEnt* mmap = $MMapEnt* @(bootinfo->mmap);
+    for(u64 i = 0x0; i < $u64 bootinfo->mmap_entries; i++) {
+        u64 base = mmap->base;
+        u64 size = mmap->size;
+        u64 type = $u64 mmap->type;
 
-    //     println("");
-    //     println("Found: ");
-    //     print("Addr: ");
-    //     println($void* addr);
-    //     print("Size: ");
-    //     println($void* size);
-    //     print("Type: ");
-    //     println($void* type);
+        print("base : ", $void* base);
+        print(", size : ", $void* size);
+        println(", type : ", $void* type);
 
-    //     mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
-    // }
+        mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
+    }
 }
 
 void tests() {
@@ -115,30 +110,6 @@ void tests() {
         assert(pt_is_vaddr_mapped(kernel_pt, $void* 0x10000), "bruh");
 
         mem_touch(tlow, thigh);
-    }
-
-    //check if all MMAP_FREE pages can be touched and are actually mapped
-    if(0) {
-        // pagetable_t kernel_pt = pt_get_current();
-        // BootInfo* bootinfo = $BootInfo* BOOTBOOT_INFO;
-        // MMapEnt* mmap = $MMapEnt* @(bootinfo->mmap);
-        // u8* end = $u8* ($u64 bootinfo + $u64 bootinfo->size);
-        // while($u64 mmap < $u64 end) {
-        //     u64 type = mmap->size & $u64 0xf;
-        //     u64 addr = mmap->ptr;                            // physical address
-        //     u64 size = mmap->size & $u64 0xfffffffffffffff0; // size in bytes
-
-        //     if(type == $u64 1) {                      
-        //         mem_touch(addr, addr + size);
-
-        //         u64 base = (addr + PAGE_SIZE - $u64 1) & ~(PAGE_SIZE - $u64 1);
-        //         while(base + PAGE_SIZE <= addr + size) {
-        //             assert(pt_is_vaddr_mapped(kernel_pt, $void* base), "this should be mapped");
-        //             base += PAGE_SIZE;
-        //         }
-        //     }   
-        //     mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
-        // }
     }
 
     //check if we can map new pages

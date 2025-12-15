@@ -1,5 +1,3 @@
-#include "panic.jank";
-#include "memlayout.jank";
 
 // Physical Memory Allocator
 // uses a free list to keep track of userspace memory
@@ -11,27 +9,17 @@ struct phys_page_node {
     phys_page_node* prev;
 }
 
-//find all the memory that is marked as MMAP_FREE, and add it to the physical memory allocator. 
-//note that above 2MB, there might be a pagetable page every 2MB, so skip those pages to be safe. 
+//find all the memory that is marked as EfiConventionalMemory and mark it as free
 i32 init_pma() {
     print("init_pma\n");
 
     MMapEnt* mmap = $MMapEnt* @(bootinfo->mmap);
     u64 freepg_cntr = 0x0;
 
-    print("Got MMAP\n");
-    println("Ent loc : ", $void* @(bootinfo->mmap_entries));
-    println("MMAP entries : ", $void* $u64 bootinfo->mmap_entries);
-
     for(u64 i = 0x0; i < $u64 bootinfo->mmap_entries; i++) {
         u64 base = mmap->base;
         u64 size = mmap->size;
         u64 type = $u64 mmap->type;
-
-        println("base : ", $void* base);
-        println("size : ", $void* size);
-        println("type : ", $void* type);
-        println("");
 
         //EFI conventional memory
         if(type == 0x7) {

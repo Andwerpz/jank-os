@@ -10,6 +10,7 @@
 #global_node PIC [MALLOC, PRINTSTREAM];
 #global_node SYSCALL [MALLOC, PRINTSTREAM];
 
+//constructed by the bootloader
 [BOOTINFO] BootInfo* bootinfo = $BootInfo* BOOTBOOT_INFO;
 
 struct MMapEnt {

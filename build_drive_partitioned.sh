@@ -11,7 +11,7 @@ IMG="${2:-drive.img}"
 IMG_SIZE="${3:-128M}"
 MNT="${4:-.mnt_drive}"
 EFI_BIN_ARG="${5:-./bootloader/uefi/build/BOOTX64.EFI}"
-KERNEL_BIN_ARG="${6:-./build/boot/kernel.out}"
+KERNEL_BIN_ARG="${6:-./kernel/build/kernel.bin}"
 
 EFI_BIN="${EFI_BIN:-$EFI_BIN_ARG}"         # allow override via env var
 KERNEL_BIN="${KERNEL_BIN:-$KERNEL_BIN_ARG}" # allow override via env var
@@ -118,15 +118,12 @@ fi
 
 
 # Install kernel binary 
-echo "[*] Converting kernel ELF -> flat binary"
-KERNEL_BIN_FLAT="$(mktemp)"
-trap 'rm -f "$KERNEL_BIN_FLAT"' EXIT
-
-objcopy -O binary "$KERNEL_BIN" "$KERNEL_BIN_FLAT"
+echo "[*] Building kernel binary (make -C ./kernel)"
+make -C "./kernel"
 
 echo "[*] Installing kernel -> /EFI/JANKOS/KERNEL.BIN"
 sudo mkdir -p "$MNT/esp/EFI/JANKOS"
-sudo cp -f "$KERNEL_BIN_FLAT" "$MNT/esp/EFI/JANKOS/KERNEL.BIN"
+sudo cp -f "$KERNEL_BIN" "$MNT/esp/EFI/JANKOS/KERNEL.BIN"
 
 
 echo "[*] Mounting p2 (ext2) at $MNT/root"

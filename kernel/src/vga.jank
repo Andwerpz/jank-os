@@ -7,7 +7,7 @@
 [__GLOBAL_FIRST__] u32 COLOR_BLACK = $u32 0x00000000;
 [__GLOBAL_FIRST__] u32 COLOR_GRAY = $u32 0x00aaaaaa;
 
-[__GLOBAL_FIRST__] extern u8 _binary_kernel_font_psf_start;
+[__GLOBAL_FIRST__] extern u8 _binary_font_psf_start;
 
 struct psf_header {
     u32 magic;
@@ -32,7 +32,7 @@ void draw_pixel(i32 x, i32 y, u32 color) {
 //top left corner positioned at (x, y)
 //the bits within each byte are big endian, but the bytes themselves are little endian. 
 void draw_char(i32 x, i32 y, u8 c) {
-    psf_header* font = $psf_header* @_binary_kernel_font_psf_start;
+    psf_header* font = $psf_header* @_binary_font_psf_start;
     u64 bpl = ($u64 font->width + $u64 7) / $u64 8;
     u8* glyph = $u8* ($u64 font + $u64 font->headersize + $u64 font->bytesperglyph * $u64 c);
     for(i32 j = 0; j < $i32 font->height; j++){
@@ -49,7 +49,7 @@ void draw_char(i32 x, i32 y, u8 c) {
 }
 
 void draw_string(i32 x, i32 y, u8* str) {
-    psf_header* font = $psf_header* @_binary_kernel_font_psf_start;
+    psf_header* font = $psf_header* @_binary_font_psf_start;
     while(*str) {
         draw_char(x, y, *str);
         x += $i32 font->width;

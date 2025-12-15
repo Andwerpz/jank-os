@@ -40,8 +40,17 @@ CFLAGS += -DEFI_FUNCTION_WRAPPER
 # --------
 # Locate gnu-efi CRT + linker script (paths vary by distro)
 # --------
-CRT0 := $(shell find /usr/lib -name crt0-efi-$(ARCH).o 2>/dev/null | head -n 1)
-LDS  := $(shell find /usr/lib -name elf_$(ARCH)_efi.lds 2>/dev/null | head -n 1)
+CRT0 ?= $(firstword $(wildcard \
+  /usr/lib/*/gnu-efi/crt0-efi-$(ARCH).o \
+  /usr/lib/gnu-efi/crt0-efi-$(ARCH).o \
+  /usr/lib/crt0-efi-$(ARCH).o \
+))
+
+LDS ?= $(firstword $(wildcard \
+  /usr/lib/*/gnu-efi/elf_$(ARCH)_efi.lds \
+  /usr/lib/gnu-efi/elf_$(ARCH)_efi.lds \
+  /usr/lib/elf_$(ARCH)_efi.lds \
+))
 
 # Library search paths (vary by distro packaging)
 LIBDIRS := -L/usr/lib -L/usr/lib/gnu-efi -L/usr/lib/$(ARCH)-linux-gnu -L/usr/lib/$(ARCH)-linux-gnu/gnu-efi
