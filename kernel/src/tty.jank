@@ -31,6 +31,19 @@ struct tty {
     }
 }
 
+tty* tty_create_vga(vga_terminal* term) {
+    tty* tty = $tty* malloc(sizeof(tty));
+    new (tty) tty();
+    tty->termios = tty_gen_default_termios();
+    tty->backend = $void* term;
+    tty->backend_ops = TTY_BACKEND_OPS_VGA;
+    tty->refcount = 0x0;
+
+    term->tty = tty;
+
+    return tty;
+}
+
 //default termios 
 termios tty_gen_default_termios() {
     termios t = new termios();
@@ -67,6 +80,8 @@ termios tty_gen_default_termios() {
 //TODO should move that stuff into an interrupt, the interrupt handler should call tty_accept_input on the tty associated with 
 //the serial backend
 i64 tty_read(tty* tty, u8* buf, u64 amt) {
+    assert(tty != nullptr, "tty_read() : this should not be null");
+
     //poll serial port until out of bytes, feed through accept_input
     {   
         string serial_buf = new string();
@@ -107,6 +122,8 @@ i64 tty_read(tty* tty, u8* buf, u64 amt) {
 
 //writes to backend from buf, handles all output formatting
 i64 tty_write(tty* tty, u8* buf, u64 amt) {
+    assert(tty != nullptr, "tty_write() : this should not be null");
+
     if(!(tty->termios.c_oflag & $u32 TTY_OPOST)) {
         //skip output formatting
         return tty->backend_ops->op_accept_input#(tty, buf, amt);
@@ -144,6 +161,8 @@ i64 tty_write(tty* tty, u8* buf, u64 amt) {
 
 //writes to inq from buf, handles all input formatting, then if ready, writes to outq
 i64 tty_accept_input(tty* tty, u8* buf, u64 amt) {
+    assert(tty != nullptr, "tty_accept_input() : this should not be null");
+
     //stream bytes one by one into inq
     u64 bytes_written = 0x0;
     i32 icrnl = $i32 (tty->termios.c_iflag & $u32 TTY_ICRNL) != 0;

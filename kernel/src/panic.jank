@@ -8,10 +8,6 @@ void panic(u8* msg) {
     }
 }
 
-void panic() {
-    panic("no message");
-}
-
 //'panic assert'
 void assert(i32 val, u8* msg) {
     if(!val) panic(msg);
@@ -19,12 +15,4 @@ void assert(i32 val, u8* msg) {
 
 void assert(u64 val, u8* msg) {
     if(!val) panic(msg);
-}
-
-void assert(i32 val) {
-    if(!val) panic();
-}
-
-void assert(u64 val) {
-    if(!val) panic();
 }

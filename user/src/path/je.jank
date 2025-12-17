@@ -86,10 +86,6 @@ void print_stat(stat* st) {
 
 u8 ESC = $u8 0x1B;
 
-pair<u64, u64> get_terminal_dimensions() {
-    return new pair<u64, u64>($u64 45, $u64 75);
-}
-
 void clear_screen() {
     cout << ESC << "[2J";
 }
@@ -153,11 +149,17 @@ string filename;
 //implied newlines at the end of every line, except for the last line
 vector<string> file;    
 
+//dimensions of the whole terminal, the editor + padding needs to perfectly fit into this
+u64 tdim_rows;  
+u64 tdim_cols;
+
 //dimensions of the editor itself, doesn't account for any padding 
+//this gets updated whenever we render
 u64 edim_rows;
 u64 edim_cols;
 
 //top left coordinate of editor in file space
+//this gets updated whenever we render
 u64 editor_row = 0x0;
 u64 editor_col = 0x0;
 
@@ -182,16 +184,10 @@ string editor_msg = new string("");
 //--|editor message teehee
 //it must be the case that the cursor is contained within the editor window
 void render() {
-    //ensure cursor is inside editor window
-    assert(editor_row <= cursor_row && cursor_row < editor_row + edim_rows, "render() : cursor row not inside editor");
-    assert(editor_col <= cursor_col && cursor_col < editor_col + edim_cols, "render() : cursor col not inside editor");
-
-    //reset screen
-    reset_cursor();
-    clear_screen();
-
-    //how many characters to reserve for line numbers?
-    u64 lnum_reserve = 0x0;
+    //compute how much vertical/horizontal padding we need
+    u64 hpadding = 0x1;         //vertical line
+    u64 vpadding = 0x3;         //top bar + bottom bar + message bar
+    u64 lnum_reserve = 0x0;     //how many characters to reserve for line numbers?
     {
         u64 tmp = file.size();
         while(tmp != 0x0) {
@@ -199,6 +195,33 @@ void render() {
             tmp /= $u64 10;
         }
     }
+    hpadding += lnum_reserve;
+
+    //if there isn't enough room for editor, notify user
+    if(vpadding >= tdim_rows || hpadding >= tdim_cols) {
+        cout << "No room for editor D:\r\n";
+        cout.flush();
+        return;
+    }
+
+    //recompute editor dimensions
+    edim_rows = tdim_rows - vpadding;
+    edim_cols = tdim_cols - hpadding;
+    assert(edim_rows > 0x0 && edim_cols > 0x0, "render() : editor dimensions should be strictly positive");
+
+    //adjust editor window offset so that cursor is within editor window
+    while(editor_row > cursor_row) editor_row --;
+    while(editor_row + edim_rows <= cursor_row) editor_row ++;
+    while(editor_col > cursor_col) editor_col --;
+    while(editor_col + edim_cols <= cursor_col) editor_col ++;
+
+    //ensure cursor is inside editor window
+    assert(editor_row <= cursor_row && cursor_row < editor_row + edim_rows, "render() : cursor row not inside editor");
+    assert(editor_col <= cursor_col && cursor_col < editor_col + edim_cols, "render() : cursor col not inside editor");
+
+    //reset screen
+    clear_screen();
+    reset_cursor();
 
     //top bar
     {
@@ -269,7 +292,7 @@ void render() {
         else cout << editor_msg;
 
         cout << reps_str;
-        cout << "\r\n";
+        cout << "\r";   //don't include last newline
     }
 
     //set cursor position
@@ -536,19 +559,47 @@ i32 main(u64 argc, u8** argv) {
         sys_close(fd);
     }
 
-    //editor loop
+    //prepare editor environment
     enable_raw_mode(STDIN);
     clear_screen();
     reset_cursor();
 
+    //get terminal dimensions
     {
-        pair<u64, u64> dim = get_terminal_dimensions();
-        edim_rows = dim.first;
-        edim_cols = dim.second;
+        //move cursor to (probably) out of bounds
+        cout << ESC << "[9999;9999H";
+        cout.flush();
+
+        //request cursor position
+        cout << ESC << "[6n";
+        cout.flush();
+
+        //read back where cursor is at right now. This is probably the terminal dimensions
+        //this reports back as ESC[#;#R
+        string tok;
+        while(1) {
+            u8 c = cin.next_char();
+            tok.push_back(c);
+            if(c == 'R') break;
+        }
+
+        //parse token
+        tok = tok.substr(0x2, tok.size() - 0x3);
+        vector<string> nr_toks = tok.split(';');
+
+        assert(nr_toks.size() == 0x2, "main() : should have exactly 2 numbers");
+        tdim_rows = stou64(nr_toks[0]);
+        tdim_cols = stou64(nr_toks[1]);
     }
 
-    set_msg(new string("Welcome to jankedit (je) v1.0"));
+    //make sure terminal is of strictly positive size
+    if(tdim_rows == 0x0 || tdim_cols == 0x0) {
+        cout << "Terminal is too small\n";
+        return 1;
+    }
 
+    //editor loop
+    set_msg(new string("Welcome to jankedit (je) v1.0"));
     while(1) {
         //render editor
         render();
@@ -601,12 +652,6 @@ i32 main(u64 argc, u8** argv) {
         //cursor col should always be on some character in the row, or at the very end of the row
         assert(cursor_row < file.size(), "cursor_row should always be inside file");
         assert(cursor_col <= file[cursor_row].size(), "cursor_col should be within row, or at end of row");
-
-        //adjust editor window offset so that cursor is within editor window
-        while(editor_row > cursor_row) editor_row --;
-        while(editor_row + edim_rows <= cursor_row) editor_row ++;
-        while(editor_col > cursor_col) editor_col --;
-        while(editor_col + edim_cols <= cursor_col) editor_col ++;
     }
 
     //should never get here

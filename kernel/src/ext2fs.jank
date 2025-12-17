@@ -306,7 +306,6 @@ i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
 //write a single block to the underlying block device
 i32 ext2_write_block(ext2_fs* fs, u32 block_number, void* buf) {
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
-    assert($u64 fs->block_size % fs->dev->block_size == 0x0);
     u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = $u64 fs->block_size / fs->dev->block_size;
     return blockdev_write(fs->dev, lba_start, count, buf);

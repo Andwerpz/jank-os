@@ -215,13 +215,7 @@ process* create_process(u64 flags) {
         // vga TTY
         vga_terminal* term = $vga_terminal* malloc(sizeof(vga_terminal));
         new (term) vga_terminal();
-
-        tty* tty = $tty* malloc(sizeof(tty));
-        new (tty) tty();
-        tty->termios = tty_gen_default_termios();
-        tty->backend = $void* term;
-        tty->backend_ops = TTY_BACKEND_OPS_VGA;
-        tty->refcount = 0x0;
+        tty* tty = tty_create_vga(term);
 
         proc->fd_table[STDIN] = file_create_tty($u64 O_RDONLY, tty);
         proc->fd_table[STDOUT] = file_create_tty($u64 O_WRONLY, tty);

@@ -78,7 +78,7 @@ void vga_shift_up(u64 lines) {
 }
 
 
-[__GLOBAL_FIRST__] u64 TERMINAL_PARSE_BUF_SIZE = 0x8;
+[__GLOBAL_FIRST__] u64 TERMINAL_PARSE_BUF_SIZE = $u64 16;
 [__GLOBAL_FIRST__] u8 TERMINAL_ESC = $u8 0x1B;  // also written as \x1B
 
 [__GLOBAL_FIRST__] u64 TERMINAL_STATE_ENTRY             = 0x0;
@@ -93,7 +93,9 @@ struct vga_cell {
 }
 
 struct vga_terminal {
-    u8[8] parse_buf;
+    tty* tty;
+
+    u8[16] parse_buf;
     u64 parse_bptr;
     u64 parse_state;
 
@@ -106,6 +108,8 @@ struct vga_terminal {
     vga_cell* cells;
 
     vga_terminal() {
+        this.tty = $tty* nullptr;
+
         psf_header* font = $psf_header* @_binary_font_psf_start;
         this.parse_bptr = 0x0;
         this.grid_rows = $u64 FB_HEIGHT / $u64 font->height;
@@ -158,12 +162,12 @@ void vga_terminal_scroll_up(vga_terminal* term) {
 //if col is outside the grid, wraps it around
 //if row is outside the grid, scrolls screen up by one row and moves row back up one
 void vga_terminal_set_cursor_pos(vga_terminal* term, u64 row, u64 col) {
-    assert(col <= term->grid_cols);
+    assert(col <= term->grid_cols, "vga_terminal_set_cursor_pos() : col should at most be one outside of grid");
     if(col == term->grid_cols) {
         col = 0x0;
         row ++;
     }
-    assert(row <= term->grid_rows);
+    assert(row <= term->grid_rows, "vga_terminal_set_cursor_pos() : row should at most be one outside of grid");
     if(row == term->grid_rows) {
         row --;
         vga_terminal_scroll_up(term);
@@ -339,6 +343,20 @@ void vga_terminal_accept_char(vga_terminal* term, u8 c) {
                 vga_terminal_clear_screen(term);
                 vga_terminal_clear_buf(term);
             }
+            if(n1 == 6 && c == 'n') {   // ESC[6n : report cursor position as ESC[<row>;<col>R
+                assert(term->tty != nullptr, "vga_terminal_accept_char() : tty should not be null");
+                string msg;
+                msg.push_back(TERMINAL_ESC);
+                msg.push_back('[');
+                msg += to_string(term->cursor_row + 0x1);
+                msg.push_back(';');
+                msg += to_string(term->cursor_col + 0x1);
+                msg.push_back('R');
+                if($u64 tty_accept_input(term->tty, msg.jstr(), msg.size()) != msg.size()) {
+                    panic("vga_terminal_accept_char() : this should succeed");
+                }
+                vga_terminal_clear_buf(term);
+            }
             else vga_terminal_flush_buf(term);
         }
     }
@@ -388,8 +406,8 @@ void vga_terminal_accept_char(vga_terminal* term, u8 c) {
                 //clamp to grid
                 n1 = max(n1, 0);
                 n2 = max(n2, 0);
-                n1 = min(n1, $i32 term->grid_cols);
-                n2 = min(n2, $i32 term->grid_rows);
+                n1 = min(n1, $i32 term->grid_cols - 1);
+                n2 = min(n2, $i32 term->grid_rows - 1);
                 //set cursor pos
                 vga_terminal_set_cursor_pos(term, $u64 n2, $u64 n1);
                 vga_terminal_clear_buf(term);

@@ -23,6 +23,7 @@ this means we need a graphic interface, and replace the bootloader with somethin
   - graphic interface
     - implement vga terminal
     - ability to get input directly from the keyboard
+    - seems like my laptop has PS/2 keyboard, we can go ahead and implement drivers for that
 
 - done
   - finish rudimentary read/write filesystem
