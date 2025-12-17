@@ -51,6 +51,6 @@ void blockdev_create_ahci(HBA_PORT* hba, u64 lba_start, u64 block_size, u8 parti
 void init_blockdev() {
     BLOCKDEV_BUF = $blockdev* malloc(sizeof(blockdev) * BLOCKDEV_BUF_MAX);
 
-    init_ahci();
+    init_ahci_blockdev_ops();
     ahci_find();
 }

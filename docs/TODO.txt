@@ -23,7 +23,6 @@ this means we need a graphic interface, and replace the bootloader with somethin
   - graphic interface
     - implement vga terminal
     - ability to get input directly from the keyboard
-  - replace bootboot with custom bootloader
 
 - done
   - finish rudimentary read/write filesystem
@@ -33,3 +32,4 @@ this means we need a graphic interface, and replace the bootloader with somethin
     - seems like this is much more involved than I thought
     - need to create TTY fd for io modification
     - also need to enable raw mode on linux side 
+  - replace bootboot with custom bootloader

@@ -187,8 +187,6 @@ void init_vfs() {
         VFS_ROOT->is_root = 1;
     }
 
-    init_vfs_file_ops();
-
     cout << "done init vfs\n";
 }
 

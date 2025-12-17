@@ -32,7 +32,7 @@ struct GSData {
 
 [__GLOBAL_FIRST__] u64 BOOTBOOT_FB          = 0xfffffffffc000000;   // frame buffer virtual address
 [__GLOBAL_FIRST__] u64 BOOTBOOT_INFO        = 0xffffffffffe00000;   // bootboot struct virtual address
-[__GLOBAL_FIRST__] u64 BOOTBOOT_CORE        = 0xffffffffffe02000;   // core loadable segment start
+[__GLOBAL_FIRST__] u64 BOOTBOOT_CORE        = 0xffffffffffe02000;   // kernel code start
 [__GLOBAL_FIRST__] u64 BOOTBOOT_STACK_TOP   = 0x0000000000000000;   // initial kernel stack
 
 //userspace layout

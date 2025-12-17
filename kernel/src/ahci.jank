@@ -669,7 +669,7 @@ u64 ahci_get_drive_size(HBA_PORT* p) {
 }
 
 [__GLOBAL_FIRST__] blockdev_ops* BLOCKDEV_OPS_AHCI;
-void init_ahci() {
+void init_ahci_blockdev_ops() {
     BLOCKDEV_OPS_AHCI = $blockdev_ops* malloc(sizeof(blockdev_ops));
     new (BLOCKDEV_OPS_AHCI) blockdev_ops();
     BLOCKDEV_OPS_AHCI->read = #<ahci_read(blockdev*, u64, u64, void*)>;

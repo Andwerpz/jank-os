@@ -1,5 +1,6 @@
 
 #global_node BOOTINFO;
+#global_node VGA [BOOTINFO];
 #global_node SERIAL [BOOTINFO];
 #global_node PMA [SERIAL];
 #global_node PAGING [SERIAL, PMA];

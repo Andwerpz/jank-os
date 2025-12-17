@@ -160,3 +160,11 @@ i32 file_fstat(file* file, stat* stat) {
     i32 retval = file->ops->op_fstat#(file, stat);
     return retval;
 }
+
+
+void init_file() {
+    init_serial_file_ops();
+    init_pipe_file_ops();
+    init_tty_file_ops();
+    init_vfs_file_ops();
+}

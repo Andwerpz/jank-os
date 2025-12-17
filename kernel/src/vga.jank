@@ -1,7 +1,8 @@
 [__GLOBAL_FIRST__] u32* FB_ADDR = $u32* 0xfffffffffc000000;
 
-[__GLOBAL_FIRST__] u64 FB_WIDTH = $u64 800;
-[__GLOBAL_FIRST__] u64 FB_HEIGHT = $u64 600;
+[VGA] u64 FB_SCANLINE = $u64 bootinfo->fb_ppsl;
+[VGA] u64 FB_WIDTH = $u64 bootinfo->fb_width;
+[VGA] u64 FB_HEIGHT = $u64 bootinfo->fb_height;
 
 [__GLOBAL_FIRST__] u32 COLOR_WHITE = $u32 0x00ffffff;
 [__GLOBAL_FIRST__] u32 COLOR_BLACK = $u32 0x00000000;
@@ -21,17 +22,13 @@ struct psf_header {
     u8 glyphs;  //glyph starting byte
 }
 
-void draw_pixel(u64 x, u64 y, u32 color) {
-    FB_ADDR[FB_WIDTH * y + x] = color;
-}
-
-void draw_pixel(i32 x, i32 y, u32 color) {
-    draw_pixel($u64 x, $u64 y, color);
+void vga_draw_pixel(u64 x, u64 y, u32 color) {
+    FB_ADDR[FB_SCANLINE * y + x] = color;
 }
 
 //top left corner positioned at (x, y)
 //the bits within each byte are big endian, but the bytes themselves are little endian. 
-void draw_char(i32 x, i32 y, u8 c) {
+void vga_draw_char(u64 x, u64 y, u8 c, u32 bg_col, u32 fg_col) {
     psf_header* font = $psf_header* @_binary_font_psf_start;
     u64 bpl = ($u64 font->width + $u64 7) / $u64 8;
     u8* glyph = $u8* ($u64 font + $u64 font->headersize + $u64 font->bytesperglyph * $u64 c);
@@ -39,20 +36,412 @@ void draw_char(i32 x, i32 y, u8 c) {
         u64 line = ($u64* @(glyph[bpl * $u64 j]))[0];
         for(i32 i = 0; i < $i32 font->width; i++){
             if(line & ($u64 1 << ($u64 font->width - $u64 1 - $u64 i))) {
-                draw_pixel(x + i, y + j, COLOR_WHITE);
+                //foreground
+                vga_draw_pixel(x + $u64 i, y + $u64 j, fg_col);
             }
             else {
-                draw_pixel(x + i, y + j, COLOR_BLACK);
+                //background
+                vga_draw_pixel(x + $u64 i, y + $u64 j, bg_col);
             }
         }
     }
 }
+ 
+void vga_clear_screen(u32 color) {
+    u64 n = FB_HEIGHT * FB_SCANLINE;
+    for(u64 i = 0x0; i < n; i++) FB_ADDR[i] = color;
+}
 
-void draw_string(i32 x, i32 y, u8* str) {
-    psf_header* font = $psf_header* @_binary_font_psf_start;
-    while(*str) {
-        draw_char(x, y, *str);
-        x += $i32 font->width;
-        str = $u8* ($u64 str + $u64 1);
+//shifts whatever is currently drawn up by some amount of lines
+//sets the bottom lines to black
+void vga_shift_up(u64 lines) {
+    assert(lines <= FB_HEIGHT, "vga_shift_up() : shift too large");
+
+    //do shift
+    {
+        u64 dy = lines;                     
+        u64 shamt_px = dy * FB_SCANLINE;        
+
+        u64 total_px = FB_SCANLINE * FB_HEIGHT;
+        u64 copy_px  = total_px - shamt_px;
+
+        u8* dst = $u8* FB_ADDR;
+        u8* src = $u8* @FB_ADDR[shamt_px];
+
+        memmove($void* dst, $void* src, copy_px * sizeof(u32)); 
     }
+
+    //set bottom lines
+    for(u64 i = FB_HEIGHT - lines; i < FB_HEIGHT; i++) {
+        for(u64 j = 0x0; j < FB_SCANLINE; j++) FB_ADDR[i * FB_SCANLINE + j] = COLOR_BLACK;
+    }
+}
+
+
+[__GLOBAL_FIRST__] u64 TERMINAL_PARSE_BUF_SIZE = 0x8;
+[__GLOBAL_FIRST__] u8 TERMINAL_ESC = $u8 0x1B;  // also written as \x1B
+
+[__GLOBAL_FIRST__] u64 TERMINAL_STATE_ENTRY             = 0x0;
+[__GLOBAL_FIRST__] u64 TERMINAL_STATE_ESC               = 0x1;          // ESC
+[__GLOBAL_FIRST__] u64 TERMINAL_STATE_CSI               = 0x2;          // ESC[             (control sequence introducer)
+[__GLOBAL_FIRST__] u64 TERMINAL_STATE_CSI_NR            = 0x3;          // ESC[#*
+[__GLOBAL_FIRST__] u64 TERMINAL_STATE_CSI_NR_SEMI       = 0x4;          // ESC[#*;
+[__GLOBAL_FIRST__] u64 TERMINAL_STATE_CSI_NR_SEMI_NR    = 0x5;          // ESC[#*;#*
+
+struct vga_cell {
+    u8 char;
+}
+
+struct vga_terminal {
+    u8[8] parse_buf;
+    u64 parse_bptr;
+    u64 parse_state;
+
+    u64 grid_rows;
+    u64 grid_cols;
+
+    u64 cursor_row;
+    u64 cursor_col;
+
+    vga_cell* cells;
+
+    vga_terminal() {
+        psf_header* font = $psf_header* @_binary_font_psf_start;
+        this.parse_bptr = 0x0;
+        this.grid_rows = $u64 FB_HEIGHT / $u64 font->height;
+        this.grid_cols = $u64 FB_WIDTH / $u64 font->width;
+        this.cursor_row = 0x0;
+        this.cursor_col = 0x0;
+
+        //initialize cells
+        this.cells = $vga_cell* malloc(sizeof(vga_cell) * this.grid_rows * this.grid_cols);
+        for(u64 i = 0x0; i < this.grid_rows * this.grid_cols; i++) {
+            this.cells[i].char = ' ';
+        }
+    }
+
+    ~vga_terminal() {
+        free($void* this.cells, sizeof(vga_cell) * this.grid_rows * this.grid_cols);
+    }
+}
+
+//clears grid, sets all pixels to black
+void vga_terminal_clear_screen(vga_terminal* term) {
+    for(u64 i = 0x0; i < term->grid_rows * term->grid_cols; i++) {
+        vga_cell* cell = @(term->cells[i]);
+        cell->char = ' ';
+    }
+
+    vga_clear_screen(COLOR_BLACK);
+}
+
+//scrolls the terminal up one row, makes the bottom row empty
+//doesn't move the cursor
+void vga_terminal_scroll_up(vga_terminal* term) {
+    //grid scroll
+    {
+        vga_cell* dst = term->cells;
+        vga_cell* src = @(dst[term->grid_cols]);
+        memmove($void* dst, $void* src, sizeof(vga_cell) * (term->grid_rows - 0x1) * term->grid_cols);
+
+        for(u64 i = 0x0; i < term->grid_cols; i++) {
+            vga_cell* cell = @(term->cells[(term->grid_rows - 0x1) * term->grid_cols + i]);
+            cell->char = ' ';
+        }
+    }
+
+    //visual scroll
+    psf_header* font = $psf_header* @_binary_font_psf_start;
+    vga_shift_up($u64 font->height);
+}
+
+//if col is outside the grid, wraps it around
+//if row is outside the grid, scrolls screen up by one row and moves row back up one
+void vga_terminal_set_cursor_pos(vga_terminal* term, u64 row, u64 col) {
+    assert(col <= term->grid_cols);
+    if(col == term->grid_cols) {
+        col = 0x0;
+        row ++;
+    }
+    assert(row <= term->grid_rows);
+    if(row == term->grid_rows) {
+        row --;
+        vga_terminal_scroll_up(term);
+    }
+    term->cursor_row = row;
+    term->cursor_col = col;
+}
+
+void vga_terminal_set_cursor_row(vga_terminal* term, u64 row) {
+    vga_terminal_set_cursor_pos(term, row, term->cursor_col);
+}
+
+void vga_terminal_set_cursor_col(vga_terminal* term, u64 col) {
+    vga_terminal_set_cursor_pos(term, term->cursor_row, col);
+}
+
+void vga_terminal_inc_cursor_row(vga_terminal* term) {
+    vga_terminal_set_cursor_row(term, term->cursor_row + 0x1);
+}
+
+void vga_terminal_inc_cursor_col(vga_terminal* term) {
+    vga_terminal_set_cursor_col(term, term->cursor_col + 0x1);
+}
+
+//draws character onto screen at cursor position, updates cursor position
+//does default cursor movement (increments cursor col)
+void vga_terminal_draw_char(vga_terminal* term, u8 c) {
+    //draw char
+    psf_header* font = $psf_header* @_binary_font_psf_start;
+    u64 x = term->cursor_col * $u64 font->width;
+    u64 y = term->cursor_row * $u64 font->height;
+    vga_draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
+
+    //update grid cell
+    vga_cell* cell = @(term->cells[term->cursor_row * term->grid_cols + term->cursor_col]);
+    cell->char = c;
+
+    //update cursor
+    vga_terminal_inc_cursor_col(term);
+}
+
+void vga_terminal_draw_string(vga_terminal* term, u8* str) {
+    u64 len = strlen(str);
+    for(u64 i = 0x0; i < len; i++) {
+        vga_terminal_draw_char(term, str[i]);
+    }
+}
+
+//flush buffer of chars in finite state machine to be drawn
+//sets parse state to TERMINAL_STATE_ENTRY
+void vga_terminal_flush_buf(vga_terminal* term) {
+    assert(term->parse_bptr <= TERMINAL_PARSE_BUF_SIZE, "vga_terminal_flush_buf() : ideally, buffer should not overflow");
+    for(u64 i = 0x0; i < term->parse_bptr; i++) {
+        u8 c = term->parse_buf[i];
+        if(c == TERMINAL_ESC) {
+            vga_terminal_draw_string(term, "\\x1B");
+        }
+        else if(c >= ($u8 0x20) && c <= ($u8 0x7E)){
+            //printable characters
+            vga_terminal_draw_char(term, c);
+        }
+    }
+    term->parse_bptr = 0x0;
+    term->parse_state = TERMINAL_STATE_ENTRY;
+}
+
+//empties the terminal parse buffer without drawing
+//sets parse state to TERMINAL_STATE_ENTRY
+void vga_terminal_clear_buf(vga_terminal* term) {
+    term->parse_bptr = 0x0;
+    term->parse_state = TERMINAL_STATE_ENTRY;
+}
+
+void vga_terminal_buf_append(vga_terminal* term, u8 c) {
+    assert(term->parse_bptr < TERMINAL_PARSE_BUF_SIZE, "vga_terminal_buf_append() : check for buffer overflow");
+    term->parse_buf[term->parse_bptr ++] = c;
+}
+
+//finite state machine parser to handle one char at a time
+void vga_terminal_accept_char(vga_terminal* term, u8 c) {
+    if(term->parse_state == TERMINAL_STATE_ENTRY) {
+        if(c == TERMINAL_ESC) {
+            //ANSI escape sequence start
+            vga_terminal_buf_append(term, c);
+            term->parse_state = TERMINAL_STATE_ESC;
+        }
+        else if(c == '\n') {
+            //newline, increment cursor row
+            vga_terminal_inc_cursor_row(term);
+        }
+        else if(c == '\r') {
+            //carriage return, set cursor back to beginning
+            vga_terminal_set_cursor_col(term, 0x0);
+        }
+        else if(c == '\b') {
+            //backspace, decrement cursor col if it's not at the beginning of the line
+            if(term->cursor_col != 0x0) {
+                vga_terminal_set_cursor_col(term, term->cursor_col - 0x1);
+            }
+        }
+        else if(c <= $u8 0x1F) {
+            //no-op control char
+            vga_terminal_draw_char(term, '^');
+            vga_terminal_draw_char(term, c + $u8 0x40);
+        }
+        else if(c == $u8 0x7F) {
+            //DEL char
+            vga_terminal_draw_string(term, "DEL");
+        }
+        else if(c >= ($u8 0x20) && c <= ($u8 0x7E)){
+            //just print it
+            vga_terminal_draw_char(term, c);
+        }
+    }
+    else if(term->parse_state == TERMINAL_STATE_ESC) {
+        vga_terminal_buf_append(term, c);
+        if(c == '[') {
+            term->parse_state = TERMINAL_STATE_CSI;
+        }
+        else vga_terminal_flush_buf(term);
+    }
+    else if(term->parse_state == TERMINAL_STATE_CSI) {
+        vga_terminal_buf_append(term, c);
+        if('0' <= c && c <= '9') {
+            term->parse_state = TERMINAL_STATE_CSI_NR;
+        }
+        else if(c == 'A') {     // ESC[A : up arrow
+            if(term->cursor_row != 0x0) vga_terminal_set_cursor_row(term, term->cursor_row - 0x1);
+            vga_terminal_clear_buf(term);
+        }
+        else if(c == 'B') {     // ESC[B : down arrow
+            vga_terminal_inc_cursor_row(term);
+            vga_terminal_clear_buf(term);
+        }
+        else if(c == 'C') {     // ESC[C : right arrow
+            vga_terminal_inc_cursor_col(term);
+            vga_terminal_clear_buf(term);
+        }
+        else if(c == 'D') {     // ESC[D : left arrow
+            if(term->cursor_col != 0x0) vga_terminal_set_cursor_col(term, term->cursor_col - 0x1);
+            vga_terminal_clear_buf(term);
+        }
+        else if(c == 'H') {     // ESC[H : moves cursor to origin (0, 0)
+            vga_terminal_set_cursor_pos(term, 0x0, 0x0);
+            vga_terminal_clear_buf(term);
+        }
+        else vga_terminal_flush_buf(term);
+    }
+    else if(term->parse_state == TERMINAL_STATE_CSI_NR) {
+        vga_terminal_buf_append(term, c);
+        if('0' <= c && c <= '9') {
+            term->parse_state = TERMINAL_STATE_CSI_NR;
+        }
+        else if(c == ';') {
+            term->parse_state = TERMINAL_STATE_CSI_NR_SEMI;
+        }
+        else {
+            //parse the number, see if it matches with an ANSI escape sequence
+            assert(term->parse_bptr >= 0x2, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR should have enough room for digits");
+            u64 ptr = term->parse_bptr - 0x2;
+            assert('0' <= term->parse_buf[ptr] && term->parse_buf[ptr] <= '9', "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR should be a digit");
+            i32 pow10 = 1;
+            i32 n1 = 0;
+            while('0' <= term->parse_buf[ptr] && term->parse_buf[ptr] <= '9') {
+                assert(ptr != 0x0, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR should always be something before the number");
+                i32 dig = $i32 (term->parse_buf[ptr] - '0');
+                n1 += dig * pow10;
+                pow10 *= 10;
+                ptr --;
+            }
+            assert(term->parse_buf[ptr] == '[' && ptr == 0x1, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR making sure read all of the number");
+            if(n1 == 2 && c == 'J') {   // ESC[2J : erase entire screen
+                vga_terminal_clear_screen(term);
+                vga_terminal_clear_buf(term);
+            }
+            else vga_terminal_flush_buf(term);
+        }
+    }
+    else if(term->parse_state == TERMINAL_STATE_CSI_NR_SEMI) {
+        vga_terminal_buf_append(term, c);
+        if('0' <= c && c <= '9') {
+            term->parse_state = TERMINAL_STATE_CSI_NR_SEMI_NR;
+        }
+        else vga_terminal_flush_buf(term);
+    }
+    else if(term->parse_state == TERMINAL_STATE_CSI_NR_SEMI_NR) {
+        vga_terminal_buf_append(term, c);
+        if('0' <= c && c <= '9') {
+            term->parse_state = TERMINAL_STATE_CSI_NR_SEMI_NR;
+        }
+        else {
+            //parse the numbers, see if they match with an ANSI escape sequence
+            assert(term->parse_bptr >= 0x2, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR_SEMI_NR should have enough room for digits");
+            u64 ptr = term->parse_bptr - 0x2;
+            assert('0' <= term->parse_buf[ptr] && term->parse_buf[ptr] <= '9', "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR_SEMI_NR should be a digit");
+            i32 pow10 = 1;
+            i32 n1 = 0;
+            while('0' <= term->parse_buf[ptr] && term->parse_buf[ptr] <= '9') {
+                assert(ptr != 0x0, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR_SEMI_NR should always be something before the number");
+                i32 dig = $i32 (term->parse_buf[ptr] - '0');
+                n1 += dig * pow10;
+                pow10 *= 10;
+                ptr --;
+            }
+            assert(term->parse_buf[ptr] == ';' && ptr >= 0x1, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR_SEMI_NR should be at semicolon now");
+            ptr --;
+            assert('0' <= term->parse_buf[ptr] && term->parse_buf[ptr] <= '9', "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR_SEMI_NR should be a digit 2");
+            pow10 = 1;
+            i32 n2 = 0;
+            while('0' <= term->parse_buf[ptr] && term->parse_buf[ptr] <= '9') {
+                assert(ptr != 0x0, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR_SEMI_NR should always be something before the number");
+                i32 dig = $i32 (term->parse_buf[ptr] - '0');
+                n2 += dig * pow10;
+                pow10 *= 10;
+                ptr --;
+            }       
+            assert(term->parse_buf[ptr] == '[' && ptr == 0x1, "vga_terminal_accept_char() : TERMINAL_STATE_CSI_NR_SEMI_NR making sure read all of the number");
+            if(c == 'H' || c == 'f') {  // ESC[{line};{column}H ESC[{line};{column}f : set cursor position
+                //row and column are given as 1-indexed, convert to 0-indexed
+                n1 --;
+                n2 --;
+                //clamp to grid
+                n1 = max(n1, 0);
+                n2 = max(n2, 0);
+                n1 = min(n1, $i32 term->grid_cols);
+                n2 = min(n2, $i32 term->grid_rows);
+                //set cursor pos
+                vga_terminal_set_cursor_pos(term, $u64 n2, $u64 n1);
+                vga_terminal_clear_buf(term);
+            }               
+            else vga_terminal_flush_buf(term);
+        }
+    }
+    else panic("vga_terminal_accept_char() : invalid parse state");
+}
+
+void vga_terminal_accept_str(vga_terminal* term, u8* buf, u64 amt) {
+    //de-render cursor
+    {
+        psf_header* font = $psf_header* @_binary_font_psf_start;
+        u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
+        u64 x = term->cursor_col * $u64 font->width;
+        u64 y = term->cursor_row * $u64 font->height;
+        vga_draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
+    }
+
+    //accept all chars
+    for(u64 i = 0x0; i < amt; i++) {
+        vga_terminal_accept_char(term, buf[i]);
+    }
+
+    //render cursor
+    {
+        psf_header* font = $psf_header* @_binary_font_psf_start;
+        u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
+        u64 x = term->cursor_col * $u64 font->width;
+        u64 y = term->cursor_row * $u64 font->height;
+        vga_draw_char(x, y, c, COLOR_WHITE, COLOR_BLACK);
+    }
+}
+
+[__GLOBAL_FIRST__] tty_backend_ops* TTY_BACKEND_OPS_VGA;
+void init_vga_tty_backend_ops() {
+    TTY_BACKEND_OPS_VGA = $tty_backend_ops* malloc(sizeof(tty_backend_ops));
+    new (TTY_BACKEND_OPS_VGA) tty_backend_ops();
+    TTY_BACKEND_OPS_VGA->op_accept_input = #<vga_accept_input(tty*, u8*, u64)>;
+    TTY_BACKEND_OPS_VGA->op_close = #<vga_close(tty*)>;
+}
+
+i64 vga_accept_input(tty* tty, u8* buf, u64 amt) {
+    vga_terminal* term = $vga_terminal* tty->backend;
+    vga_terminal_accept_str(term, buf, amt);
+    return $i64 amt;
+}
+
+i32 vga_close(tty* tty) {
+    //free terminal struct
+    vga_terminal* term = $vga_terminal* tty->backend;
+    term->~();
+    return 0;
 }

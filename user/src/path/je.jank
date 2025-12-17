@@ -87,7 +87,7 @@ void print_stat(stat* st) {
 u8 ESC = $u8 0x1B;
 
 pair<u64, u64> get_terminal_dimensions() {
-    return new pair<u64, u64>($u64 50, $u64 75);
+    return new pair<u64, u64>($u64 45, $u64 75);
 }
 
 void clear_screen() {

@@ -204,11 +204,23 @@ process* create_process(u64 flags) {
     if(flags & PROCESS_CREATE_FDTABLE) {
         assert(proc->pid == $pid_t 0x1, "create_process() : should only create new fdtable for init process");
         
+        // serial TTY
+        // tty* tty = $tty* malloc(sizeof(tty));
+        // new (tty) tty();
+        // tty->termios = tty_gen_default_termios();
+        // tty->backend = nullptr;
+        // tty->backend_ops = TTY_BACKEND_OPS_SERIAL;
+        // tty->refcount = 0x0;
+
+        // vga TTY
+        vga_terminal* term = $vga_terminal* malloc(sizeof(vga_terminal));
+        new (term) vga_terminal();
+
         tty* tty = $tty* malloc(sizeof(tty));
         new (tty) tty();
         tty->termios = tty_gen_default_termios();
-        tty->backend = nullptr;
-        tty->backend_ops = TTY_BACKEND_OPS_SERIAL;
+        tty->backend = $void* term;
+        tty->backend_ops = TTY_BACKEND_OPS_VGA;
         tty->refcount = 0x0;
 
         proc->fd_table[STDIN] = file_create_tty($u64 O_RDONLY, tty);

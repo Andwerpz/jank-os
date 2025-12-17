@@ -193,7 +193,7 @@ i64 tty_accept_input(tty* tty, u8* buf, u64 amt) {
             i32 echoe = $i32 (tty->termios.c_lflag & $u32 TTY_ECHOE);
             if(c == tty->termios.c_cc[TTY_VERASE] && echoe && erased) {
                 //echo "\b \b" to visually erase
-                if($u64 (tty->backend_ops->op_accept_input#(tty, "\b \b", 0x3))  != 0x3) {
+                if($u64 (tty->backend_ops->op_accept_input#(tty, "\b \b", 0x3)) != 0x3) {
                     panic("tty_accept_input() : this should succeed");
                 }
             }
@@ -309,4 +309,10 @@ i32 tty_fstat(file* file, stat* stat) {
     stat->st_blocks = $i64 0x0;
 
     return 0;
+}
+
+
+void init_tty() {
+    init_vga_tty_backend_ops();
+    init_serial_tty_backend_ops();
 }
