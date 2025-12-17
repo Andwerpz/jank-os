@@ -30,6 +30,8 @@
 #include "blockdev.jank";
 #include "ahci.jank";
 #include "mbr.jank";
+#include "ps2.jank";
+#include "kb.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -228,6 +230,7 @@ void blockdev_mount_ext2() {
 
 i32 main() {
     init_acpi();
+    init_ps2();
     init_file();
     init_tty();
     init_vfs();
