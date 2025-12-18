@@ -229,6 +229,7 @@ void blockdev_mount_ext2() {
 }
 
 i32 main() {
+    init_kb();
     init_acpi();
     init_ps2();
     init_file();

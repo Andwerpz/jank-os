@@ -4,6 +4,14 @@
 // legacy chip to manage hardware interrupts. 
 // replaced by APIC in modern systems
 
+// the 8259 PIC comes as two chips chained together so you can handle 16 IRQ lines instead of 8
+// Master handles IRQ0 - IRQ7 and Slave handles IRQ8 - IRQ15
+// the Slave is wired into the Master via IRQ2
+// when a Slave interrupt happens, it triggers the Master's IRQ2, and the CPU queries both to identify the real IRQ
+
+// IRQ0 : PIT
+// IRQ1 : usually keyboard?
+
 [__GLOBAL_FIRST__] u16 PIC_MASTER_COMMAND   = $u16 0x0020;
 [__GLOBAL_FIRST__] u16 PIC_MASTER_DATA      = $u16 0x0021;
 [__GLOBAL_FIRST__] u16 PIC_SLAVE_COMMAND    = $u16 0x00a0;
@@ -25,27 +33,31 @@ i32 init_pic() {
 
     //initialize PIC (send signal 0x11)
     //after this, both PICs will wait for 3 extra initialization bytes:
-    // - Its vector offset. (ICW2)
+    // - Its vector offset on the IDT. (ICW2)
     // - Tell it how it is wired to master/slaves. (ICW3)
     // - Gives additional information about the environment. (ICW4)
-    outb(PIC_MASTER_COMMAND, $u8 0x11);
-    outb(PIC_SLAVE_COMMAND, $u8 0x11);
+    {
+        //initialize
+        outb(PIC_MASTER_COMMAND, $u8 0x11);
+        outb(PIC_SLAVE_COMMAND, $u8 0x11);
 
-    //ICW2
-    outb(PIC_MASTER_DATA, $u8 0x20);
-    outb(PIC_SLAVE_DATA, $u8 0x28);
+        //ICW2
+        outb(PIC_MASTER_DATA, $u8 0x20);
+        outb(PIC_SLAVE_DATA, $u8 0x28);
 
-    //ICW3
-    outb(PIC_MASTER_DATA, $u8 0x04);    //tell master there is slave pic at IRQ2
-    outb(PIC_SLAVE_DATA, $u8 0x02);     //tell slave its cascade identity
+        //ICW3
+        outb(PIC_MASTER_DATA, $u8 0x04);    //tell master there is slave pic at IRQ2
+        outb(PIC_SLAVE_DATA, $u8 0x02);     //tell slave its cascade identity
 
-    //ICW4, have PICs use 8086 mode
-    outb(PIC_MASTER_DATA, $u8 0x01);
-    outb(PIC_SLAVE_DATA, $u8 0x01);
+        //ICW4, have PICs use 8086 mode
+        outb(PIC_MASTER_DATA, $u8 0x01);
+        outb(PIC_SLAVE_DATA, $u8 0x01);
+    }
 
     //set PIC masks
-    outb(PIC_MASTER_DATA, $u8 0b11111110);
-    outb(PIC_SLAVE_DATA, $u8 0b11111111);
+    //which IRQs are allowed to interrupt the CPU? (not set is allowed)
+    outb(PIC_MASTER_DATA, $u8 0b11111100);
+    outb(PIC_SLAVE_DATA,  $u8 0b11111111);
 
     //setup PIT
     {

@@ -36,16 +36,16 @@
 [__GLOBAL_FIRST__] u32 KEYCODE_Z              = $u32 26;
 
 // number row
-[__GLOBAL_FIRST__] u32 KEYCODE_1              = $u32 27;
-[__GLOBAL_FIRST__] u32 KEYCODE_2              = $u32 28;
-[__GLOBAL_FIRST__] u32 KEYCODE_3              = $u32 29;
-[__GLOBAL_FIRST__] u32 KEYCODE_4              = $u32 30;
-[__GLOBAL_FIRST__] u32 KEYCODE_5              = $u32 31;
-[__GLOBAL_FIRST__] u32 KEYCODE_6              = $u32 32;
-[__GLOBAL_FIRST__] u32 KEYCODE_7              = $u32 33;
-[__GLOBAL_FIRST__] u32 KEYCODE_8              = $u32 34;
-[__GLOBAL_FIRST__] u32 KEYCODE_9              = $u32 35;
-[__GLOBAL_FIRST__] u32 KEYCODE_0              = $u32 36;
+[__GLOBAL_FIRST__] u32 KEYCODE_0              = $u32 27;
+[__GLOBAL_FIRST__] u32 KEYCODE_1              = $u32 28;
+[__GLOBAL_FIRST__] u32 KEYCODE_2              = $u32 29;
+[__GLOBAL_FIRST__] u32 KEYCODE_3              = $u32 30;
+[__GLOBAL_FIRST__] u32 KEYCODE_4              = $u32 31;
+[__GLOBAL_FIRST__] u32 KEYCODE_5              = $u32 32;
+[__GLOBAL_FIRST__] u32 KEYCODE_6              = $u32 33;
+[__GLOBAL_FIRST__] u32 KEYCODE_7              = $u32 34;
+[__GLOBAL_FIRST__] u32 KEYCODE_8              = $u32 35;
+[__GLOBAL_FIRST__] u32 KEYCODE_9              = $u32 36;
 
 // control keys
 [__GLOBAL_FIRST__] u32 KEYCODE_ENTER          = $u32 37;
@@ -278,10 +278,187 @@ u8* kb_keyaction_name(u32 action) {
     return "UNKNOWN_ACTION";
 }
 
+//for now, just translate key event into ANSI and send to active TTY
+[KB] u8* KB_BUF;
+[KB] i32* KB_PRESSED;
+[KB] i32 KB_CAPS_LOCK = 0;
+[KB] u8* KB_LOWERCASE;
+[KB] u8* KB_UPPERCASE;
+void init_kb() {    
+    KB_BUF = $u8* malloc(0xFF);
+    KB_PRESSED = $i32* malloc(0xFF * sizeof(i32));
+    memset($void* KB_PRESSED, 0, 0xFF * sizeof(i32));
+
+    KB_LOWERCASE = $u8* malloc(0xFF);
+    KB_UPPERCASE = $u8* malloc(0xFF);
+
+    memset($void* KB_LOWERCASE, 0, 0xFF);
+    memset($void* KB_UPPERCASE, 0, 0xFF);
+
+    KB_LOWERCASE[KEYCODE_A] = 'a'; KB_UPPERCASE[KEYCODE_A] = 'A';
+    KB_LOWERCASE[KEYCODE_B] = 'b'; KB_UPPERCASE[KEYCODE_B] = 'B';
+    KB_LOWERCASE[KEYCODE_C] = 'c'; KB_UPPERCASE[KEYCODE_C] = 'C';
+    KB_LOWERCASE[KEYCODE_D] = 'd'; KB_UPPERCASE[KEYCODE_D] = 'D';
+    KB_LOWERCASE[KEYCODE_E] = 'e'; KB_UPPERCASE[KEYCODE_E] = 'E';
+    KB_LOWERCASE[KEYCODE_F] = 'f'; KB_UPPERCASE[KEYCODE_F] = 'F';
+    KB_LOWERCASE[KEYCODE_G] = 'g'; KB_UPPERCASE[KEYCODE_G] = 'G';
+    KB_LOWERCASE[KEYCODE_H] = 'h'; KB_UPPERCASE[KEYCODE_H] = 'H';
+    KB_LOWERCASE[KEYCODE_I] = 'i'; KB_UPPERCASE[KEYCODE_I] = 'I';
+    KB_LOWERCASE[KEYCODE_J] = 'j'; KB_UPPERCASE[KEYCODE_J] = 'J';
+    KB_LOWERCASE[KEYCODE_K] = 'k'; KB_UPPERCASE[KEYCODE_K] = 'K';
+    KB_LOWERCASE[KEYCODE_L] = 'l'; KB_UPPERCASE[KEYCODE_L] = 'L';
+    KB_LOWERCASE[KEYCODE_M] = 'm'; KB_UPPERCASE[KEYCODE_M] = 'M';
+    KB_LOWERCASE[KEYCODE_N] = 'n'; KB_UPPERCASE[KEYCODE_N] = 'N';
+    KB_LOWERCASE[KEYCODE_O] = 'o'; KB_UPPERCASE[KEYCODE_O] = 'O';
+    KB_LOWERCASE[KEYCODE_P] = 'p'; KB_UPPERCASE[KEYCODE_P] = 'P';
+    KB_LOWERCASE[KEYCODE_Q] = 'q'; KB_UPPERCASE[KEYCODE_Q] = 'Q';
+    KB_LOWERCASE[KEYCODE_R] = 'r'; KB_UPPERCASE[KEYCODE_R] = 'R';
+    KB_LOWERCASE[KEYCODE_S] = 's'; KB_UPPERCASE[KEYCODE_S] = 'S';
+    KB_LOWERCASE[KEYCODE_T] = 't'; KB_UPPERCASE[KEYCODE_T] = 'T';
+    KB_LOWERCASE[KEYCODE_U] = 'u'; KB_UPPERCASE[KEYCODE_U] = 'U';
+    KB_LOWERCASE[KEYCODE_V] = 'v'; KB_UPPERCASE[KEYCODE_V] = 'V';
+    KB_LOWERCASE[KEYCODE_W] = 'w'; KB_UPPERCASE[KEYCODE_W] = 'W';
+    KB_LOWERCASE[KEYCODE_X] = 'x'; KB_UPPERCASE[KEYCODE_X] = 'X';
+    KB_LOWERCASE[KEYCODE_Y] = 'y'; KB_UPPERCASE[KEYCODE_Y] = 'Y';
+    KB_LOWERCASE[KEYCODE_Z] = 'z'; KB_UPPERCASE[KEYCODE_Z] = 'Z';
+
+    KB_LOWERCASE[KEYCODE_0] = '0'; KB_UPPERCASE[KEYCODE_0] = ')';
+    KB_LOWERCASE[KEYCODE_1] = '1'; KB_UPPERCASE[KEYCODE_1] = '!';
+    KB_LOWERCASE[KEYCODE_2] = '2'; KB_UPPERCASE[KEYCODE_2] = '@';
+    KB_LOWERCASE[KEYCODE_3] = '3'; KB_UPPERCASE[KEYCODE_3] = '#';
+    KB_LOWERCASE[KEYCODE_4] = '4'; KB_UPPERCASE[KEYCODE_4] = '$';
+    KB_LOWERCASE[KEYCODE_5] = '5'; KB_UPPERCASE[KEYCODE_5] = '%';
+    KB_LOWERCASE[KEYCODE_6] = '6'; KB_UPPERCASE[KEYCODE_6] = '^';
+    KB_LOWERCASE[KEYCODE_7] = '7'; KB_UPPERCASE[KEYCODE_7] = '&';
+    KB_LOWERCASE[KEYCODE_8] = '8'; KB_UPPERCASE[KEYCODE_8] = '*';
+    KB_LOWERCASE[KEYCODE_9] = '9'; KB_UPPERCASE[KEYCODE_9] = '(';
+
+    KB_LOWERCASE[KEYCODE_SPACE] = ' ';  KB_UPPERCASE[KEYCODE_SPACE] = ' ';
+    KB_LOWERCASE[KEYCODE_TAB]   = '\t'; KB_UPPERCASE[KEYCODE_TAB]   = '\t';
+
+    KB_LOWERCASE[KEYCODE_MINUS]      = '-';  KB_UPPERCASE[KEYCODE_MINUS]      = '_';
+    KB_LOWERCASE[KEYCODE_EQUAL]      = '=';  KB_UPPERCASE[KEYCODE_EQUAL]      = '+';
+    KB_LOWERCASE[KEYCODE_LBRACKET]   = '[';  KB_UPPERCASE[KEYCODE_LBRACKET]   = '{';
+    KB_LOWERCASE[KEYCODE_RBRACKET]   = ']';  KB_UPPERCASE[KEYCODE_RBRACKET]   = '}';
+    KB_LOWERCASE[KEYCODE_BACKSLASH]  = '\\'; KB_UPPERCASE[KEYCODE_BACKSLASH]  = '|';
+    KB_LOWERCASE[KEYCODE_SEMICOLON]  = ';';  KB_UPPERCASE[KEYCODE_SEMICOLON]  = ':';
+    KB_LOWERCASE[KEYCODE_APOSTROPHE] = '\''; KB_UPPERCASE[KEYCODE_APOSTROPHE] = '\"';
+    KB_LOWERCASE[KEYCODE_GRAVE]      = '`';  KB_UPPERCASE[KEYCODE_GRAVE]      = '~';
+    KB_LOWERCASE[KEYCODE_COMMA]      = ',';  KB_UPPERCASE[KEYCODE_COMMA]      = '<';
+    KB_LOWERCASE[KEYCODE_DOT]        = '.';  KB_UPPERCASE[KEYCODE_DOT]        = '>';
+    KB_LOWERCASE[KEYCODE_SLASH]      = '/';  KB_UPPERCASE[KEYCODE_SLASH]      = '?';
+
+    KB_LOWERCASE[KEYCODE_KP_DIVIDE]   = '/'; KB_UPPERCASE[KEYCODE_KP_DIVIDE]   = '/';
+    KB_LOWERCASE[KEYCODE_KP_MULTIPLY] = '*'; KB_UPPERCASE[KEYCODE_KP_MULTIPLY] = '*';
+    KB_LOWERCASE[KEYCODE_KP_MINUS]    = '-'; KB_UPPERCASE[KEYCODE_KP_MINUS]    = '-';
+    KB_LOWERCASE[KEYCODE_KP_PLUS]     = '+'; KB_UPPERCASE[KEYCODE_KP_PLUS]     = '+';
+    KB_LOWERCASE[KEYCODE_KP_DOT]      = '.'; KB_UPPERCASE[KEYCODE_KP_DOT]      = '.';
+
+    KB_LOWERCASE[KEYCODE_KP_0] = '0'; KB_UPPERCASE[KEYCODE_KP_0] = '0';
+    KB_LOWERCASE[KEYCODE_KP_1] = '1'; KB_UPPERCASE[KEYCODE_KP_1] = '1';
+    KB_LOWERCASE[KEYCODE_KP_2] = '2'; KB_UPPERCASE[KEYCODE_KP_2] = '2';
+    KB_LOWERCASE[KEYCODE_KP_3] = '3'; KB_UPPERCASE[KEYCODE_KP_3] = '3';
+    KB_LOWERCASE[KEYCODE_KP_4] = '4'; KB_UPPERCASE[KEYCODE_KP_4] = '4';
+    KB_LOWERCASE[KEYCODE_KP_5] = '5'; KB_UPPERCASE[KEYCODE_KP_5] = '5';
+    KB_LOWERCASE[KEYCODE_KP_6] = '6'; KB_UPPERCASE[KEYCODE_KP_6] = '6';
+    KB_LOWERCASE[KEYCODE_KP_7] = '7'; KB_UPPERCASE[KEYCODE_KP_7] = '7';
+    KB_LOWERCASE[KEYCODE_KP_8] = '8'; KB_UPPERCASE[KEYCODE_KP_8] = '8';
+    KB_LOWERCASE[KEYCODE_KP_9] = '9'; KB_UPPERCASE[KEYCODE_KP_9] = '9';
+}
 
 void kb_write_keyevent(u32 keycode, u32 action) {
-    u8* kname = kb_keycode_name(keycode);
-    u8* aname = kb_keyaction_name(action);
-    println("KEY EVENT : ", kname, " ", aname);
+    if(active_tty == nullptr) return;
+
+    i32 shift_pressed = KB_PRESSED[KEYCODE_LSHIFT] || KB_PRESSED[KEYCODE_RSHIFT];
+    i32 ctrl_pressed = KB_PRESSED[KEYCODE_LCTRL] || KB_PRESSED[KEYCODE_RCTRL];
+    i32 alt_pressed = KB_PRESSED[KEYCODE_LALT] || KB_PRESSED[KEYCODE_RALT];
+
+    if(action == KEYACTION_DOWN || action == KEYACTION_REPEAT) {
+        KB_PRESSED[keycode] = 1;
+        if(keycode == KEYCODE_CAPSLOCK) KB_CAPS_LOCK = !KB_CAPS_LOCK;
+    }
+    else KB_PRESSED[keycode] = 0;
+
+    if(action == KEYACTION_UP) {
+        //shouldn't produce anything
+        return;
+    }
+
+    i32 uppercase = shift_pressed ^ KB_CAPS_LOCK;
+
+    u8* buf = KB_BUF;
+    buf[0] = '\0';
+
+    if(keycode == KEYCODE_ENTER) {
+        buf[0] = '\n';
+        buf[1] = '\0';
+    }
+    else if(keycode == KEYCODE_BACKSPACE) {
+        buf[0] = $u8 0x7F;
+        buf[1] = '\0';
+    }
+    else if(keycode == KEYCODE_TAB) {
+        buf[0] = '\t';
+        buf[1] = '\0';
+    }
+    else if(keycode == KEYCODE_UP) {
+        buf[0] = TERMINAL_ESC;
+        buf[1] = '[';
+        buf[2] = 'A';
+        buf[3] = '\0';
+    }
+    else if(keycode == KEYCODE_DOWN) {
+        buf[0] = TERMINAL_ESC;
+        buf[1] = '[';
+        buf[2] = 'B';
+        buf[3] = '\0';
+    }
+    else if(keycode == KEYCODE_RIGHT) {
+        buf[0] = TERMINAL_ESC;
+        buf[1] = '[';
+        buf[2] = 'C';
+        buf[3] = '\0';
+    }
+    else if(keycode == KEYCODE_LEFT) {
+        buf[0] = TERMINAL_ESC;
+        buf[1] = '[';
+        buf[2] = 'D';
+        buf[3] = '\0';
+    }
+    else {
+        if(ctrl_pressed) {
+            if(KEYCODE_A <= keycode && keycode <= KEYCODE_Z) {
+                buf[0] = $u8 (keycode - KEYCODE_A) + $u8 0x1;
+                buf[1] = '\0'; 
+            }
+        }
+        else {
+            if(uppercase) {
+                if(KB_UPPERCASE[keycode] != $u8 0x0) {
+                    buf[0] = KB_UPPERCASE[keycode];
+                    buf[1] = '\0';
+                }
+            }
+            else {
+                if(KB_LOWERCASE[keycode] != $u8 0x0) {
+                    buf[0] = KB_LOWERCASE[keycode];
+                    buf[1] = '\0';
+                }
+            }
+        }
+    }
+
+    u64 len = strlen(buf);
+    if(len == 0x0) {
+        u8* kname = kb_keycode_name(keycode);
+        u8* aname = kb_keyaction_name(action);
+        println("Non-printing keyevent : ", kname, " ", aname);
+        return;
+    }
+
+    assert(len != 0x0, "kb_write_keyevent() : should always be printing at this point");
+    if(tty_accept_input(active_tty, buf, len) != $i64 len) {
+        panic("kb_write_keyevent() : should succeed");
+    }
 }
 

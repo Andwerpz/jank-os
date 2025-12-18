@@ -7,6 +7,9 @@
 //writes to tty get pushed through to the backend, and writes to backend get pushed through to tty
 //accept_input is the way for tty and backend to recieve bytes from eachother
 
+//for now, keyboard input gets manually sent here
+[__GLOBAL_FIRST__] tty* active_tty = $tty* 0x0; 
+
 struct tty_backend_ops {
     fn<i64(tty*, u8*, u64)> op_accept_input;
     fn<i32(tty*)> op_close;
@@ -40,6 +43,9 @@ tty* tty_create_vga(vga_terminal* term) {
     tty->refcount = 0x0;
 
     term->tty = tty;
+
+    assert(active_tty == nullptr, "tty_create_vga() : for now, should only create one tty");
+    active_tty = tty;
 
     return tty;
 }
@@ -83,7 +89,7 @@ i64 tty_read(tty* tty, u8* buf, u64 amt) {
     assert(tty != nullptr, "tty_read() : this should not be null");
 
     //poll serial port until out of bytes, feed through accept_input
-    {   
+    if(0) {   
         string serial_buf = new string();
         while(1) {
             i32 res = poll_serial();

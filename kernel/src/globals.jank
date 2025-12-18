@@ -11,6 +11,7 @@
 #global_node IDT [MALLOC, PRINTSTREAM];
 #global_node PIC [MALLOC, PRINTSTREAM];
 #global_node SYSCALL [MALLOC, PRINTSTREAM];
+#global_node KB [MALLOC];
 
 //constructed by the bootloader
 [BOOTINFO] BootInfo* bootinfo = $BootInfo* BOOTBOOT_INFO;
