@@ -172,6 +172,11 @@ i32 init_acpi() {
     assert(hpet != nullptr, "init_acpi() : failed to find HPET");
     init_hpet(hpet);
 
+    //initialize MCFG
+    MCFG* mcfg = $MCFG* sdt_find_entry(sdt, is_xsdt, "MCFG");
+    assert(mcfg != nullptr, "init_mcfg() : failed to find MCFG");
+    init_mcfg(mcfg);
+
     cout << "done init acpi\n";
     return 0;
 }
@@ -206,9 +211,7 @@ i32 init_hpet(HPET* hpet) {
     {
         pagetable_t pt = pt_get_current();
         void* vaddr = $void* (($u64 regs / PAGE_SIZE) * PAGE_SIZE);
-        if(!pt_is_vaddr_mapped(pt, vaddr)) {
-            pt_map_page(pt, vaddr, vaddr, PTE_WRITEABLE);
-        }
+        pt_map_page_if_not_mapped(pt, vaddr, vaddr, PTE_WRITEABLE);
     }
 
     //enable counter
@@ -366,4 +369,108 @@ rtc_time cmos_read_time() {
     }
     
     return t1;
+}
+
+// Memory mapped ConFiGuration table
+struct MCFG {
+    ACPIHeader  header;
+    u64         reserved;
+
+    // followed by 1+ entries:
+    // MCFGEntry[]   ent;
+}
+
+//each MCFG entry describes some contiguous region of MMIO memory
+//in ECAM, each device gets 4KB of memory.
+//A device's memory page can be identified by its bus, slot, and function id. 
+//the page that the device gets can be computed as
+// ((bus * 256) + (slot * 8) + func) * 4096 + base_address
+//where base_address is supplied from the MCFG entry that contains it. 
+//the page usually contains the PCIe configuration header that describes the device
+struct MCFGEntry {
+    u64 base_address;       // ECAM base address
+    u16 segment_group;      // PCI segment group number
+    u8  bus_start;          // start PCI bus number
+    u8  bus_end;            // end PCI bus number
+    u32 reserved;          
+}
+
+// PCI Type 0 Configuration Space Header 
+//used for most 'normal devices'
+struct PCIHeader0 {
+    u16 vendor_id;                      // identifies the manufacturer, 0xFFFF usually means no device present
+    u16 device_id;                      // identifies specific device model of vendor
+    u16 command;                        // bits the OS can control
+    u16 status;                         // what the device reports
+    u8 revision_id;                     // vendor-defined revision of silicon/implementation
+
+    // these three bits can tell you what kind of device this is
+    u8 prog_if;                         // programming interface
+    u8 subclass;                        
+    u8 class_code;
+
+    u8 cacheline_size;                  // how big the CPU cache line is, mostly irrelevant 
+    u8 latency_timer;                   // how long the device can hold the bus, mostly irrelevant
+    u8 header_type;                     // some flags
+    u8 bist;                            // built in self test
+    
+    u32 BAR0;                           // Base Address Registers
+    u32 BAR1;                           // these tell you the address ranges this device uses for MMIO
+    u32 BAR2;                           // low bits are sometimes flags, mask them off
+    u32 BAR3;
+    u32 BAR4;
+    u32 BAR5;
+
+    u32 cis_ptr;                        // card information structure pointer, mostly irrelevant
+    u16 subsystem_vendor_id;            // identifies board variant
+    u16 subsystem_id;                   // identifies OEM (original equipment manufacturer) variant
+    u32 expansion_rom_base_addr;        // pointer to optional option ROM
+    u8 capabilities_ptr;                // offset to standard capability struct if (1 << 4) set in status
+    u8[7] reserved0;
+    u8 interrupt_line;                  // which legacy PCI INTx pin the device uses
+    u8 interrupt_pin;                   // PIC IRQ routing number, mosly irrelevant
+    u8 min_gnt;                         // PCI bus timing hints, mostly irrelevant
+    u8 max_lat;
+}
+
+void init_mcfg(MCFG* mcfg) {
+    println("start init mcfg");
+
+    assert(sizeof(PCIHeader0) == $u64 64, "init_mcfg() : PCIHeader0 must be 64 bytes");
+
+    u64 total_length = $u64 mcfg->header.length;
+    u64 total_off = sizeof(ACPIHeader) + sizeof(u64);
+    assert(total_length >= total_off, "init_mcfg() : MCFG table too small"); 
+    assert((total_length - total_off) % sizeof(MCFGEntry) == 0x0, "init_mcfg() : MCFG entries not aligned");
+    u64 nr_ent = (total_length - total_off) / sizeof(MCFGEntry);
+
+    MCFGEntry* ents = $MCFGEntry* ($u64 mcfg + total_off);
+    for(u64 i = 0x0; i < nr_ent; i++) {
+        MCFGEntry* ent = @(ents[i]);
+        for(u64 bus = $u64 ent->bus_start; bus < $u64 ent->bus_end; bus++) {
+            for(u64 slot = 0x0; slot < $u64 32; slot++) {
+                for(u64 func = 0x0; func < $u64 8; func++) {
+                    u64 addr = ((bus * $u64 256) + (slot * $u64 8) + func) * PAGE_SIZE + ent->base_address;
+
+                    // if not mapped, identity map this page
+                    pagetable_t pt = pt_get_current();
+                    pt_map_page_if_not_mapped(pt, $void* addr, $void* addr, PTE_WRITEABLE);
+
+                    u32 vendor_device = ($u32* addr)[0];
+                    if((vendor_device & $u32 0xFFFF) == $u32 0xFFFF) continue;  //no device here
+
+                    u8 class    = ($u8* addr)[0x0B];
+                    u8 subclass = ($u8* addr)[0x0A];
+                    u8 progif   = ($u8* addr)[0x09];
+
+                    if (class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
+                        // found xHCI controller
+                        init_xhci(addr);
+                    }
+                }
+            }
+        }
+    }
+
+    println("done init mcfg");
 }

@@ -33,6 +33,7 @@ typedef pte_t* pagetable_t;
 [__GLOBAL_FIRST__] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
 [__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag, can only execute if no entry along the walk has this flag
 [__GLOBAL_FIRST__] u64 PTE_PCD        = $u64 1 << $u64 4;   // Cache Disable
+[__GLOBAL_FIRST__] u64 PTE_PWT        = $u64 1 << $u64 3;   // Write Through
 
 void enable_nx() {
     //check if nx is supported
@@ -224,6 +225,12 @@ void pt_map_hugepg(pagetable_t pt, void* vaddr, void* paddr, u64 leaf_flags) {
 
 void pt_alloc_and_map_page(pagetable_t pt, void* vaddr, u64 leaf_flags) {
     pt_map_page(pt, vaddr, palloc(), leaf_flags);
+}
+
+void pt_map_page_if_not_mapped(pagetable_t pt, void* vaddr, void* paddr, u64 leaf_flags) {
+    if(!pt_is_vaddr_mapped(pt, vaddr)) {
+        pt_map_page(pt, vaddr, paddr, leaf_flags);
+    }
 }
 
 //removes pagetable mapping corresponding to vaddr, does not free the physical page

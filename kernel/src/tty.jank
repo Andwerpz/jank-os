@@ -82,12 +82,10 @@ termios tty_gen_default_termios() {
 }
 
 //reads bytes from outq into buf
-//for now, this also prompts polling of the serial port, 
-//TODO should move that stuff into an interrupt, the interrupt handler should call tty_accept_input on the tty associated with 
-//the serial backend
 i64 tty_read(tty* tty, u8* buf, u64 amt) {
     assert(tty != nullptr, "tty_read() : this should not be null");
 
+    //for debugging
     //poll serial port until out of bytes, feed through accept_input
     if(0) {   
         string serial_buf = new string();

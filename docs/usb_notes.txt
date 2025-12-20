@@ -1,0 +1,28 @@
+
+Universal Serial Bus (USB)
+https://wiki.osdev.org/Universal_Serial_Bus
+
+USB is a bus/standard used to communicate between the host and peripherals. 
+to use a USB device, the host needs to implement:
+ - a USB host controller driver
+ - a USB core
+ - a device driver for that device
+
+the USB host controller driver handles low level and hardware details regarding talking via USB. 
+the USB core uses the low level controller to actually implement USB semantics.
+the core layer is the one exposed to the device drivers. The core layer should present a standard USB interface
+so that the device drivers can be USB agnostic.
+of course, the device drivers should just know how to use the USB api to talk to their specific device. 
+
+USB is a polled bus, meaning that the host must initiate all transfers.
+
+
+the host controller driver i'll probably implement is xHCI (eXtensible Host Controller Interface)
+the 'host controller' is some integrated circuit that's does the hard work of synchronizing itself with 
+devices connected to it and taking care of alot of other hardware and protocol details. 
+what we are implementing is just some interface that's capable of talking to this hardware host controller
+
+
+
+
+
