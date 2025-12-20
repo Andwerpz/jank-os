@@ -79,6 +79,11 @@ struct xHCI_runtime_regs {
 [__GLOBAL_FIRST__] u32 XHCI_DB_TARGET = $u32 0x000000FF;
 [__GLOBAL_FIRST__] u32 XHCI_DB_TASKID = $u32 0xFFFF0000;
 
+[__GLOBAL_FIRST__] u32 XHCI_IMAN_IP = $u32 0b0001;  // interrupt pending - RW1C : if set to 1, an interrupt is pending for this interrupter
+[__GLOBAL_FIRST__] u32 XHCI_IMAN_IE = $u32 0b0010;  // interrupt enable : when IE and IP are 1, an interrupt should be generated
+
+[__GLOBAL_FIRST__] u64 XHCI_ERDP_EHB = 0b1000;      // event handler busy - RW1C : set to 1 when IP is set to 1, should be cleared to 0 when writing to ERDP
+
 // interrupter register set
 // directly after runtime registers in memory, there will be up to 1024 contiguous interrupter registers
 // an interrupter register points to a ERST. When the xHC writes an event to an event ring, the corresponding interrupter
@@ -134,8 +139,9 @@ struct xHCI_ERST_ent {
 //when initializing the ring buffers, we want to initialize them with all stale TRBs. For ease of initialization,
 //we'll just initialize the consumer/producer cycle state to 1, this way cycle=0 is stale and we can just zero 
 //out the TRB ring buffers. 
-[__GLOBAL_FIRST__] u64 XHCI_COMMAND_PRODUCER_CYCLE_STATE;
+[__GLOBAL_FIRST__] u32 XHCI_COMMAND_PRODUCER_CYCLE_STATE;
 [__GLOBAL_FIRST__] u64 XHCI_COMMAND_PRODUCER_INDEX;
+[__GLOBAL_FIRST__] u64 XHCI_COMMAND_RING_SIZE;  //number of TRBs in command ring
 
 [__GLOBAL_FIRST__] xHCI_cap_regs* XHCI_CAP_REGS;
 [__GLOBAL_FIRST__] xHCI_op_regs* XHCI_OP_REGS;
@@ -144,21 +150,97 @@ struct xHCI_ERST_ent {
 [__GLOBAL_FIRST__] xHCI_INTRS* XHCI_INTERRUPTERS;
 [__GLOBAL_FIRST__] u32* XHCI_DB_REGS;
 
-//notifies xHC that there is some available TRBs to read at the corresponding ring
-void xhci_ring_doorbell(u64 ind) {
+//should be 1-to-1 with interrupters
+[__GLOBAL_FIRST__] u64* XHCI_EVENT_RING_PTRS;   
+[__GLOBAL_FIRST__] u32* XHCI_EVENT_RING_STATES;
+
+//notifies xHC that there is some available TRBs to read at the corresponding transfer ring
+void xhci_ring_transfer_doorbell(u64 ind) {
+    assert(ind != 0x0, "xhci_ring_transfer_doorbell() : ind 0 is reserved for command ring");
     //TODO
+}
+
+//notifies xHC that there is some available TRBs to read on the command ring
+void xhci_ring_command_doorbell() {
+    asm!("mfence"); //ensure any TRB writes before this are flushed
+    XHCI_DB_REGS[0] = $u32 0;
 }
 
 //writes a TRB to the command ring and rings the command ring doorbell
 void xhci_write_command() {
-    //TODO
+    xHCI_TRB* ring = $xHCI_TRB* command_ring_addr;
+
+    //write TRB
+    xHCI_TRB* t = @(ring[XHCI_COMMAND_PRODUCER_INDEX]);
+    t->parameter = $u64 0;
+    t->status    = $u32 0;
+    t->control   = (XHCI_COMMAND_PRODUCER_CYCLE_STATE) | (XHCI_TRB_TYPE_ENABLE_SLOT << $u32 10);              
+
+    //advance
+    XHCI_COMMAND_PRODUCER_INDEX ++;
+    if(XHCI_COMMAND_PRODUCER_INDEX == XHCI_COMMAND_RING_SIZE - 0x1) {
+        //should be at link TRB
+        xHCI_TRB* link_trb = @(ring[XHCI_COMMAND_PRODUCER_INDEX]);
+        u32 type = ((link_trb->control & XHCI_TRB_TYPE) >> $u32 10);
+        assert(type == XHCI_TRB_TYPE_LINK, "xhci_write_command() : this TRB should be the link TRB");
+
+        //set cycle state equal to producer state
+        link_trb->control = (link_trb->control & ~XHCI_TRB_C) | XHCI_COMMAND_PRODUCER_CYCLE_STATE;
+
+        //see if we need to toggle producer state
+        if(link_trb->control & XHCI_TRB_LINK_TC) {
+            XHCI_COMMAND_PRODUCER_CYCLE_STATE ^= XHCI_TRB_C;
+        }
+
+        //go back to beginning
+        XHCI_COMMAND_PRODUCER_INDEX = 0x0;
+    }
+
+    //ring doorbell
+    xhci_ring_command_doorbell();
 }
 
 //retrieves the next TRB from the given event ring
+//does not check IMAN.IP
 //returns 0 on success, 1 on failure
 i32 xhci_read_event(u64 ind, xHCI_TRB* out_trb) {
-    //TODO
-    return 1;
+    xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[ind]);
+    u64 ev_ptr = XHCI_EVENT_RING_PTRS[ind];
+    u32 ev_state = XHCI_EVENT_RING_STATES[ind];
+    assert(intr->ERSTSZ == $u32 1, "xhci_read_event() : only support event rings with one segment for now");
+
+    xHCI_ERST_ent* erst = $xHCI_ERST_ent* intr->ERSTBA;
+    xHCI_TRB* event_ring = $xHCI_TRB* erst->ring_segment_base_addr;
+    u64 ring_sz = $u64 erst->ring_segment_size;
+    assert(ev_ptr < ring_sz, "xhci_read_event() : ev_ptr is out of bounds");
+    xHCI_TRB* trb = @(event_ring[ev_ptr]);
+
+    //check TRB freshness
+    if((trb->control & XHCI_TRB_C) != ev_state) {
+        return 1;   
+    }
+
+    //copy to out_trb
+    out_trb->parameter = trb->parameter;
+    out_trb->status    = trb->status;
+    out_trb->control   = trb->control;
+
+    //advance dequeue
+    ev_ptr ++;
+    if(ev_ptr == ring_sz) {
+        ev_ptr = 0x0;
+        ev_state ^= XHCI_TRB_C;
+    }
+
+    //update ERDP
+    u64 new_ERDP = (($u64 event_ring + ev_ptr * sizeof(xHCI_TRB)) & ~0xF) | XHCI_ERDP_EHB;
+    intr->ERDP = new_ERDP;
+
+    //update consumer state
+    XHCI_EVENT_RING_PTRS[ind] = ev_ptr;
+    XHCI_EVENT_RING_STATES[ind] = ev_state;
+
+    return 0;
 }
 
 void init_xhci(u64 addr) {
@@ -303,9 +385,11 @@ void init_xhci(u64 addr) {
             xHCI_TRB* link_trb = $xHCI_TRB* (command_ring_addr + PAGE_SIZE - sizeof(xHCI_TRB));
             link_trb->parameter = command_ring_addr;    //point link TRB back to first TRB
             link_trb->status = $u32 0;
-            link_trb->control = $u32 (XHCI_TRB_TYPE_LINK << $u32 10) | XHCI_TRB_LINK_TC | XHCI_TRB_C;    //link TRB should toggle cycle state
+            link_trb->control = $u32 (XHCI_TRB_TYPE_LINK << $u32 10) | XHCI_TRB_LINK_TC;    //link TRB should toggle cycle state
         }
         op_regs->CRCR = (command_ring_addr & ~0x3F) | XHCI_CRCR_RCS;    //initialize hardware consumer with cycle=1
+        assert(sizeof(xHCI_TRB) == 0x10, "init_xhci() : sizeof(TRB) should be 16");
+        XHCI_COMMAND_RING_SIZE = PAGE_SIZE / sizeof(xHCI_TRB);
 
         // Event TRB Ring + ERST
         // 256 16-byte TRBs = 4096 bytes
@@ -325,6 +409,17 @@ void init_xhci(u64 addr) {
             interrupters[0].ERSTSZ = $u32 1;
             interrupters[0].ERSTBA = ERST_addr;
             interrupters[0].ERDP = event_ring_addr;
+        }
+
+        //allocate room for event ring consumer state storage
+        XHCI_EVENT_RING_PTRS = $u64* palloc();
+        XHCI_EVENT_RING_STATES = $u32* palloc();
+        memset($void* XHCI_EVENT_RING_PTRS, 0, PAGE_SIZE);
+        memset($void* XHCI_EVENT_RING_STATES, 0, PAGE_SIZE);
+
+        //initialize all consumer states to 1
+        for(u64 i = 0x0; i * sizeof(u32) < PAGE_SIZE; i++) {
+            XHCI_EVENT_RING_STATES[i] = XHCI_TRB_C;
         }
 
         //set max device slots in CONFIG
