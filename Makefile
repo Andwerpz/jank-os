@@ -3,9 +3,14 @@
 drive:
 	@bash ./build_drive_partitioned.sh
 
-# boot directly from partitioned drive
+# build user (path, sys) programs
+.PHONY: user
+user:
+	make -C ./user
+
+# create and boot from drive
 .PHONY: boot
-boot: drive
+boot: drive user
 	@mkdir -p build
 	@cp /usr/share/OVMF/OVMF_VARS_4M.fd ./build/OVMF_VARS_4M.work.fd
 	qemu-system-x86_64 \
@@ -18,7 +23,9 @@ boot: drive
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-device ich9-ahci,id=ahci \
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
-		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0
+		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
+		-drive file=usb.img,if=none,id=usbdisk,format=raw \
+		-device usb-storage,bus=xhci.0,drive=usbdisk
 
 # clean up
 clean:
@@ -35,5 +42,5 @@ test:
 	./main build-tests; \
 	echo "Returning to repo root"; \
 	cd ../../../; \
-	echo "Booting OS via 'make normal' (QEMU)…"; \
-	$(MAKE) normal; \
+	echo "Booting OS"; \
+	$(MAKE) boot; \

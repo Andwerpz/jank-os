@@ -216,6 +216,7 @@ void print(i32 x) {
 
 template<T>
 void print(T* ptr) {
+    print("0x");
     u64 val = $u64 ptr;
     u64 mask = 0b1111;
     for(i32 i = 15; i >= 0; i--){

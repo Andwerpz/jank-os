@@ -35,6 +35,12 @@ need_cmd mount
 need_cmd rsync
 need_cmd objcopy
 
+echo "[*] Building UEFI bootloader (make -C ./bootloader/uefi)"
+make -C "./bootloader/uefi"
+
+echo "[*] Building kernel binary (make -C ./kernel)"
+make -C "./kernel"
+
 if [[ ! -d "$USER_DIR" ]]; then
   echo "ERROR: USER_DIR '$USER_DIR' does not exist" >&2
   exit 1
@@ -104,9 +110,6 @@ echo "[*] Mounting p1 (FAT) at $MNT/esp"
 sudo mount "$PART1" "$MNT/esp"
 
 # Install UEFI loader
-echo "[*] Building UEFI bootloader (make -C ./bootloader/uefi)"
-make -C "./bootloader/uefi"
-
 if [[ -f "$EFI_BIN" ]]; then
   echo "[*] Installing UEFI loader -> /EFI/BOOT/BOOTX64.EFI"
   sudo mkdir -p "$MNT/esp/EFI/BOOT"
@@ -117,10 +120,7 @@ else
 fi
 
 
-# Install kernel binary 
-echo "[*] Building kernel binary (make -C ./kernel)"
-make -C "./kernel"
-
+# Install kernel binary
 echo "[*] Installing kernel -> /EFI/JANKOS/KERNEL.BIN"
 sudo mkdir -p "$MNT/esp/EFI/JANKOS"
 sudo cp -f "$KERNEL_BIN" "$MNT/esp/EFI/JANKOS/KERNEL.BIN"
