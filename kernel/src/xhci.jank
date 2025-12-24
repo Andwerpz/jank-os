@@ -287,15 +287,15 @@ struct xHCI_INTRS {
 [__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_ENDPOINT  = $u32 0b00000010;
 [__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_OTHER     = $u32 0b00000011;
 
-// wValue descriptor types
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_DEVICE                      = $u32 1;
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_CONFIGURATION               = $u32 2;
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_STRING                      = $u32 3;
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_INTERFACE                   = $u32 4;
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_ENDPOINT                    = $u32 5;
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_DEVICE_QUALIFIER            = $u32 6;
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_OTHER_SPEED_CONFIGURATION   = $u32 7;
-[__GLOBAL_FIRST__] u32 XHCI_WVALUE_TYPE_INTERFACE_POWER             = $u32 8;
+// USB descriptor types
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_DEVICE                      = $u32 1;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_CONFIGURATION               = $u32 2;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_STRING                      = $u32 3;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_INTERFACE                   = $u32 4;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_ENDPOINT                    = $u32 5;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_DEVICE_QUALIFIER            = $u32 6;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_OTHER_SPEED_CONFIGURATION   = $u32 7;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_INTERFACE_POWER             = $u32 8;
 
 struct xHCI_TRB {
     u64 parameter;
@@ -410,6 +410,61 @@ struct xHCI_endpoint_ctx32 {
 [__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_BULK_IN       = $u32 6;
 [__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_INTERRUPT_IN  = $u32 7;
 
+//all USB descriptors should have this as their header
+struct xHCI_usb_descriptor_header {
+    u8 bLength;
+    u8 bDescriptorType;
+}
+
+struct xHCI_device_descriptor {
+    u8 bLength;
+    u8 bDescriptorType;
+    u16 bcdUSB;
+    u8 bDeviceClass;
+    u8 bDeviceSubclass;
+    u8 bDeviceProtocol;
+    u8 bMaxPacketSize;
+    u16 idVendor;
+    u16 idProduct;
+    u16 bcdDevice;
+    u8 iManufacturer;
+    u8 iProduct;
+    u8 iSerialNumber;
+    u8 bNumConfigurations;
+}
+
+struct xHCI_configuration_descriptor {
+    u8 bLength;
+    u8 bDescriptorType;
+    u16 wTotalLength;
+    u8 bNumInterfaces;
+    u8 bConfigurationValue;
+    u8 iConfiguration;          // index of string descriptor describing this configuration
+    u8 bmAttributes;
+    u8 bMaxPower;
+}
+
+struct xHCI_interface_descriptor {
+    u8 bLength;
+    u8 bDescriptorType;
+    u8 bInterfaceNumber;
+    u8 bAlternateSetting;
+    u8 bNumEndpoints;
+    u8 bInterfaceClass;
+    u8 bInterfaceSubClass;
+    u8 bInterfaceProtocol;
+    u8 iInterface;              // index of string descriptor describing this interface
+}
+
+struct xHCI_endpoint_descriptor {
+    u8 bLength;                 // = 7
+    u8 bDescriptorType;         // = 5
+    u8 bEndpointAddress;        // bits 0123 : endpoint number, bit 7 : direction 0=out 1=in
+    u8 bmAttributes;            // bits 01 : transfer type
+    u16 wMaxPacketSize;         // maximum packet size this endpoint is capable of sending or receiving
+    u8 bInterval;               // interval for polling endpoint data transfers
+}
+
 //the main method of communication between the host and hardware is via TRBs in ring buffers
 //since we don't have a synchronized 'start' and 'end' buffer pointer, the way that the consumer
 //knows to keep reading entries is the cycle flag on each TRB. 
@@ -472,11 +527,12 @@ u64 xhci_device_get_descriptor(u32 slot, u32 desc_type, u32 desc_index, void* bu
         bm_request_type |= XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
         u32 b_request = XHCI_REQ_GET_DESCRIPTOR;
 
-        // high 4-bit is descriptor type
-        // low 4-bit is descriptor index
+        // high 8-bit is descriptor type
+        // low 8-bit is descriptor index
         u32 w_value = (desc_type << $u32 8) | desc_index;
         
-        //if desc_type == XHCI_WVALUE_TYPE_STRING, this should be a language index
+        //if desc_type == XHCI_DESCRIPTOR_TYPE_STRING, this should be a language index
+        //otherwise, this should be 0
         u32 w_index = $u32 0;
         u32 w_length = $u32 amt;
 
@@ -1050,6 +1106,10 @@ void init_xhci(u64 addr) {
     println("start init xhci");
 
     assert(sizeof(xHCI_TRB) == 0x10, "init_xhci() : sizeof(TRB) should be 16");
+    assert(sizeof(xHCI_device_descriptor) == $u64 18, "init_xhci() : sizeof(device_descriptor) should be 18");
+    assert(sizeof(xHCI_configuration_descriptor) == $u64 9, "init_xhci() : sizeof(configuration_descriptor) should be 9");
+    assert(sizeof(xHCI_interface_descriptor) == $u64 9, "init_xhci() : sizeof(interface_descriptor) should be 9");
+    assert(sizeof(xHCI_endpoint_descriptor) == $u64 7, "init_xhci() : sizeof(endpoint_descriptor) should be 7");
 
     //initialize host command producer
     XHCI_COMMAND_PRODUCER_STATE = XHCI_TRB_C;
@@ -1058,39 +1118,41 @@ void init_xhci(u64 addr) {
     XHCI_TRB_RING_SIZE = PAGE_SIZE / sizeof(xHCI_TRB);  
 
     //need to find address and size of xHCI MMIO from PCI header
-    PCIHeader0* pci_hdr = $PCIHeader0* addr;
-    u64 BAR0 = $u64 pci_hdr->BAR0;
-    u64 BAR1 = $u64 pci_hdr->BAR1;
-    assert((BAR0 & 0x1) == 0x0, "init_xhci() : make sure this is a memory BAR");
-    u64 type = (BAR0 >> 0x1) & 0x3;
     u64 xhci_mmio = 0x0;
     u64 xhci_mmio_size = 0x0;
-    if(type == 0x0) {
-        // 32-bit 
-        xhci_mmio = BAR0 & ~0xF;
+    PCIHeader0* pci_hdr = $PCIHeader0* addr;
+    {
+        u64 BAR0 = $u64 pci_hdr->BAR0;
+        u64 BAR1 = $u64 pci_hdr->BAR1;
+        assert((BAR0 & 0x1) == 0x0, "init_xhci() : make sure this is a memory BAR");
+        u64 type = (BAR0 >> 0x1) & 0x3;
+        if(type == 0x0) {
+            // 32-bit 
+            xhci_mmio = BAR0 & ~0xF;
 
-        //get size
-        pci_hdr->BAR0 = $u32 0xFFFFFFFF;
-        u32 mask = pci_hdr->BAR0;
-        pci_hdr->BAR0 = $u32 BAR0;
-        xhci_mmio_size = $u64 (~(mask & $u32 ~0xF) + $u32 1);
+            //get size
+            pci_hdr->BAR0 = $u32 0xFFFFFFFF;
+            u32 mask = pci_hdr->BAR0;
+            pci_hdr->BAR0 = $u32 BAR0;
+            xhci_mmio_size = $u64 (~(mask & $u32 ~0xF) + $u32 1);
+        }
+        else if(type == 0x2) {
+            // 64-bit
+            xhci_mmio = (BAR1 << $u64 32) | (BAR0 & ~0xF);
+
+            //get size
+            pci_hdr->BAR0 = $u32 0xFFFFFFFF;
+            pci_hdr->BAR1 = $u32 0xFFFFFFFF;
+            u32 mask0 = pci_hdr->BAR0;
+            u32 mask1 = pci_hdr->BAR1;
+            pci_hdr->BAR0 = $u32 BAR0;
+            pci_hdr->BAR1 = $u32 BAR1;
+
+            u64 mask = ($u64 mask1 << $u64 32) | ($u64 mask0 & ~0xF);
+            xhci_mmio_size = (~mask) + 0x1;
+        }
+        else panic("init_xhci() : unknown type value");
     }
-    else if(type == 0x2) {
-        // 64-bit
-        xhci_mmio = (BAR1 << $u64 32) | (BAR0 & ~0xF);
-
-        //get size
-        pci_hdr->BAR0 = $u32 0xFFFFFFFF;
-        pci_hdr->BAR1 = $u32 0xFFFFFFFF;
-        u32 mask0 = pci_hdr->BAR0;
-        u32 mask1 = pci_hdr->BAR1;
-        pci_hdr->BAR0 = $u32 BAR0;
-        pci_hdr->BAR1 = $u32 BAR1;
-
-        u64 mask = ($u64 mask1 << $u64 32) | ($u64 mask0 & ~0xF);
-        xhci_mmio_size = (~mask) + 0x1;
-    }
-    else panic("init_xhci() : unknown type value");
     assert(xhci_mmio != 0x0, "init_xhci() : xhci mmio base shouldn\'t be 0?");
     assert(xhci_mmio_size != 0x0, "init_xhci() : xhci size should not be 0");
 
@@ -1248,6 +1310,12 @@ void init_xhci(u64 addr) {
                 XHCI_SLOT_RINGS[i][j] = $xHCI_TRB* palloc();
             }
         }
+
+        //alloc one page for each DCBAA pointer up to XHCI_MAX_SLOTS
+        //this is for hardware storage of endpoint contexts
+        for(u64 i = 0x1; i <= XHCI_MAX_SLOTS; i++) {
+            XHCI_DCBAA[i] = $u64 palloc();
+        }
     }
 
     //parse extended capabilities 
@@ -1351,10 +1419,6 @@ void init_xhci(u64 addr) {
         u32 slot = xhci_alloc_slot(xhci_get_port_slot_type(i));
         println("Allocated slot : ", slot);
 
-        //alloc page for output device context
-        u64 odc_addr = $u64 palloc();
-        XHCI_DCBAA[slot] = odc_addr;
-
         //build initial input context
         assert((XHCI_CAP_REGS->HCCPARAMS1 & XHCI_HCCPARAMS1_CSZ) == $u32 0, "init_xhci() : only support 32-bit context structs");
         u64 EP0 = 0x1;
@@ -1372,14 +1436,60 @@ void init_xhci(u64 addr) {
         println("Done addressing device");
 
         //get device descriptor
-        void* buf = palloc();
-        u64 transfer_amt = xhci_device_get_descriptor(slot, XHCI_WVALUE_TYPE_CONFIGURATION, $u32 0, buf, 0x10);
-        println("Transfer amt : ", transfer_amt);
+        void* buf1 = palloc();
+        u64 transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_DEVICE, $u32 0, buf1, sizeof(xHCI_device_descriptor));
+        assert(transfer_amt == sizeof(xHCI_device_descriptor), "init_xhci() : failed to transmit entire device descriptor");
+        xHCI_device_descriptor* dev_desc = $xHCI_device_descriptor* buf1;
+        u64 nr_configurations = $u64 dev_desc->bNumConfigurations;
+        println("Nr Configurations : ", nr_configurations);
+        assert(nr_configurations == 0x1, "init_xhci() : only support device with one configuration for now");
 
-        //parse configuration descriptors to learn about device endpoints
+        //parse configuration descriptor to learn about device endpoints
+        void* buf2 = palloc();
+        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 0, buf2, sizeof(xHCI_configuration_descriptor));
+        assert(transfer_amt == sizeof(xHCI_configuration_descriptor), "init_xhci() : failed to transmit entire configuration descriptor");
+        xHCI_configuration_descriptor* cfg_desc = $xHCI_configuration_descriptor* buf2;
+        u64 cfg_tot_sz = $u64 cfg_desc->wTotalLength;
+        u64 nr_interfaces = $u64 cfg_desc->bNumInterfaces;
+        println("Nr Interfaces : ", nr_interfaces);
+        println("Cfg Total Size : ", cfg_tot_sz);   
+
+        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 0, buf2, cfg_tot_sz);
+        assert(transfer_amt == cfg_tot_sz, "init_xhci() : failed to transmit entire configuration data blob");
+        u64 buf_ptr = sizeof(xHCI_configuration_descriptor);
+        while(buf_ptr < cfg_tot_sz) {
+            xHCI_usb_descriptor_header* header = $xHCI_usb_descriptor_header* ($u64 buf2 + buf_ptr);
+            u64 length = $u64 header->bLength;
+            u32 type = $u32 header->bDescriptorType;
+            println("Descriptor : ", type, " ", length);
+
+            if(type == XHCI_DESCRIPTOR_TYPE_INTERFACE) {
+                xHCI_interface_descriptor* int_desc = $xHCI_interface_descriptor* ($u64 buf2 + buf_ptr);
+                u64 nr_endpoints = $u64 int_desc->bNumEndpoints;
+                println("Nr Endpoints : ", nr_endpoints);
+            }
+            else if(type == XHCI_DESCRIPTOR_TYPE_ENDPOINT) {
+                xHCI_endpoint_descriptor* ep_desc = $xHCI_endpoint_descriptor* ($u64 buf2 + buf_ptr);
+                u64 endpoint_addr = $u64 ep_desc->bEndpointAddress;
+                u64 attributes = $u64 ep_desc->bmAttributes;
+                u64 max_packet_size = $u64 ep_desc->wMaxPacketSize;
+                u64 interval = $u64 ep_desc->bInterval;
+
+                println("Endpoint info : ");
+                println("Endpoint Address : ", $void* endpoint_addr);
+                println("Attributes : ", $void* attributes);
+                println("Max Packet Size : ", max_packet_size);
+                println("Interval : ", interval);
+            }
+
+            buf_ptr += length;
+        }
+        assert(buf_ptr == cfg_tot_sz, "init_xhci() : buf ptr should be at very end of config now");
 
         //build final input context
 
+        pfree(buf1);
+        pfree(buf2);
     }
 
     panic("init_xhci() : stop here for now");
