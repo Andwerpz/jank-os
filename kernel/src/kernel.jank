@@ -32,7 +32,8 @@
 #include "mbr.jank";
 #include "ps2.jank";
 #include "kb.jank";
-#include "xhci.jank";
+#include "usb/xhci.jank";
+#include "usb/usb.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -237,6 +238,8 @@ i32 main() {
     init_tty();
     init_vfs();
     init_blockdev();
+
+    init_usb();
 
     blockdev_mount_ext2();
 

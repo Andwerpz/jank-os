@@ -1,0 +1,1408 @@
+// eXtensible Host Controller Interface (xHCI)
+// this interface is implemented by hardware
+// this driver is just responsible for using this interface 
+
+// https://wiki.osdev.org/EXtensible_Host_Controller_Interface
+
+// intel official xHCI specification
+// https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/extensible-host-controler-interface-usb-xhci.pdf
+
+// host software talking to xHC (hardware) uses command and event ring buffers filled with TRBs
+
+// ports vs. slots:
+// a port is the physical thing on your computer
+// a slot is a logical interface provided by the xHC. 
+// since the USB system can look like a rooted tree with hubs as nodes, you can't just identify ports by a single number
+//  you need to identify it by the rooted path to the hub + port number. 
+// for now, i'm going to assume all devices are plugged directly into the root, so we forego the path string. (TODO undo this assumption)
+
+// host talking to a device uses endpoints. Endpoint is a 1-way communication channel, identified by a number and direction. 
+// endpoint 0 is special, it always exists and is used for control. 
+// endpoints also have a transfer type:
+//  - control (endpoint 0)
+//  - bulk (used by storage devices)
+//  - interrupt (keyboards, mice)
+//  - isochronous (audio, video)
+
+// xHC maintains a live record of each device in memory, the Output Device Context. This contains
+//  - slot context (what speed, where the device is, ...)
+//  - one endpoint context per enabled endpoint (endpoint type, index, ...)
+// xHC allows software to modify this record by sending an Input Context. The relevant commands are
+//  - Address Device : create/initialize this device and its endpoint 0
+//  - Configure Endpoint : enable some set of endpoints and their transfer rings
+//  - Evaluate Context : update some set of fields
+
+// port initialization sequence:
+//  - after resetting a port, you only know that there is some device connected to it. 
+//  - you build an Input Context that only has endpoint 0 and do Address Device
+//  - use endpoint 0 to learn about any other endpoints
+//  - build another Input Context with all the endpoints and run Configure Endpoint
+
+// endpoints are identified by their endpoint number [0, 15] and the direction {IN, OUT}
+// EP0 is special in that it is bidirectional.
+// each endpoint gets mapped to a unique integer index, their DCI, which is (endpoint number) * 2 + (IN? 1 : 0)
+
+// nice USB descriptor resource: https://www.beyondlogic.org/usbnutshell/usb5.shtml
+// after you have the port set up and you can make control transfers via EP0, you need to talk to the device to see what it can do
+// this mostly means getting the configuration descriptors and indexing the device.
+// however, one device can have multiple modes of operation, and therefore multiple configuration descriptors. 
+// the amount of configuration descriptors is given in the device descriptor, which there is only one of.
+// after the host has examined all of the configurations, it can choose the one that it likes by sending a SetConfiguration command with a
+//  non-zero value that matches the bConfigurationValue in one of the configuration descriptors. 
+
+[__GLOBAL_FIRST__] i32 XHCI_DID_INIT = 0;   //should be set to 1 after init_xhci() completes
+
+[__GLOBAL_FIRST__] u32 XHCI_HCSPARAMS1_MAXSLOTS = $u32 0b0000000011111111;  // maximum device slots the host controller can support
+
+[__GLOBAL_FIRST__] u32 XHCI_HCCPARAMS1_AC64 = $u32 0b0000000000000001;      // 64-bit addressing capability
+[__GLOBAL_FIRST__] u32 XHCI_HCCPARAMS1_CSZ  = $u32 0b0000000000000100;      // context size : if this is set, context structs are 64-bytes, otherwise they're 32-bytes. Does not apply to Stream Contexts
+[__GLOBAL_FIRST__] u32 XHCI_HCCPARAMS1_ECP  = $u32 0xFFFF0000;              // extended capabilities pointer : if non-zero, is a relative offset in units of 4-bytes from xHCI MMIO base to extended capabilities array
+
+// capability registers
+// located at the start of xHCI mmio space
+struct xHCI_cap_regs {
+    u8 CAPLENGTH;           // capability register length
+    u8 RSVD;                // reserved
+    u16 HCIVERSION;         // interface version number
+    u32 HCSPARAMS1;         // structural parameters 1
+    u32 HCSPARAMS2;         // structural parameters 2
+    u32 HCSPARAMS3;         // structural parameters 3
+    u32 HCCPARAMS1;         // capability parameters 1
+    u32 DBOFF;              // doorbell offset, low 2 bits are reserved
+    u32 RTSOFF;             // runtime registers offset, low 5 bits are reserved
+    u32 HCCPARAMS2;         // capability parameters 2
+}
+
+// USBCMD bits defined in section 5.4.1 of intel manual
+[__GLOBAL_FIRST__] u32 XHCI_USBCMD_RS       = $u32 0b0000000000000001;      // run / stop : When set to 1, xHC starts operating
+[__GLOBAL_FIRST__] u32 XHCI_USBCMD_HCRST    = $u32 0b0000000000000010;      // host controller reset : When set, xHC resets itself, writing 0 to this bit when completed
+[__GLOBAL_FIRST__] u32 XHCI_USBCMD_INTE     = $u32 0b0000000000000100;      // interrupter enable 
+
+// USBSTS bits defined in section 5.4.2 of intel manual
+[__GLOBAL_FIRST__] u32 XHCI_USBSTS_HCH      = $u32 0b0000000000000001;      // xHC Halted : this is 0 whenever XHCI_USBCMD_RS is 1
+[__GLOBAL_FIRST__] u32 XHCI_USBSTS_HSE      = $u32 0b0000000000000100;      // host system error : set whenever a serious error is detected, xHC is halted
+[__GLOBAL_FIRST__] u32 XHCI_USBSTS_EINT     = $u32 0b0000000000001000;      // event interrupt : xHC sets this bit to 1 when the Interrupt Pending (IP) of any interrupter transitions from 0 to 1
+[__GLOBAL_FIRST__] u32 XHCI_USBSTS_PCD      = $u32 0b0000000000010000;      // port change detected : xHC sets this bit to 1 when any port has a change bit go from 0 to 1
+[__GLOBAL_FIRST__] u32 XHCI_USBSTS_CNR      = $u32 0b0000100000000000;      // controller not ready 
+
+// CRCR bits defined in section 5.4.5 of intel manual
+[__GLOBAL_FIRST__] u64 XHCI_CRCR_RCS        = 0b0000000000000001;           // ring cycle state : cycle consumer state of xHC
+
+[__GLOBAL_FIRST__] u32 XHCI_CONFIG_MAXSLOTS = $u32 0b0000000011111111;      // maximum number of enabled device slots
+
+// operational registers
+// located directly after the capability registers in xHCI mmio space
+struct xHCI_op_regs {
+    u32 USBCMD;             // USB command
+    u32 USBSTS;             // USB status
+    u32 PAGESIZE;           // page size
+    u32[2] reserved0;       
+    u32 DNCTRL;             // device notification control
+    u64 CRCR;               // command ring control register, low 6 bits are flags, upper bits is pointer to command ring
+    u32[4] reserved1;        
+    u64 DCBAAP;             // device context base address array pointer, low 6 bits are reserved
+    u32 CONFIG;             // config
+}
+
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_CCS          = $u32 0b0000000000000001;      // current connect status - ROS : 1 means a connected device
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_PED          = $u32 0b0000000000000010;      // port enabled / disabled - RW1CS : 1 means enabled, can write 1 here to disable 
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_PR           = $u32 0b0000000000010000;      // port reset - RW1S : when host writes 1 to this bit, the bus reset sequence is initiated. This bit will remain set until the sequence is finished
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_PORT_SPEED   = $u32 0b0011110000000000;      // port speed - ROS : identifies the speed of the connected device
+
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_CSC      = $u32 0b0000000000000010 << $u32 16;   // connect status change - RW1CS : 1 means there was a change in CCS
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_PEC      = $u32 0b0000000000000100 << $u32 16;   // port enable / disable change - RW1CS : 1 means there was a change in PED
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_WRC      = $u32 0b0000000000001000 << $u32 16;   // warm port reset change - RW1CS : this bit is set when warm reset processing on this port completes. Write 1 here to clear
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_OCC      = $u32 0b0000000000010000 << $u32 16;   // over current change - RW1CS : this bit is set when there is a change in OCA. 
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_PRC      = $u32 0b0000000000100000 << $u32 16;   // port reset change - RW1CS : 1 means there was a 1 -> 0 transition in PR
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_PLC      = $u32 0b0000000001000000 << $u32 16;   // port link state change - RW1CS : set due to PLS transitions
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_CEC      = $u32 0b0000000010000000 << $u32 16;   // port config error change - RW1CS : set due to this port failing to configure its link partner
+[__GLOBAL_FIRST__] u32 XHCI_PORTSC_WPR      = $u32 0b1000000000000000 << $u32 16;   // warm port reset - RW1S : when host writes 1 to this bit, the warm reset sequence as defined in USB3 specification is initiated
+
+u32 XHCI_PORTSC_RW1C_MASK = 
+    XHCI_PORTSC_PED |
+    XHCI_PORTSC_CSC | 
+    XHCI_PORTSC_PEC |
+    XHCI_PORTSC_WRC |
+    XHCI_PORTSC_OCC |
+    XHCI_PORTSC_PRC |
+    XHCI_PORTSC_PLC |
+    XHCI_PORTSC_CEC
+;
+
+// port registers
+// located at +0x400 relative to start of operational registers
+struct xHCI_port_regs {
+    u32 PORTSC;             // status / control
+    u32 PORTPMSC;           // 
+    u32 PORTLI;
+    u32 reserved;
+}
+
+// extended capability pointer register
+// located at an offset relative to xHCI MMIO base defined by HCCPARAMS1.ECP
+// the register itself is 32-bits, but depending on the capability, it may be longer
+[__GLOBAL_FIRST__] u32 XHCI_EXTCAP_CAPID    = $u32 0x000000FF;      // capability id
+[__GLOBAL_FIRST__] u32 XHCI_EXTCAP_NEXTOFF  = $u32 0x0000FF00;      // next extcap offset : if 0 it indicates the end of the array, otherwise gives an offset in units of 4-bytes relative from the start of this extcap register to the next one
+[__GLOBAL_FIRST__] u32 XHCI_EXTCAP_DATA     = $u32 0xFFFF0000;      // capability specific
+
+[__GLOBAL_FIRST__] u8 XHCI_EXTCAP_SUPPORTED_PROTOCOL = $u8 2;               // 
+
+// runtime registers
+// located at offset +RTSOFF from xHCI MMIO base
+struct xHCI_runtime_regs {
+    u32 MFINDEX;             // microframe index
+    u8[28] reserved;    
+}
+
+// doorbell registers
+// located at offset + DBOFF from xHCI MMIO base
+// these registers are all 32-bits, and should only be written to in their entirety (dword accesses)
+// for this reason, I have not provided a struct for doorbell registers
+[__GLOBAL_FIRST__] u32 XHCI_DB_TARGET = $u32 0x000000FF;
+[__GLOBAL_FIRST__] u32 XHCI_DB_TASKID = $u32 0xFFFF0000;
+
+[__GLOBAL_FIRST__] u32 XHCI_IMAN_IP = $u32 0b0001;  // interrupt pending - RW1C : if set to 1, an interrupt is pending for this interrupter
+[__GLOBAL_FIRST__] u32 XHCI_IMAN_IE = $u32 0b0010;  // interrupt enable : when IE and IP are 1, an interrupt should be generated
+
+[__GLOBAL_FIRST__] u64 XHCI_ERDP_EHB = 0b1000;      // event handler busy - RW1C : set to 1 when IP is set to 1, should be cleared to 0 when writing to ERDP
+
+// interrupter register set
+// directly after runtime registers in memory, there will be up to 1024 contiguous interrupter registers
+// an interrupter register points to a ERST. When the xHC writes an event to an event ring, the corresponding interrupter
+// will have a flag enabled so the host knows to go read the event ring for new TRBs.
+struct xHCI_INTRS {
+    u32 IMAN;           // interrupter management
+    u32 IMOD;           // interrupter moderation
+    u32 ERSTSZ;         // event ring segment table size, how many ERST entries this event ring uses
+    u32 reserved;       
+    u64 ERSTBA;         // event ring segment table base address
+    u64 ERDP;           // event ring dequeue pointer, physical deque pointer to event ring. controlled by host
+}
+
+
+// Transfer Request Block
+// used in ring buffers so that host and xHC can communicate
+// there are many types, but they mostly follow the same general structure
+// in the command ring, host writes and hardware reads
+// in the event ring, hardware writes and host reads
+
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_RESERVED           = $u32 0;
+
+// transfer TRBs
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_NORMAL             = $u32 1;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_SETUP_STAGE        = $u32 2;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_DATA_STAGE         = $u32 3;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_STATUS_STAGE       = $u32 4;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_ISOCH              = $u32 5;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_LINK               = $u32 6;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_EVENT_DATA         = $u32 7;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_NO_OP              = $u32 8;
+
+// command TRBs
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_ENABLE_SLOT        = $u32 9;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_DISABLE_SLOT       = $u32 10;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_ADDRESS_DEVICE     = $u32 11;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_CONFIGURE_EP       = $u32 12;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_EVALUATE_CTX       = $u32 13;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_RESET_ENDPOINT     = $u32 14;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_STOP_ENDPOINT      = $u32 15;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_SET_TR_DEQ_PTR     = $u32 16;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_RESET_DEVICE       = $u32 17;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_FORCE_EVENT        = $u32 18;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_NEGOTIATE_BW       = $u32 19;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_SET_LATENCY_TV     = $u32 20;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_GET_PORT_BW        = $u32 21;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_FORCE_HEADER       = $u32 22;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_NO_OP_CMD          = $u32 23;
+
+// event TRBs
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_TRANSFER_EVENT     = $u32 32;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_CMD_COMPLETION     = $u32 33;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_PORT_STATUS        = $u32 34;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_BW_REQUEST         = $u32 35;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_DOORBELL_EVENT     = $u32 36;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_HC_EVENT           = $u32 37;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_DEV_NOTIFICATION   = $u32 38;
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE_MFINDEX_WRAP       = $u32 39;
+
+// command completion codes
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_INVALID                 = $u32 0;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_SUCCESS                 = $u32 1;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_DATA_BUFFER_ERROR       = $u32 2;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_BABBLE_DETECTED_ERROR   = $u32 3;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_USB_TRANSACTION_ERROR   = $u32 4;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_TRB_ERROR               = $u32 5;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_STALL_ERROR             = $u32 6;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_RESOURCE_ERROR          = $u32 7;
+
+// TRB control bits
+[__GLOBAL_FIRST__] u32 XHCI_TRB_C           = $u32 0b0000000000000001;      // cycle : determines if this TRB is new or stale for this lap
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE        = $u32 0b1111110000000000;      // type : starts at bit 10
+
+[__GLOBAL_FIRST__] u32 XHCI_TRB_LINK_TC     = $u32 0b0000000000000010;      // toggle cycle : if this is set, internal cycle state should be toggled after processing this link TRB
+
+// Setup Stage TRB constants
+[__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_IOC                 = $u32 0b0000000000100000;              // interrupt on completion 
+[__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_IDT                 = $u32 0b0000000001000000;              // immediate data : should be set to 1 for a setup stage TRB, specifies this TRB contains data, not a pointer
+
+[__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_NODATA  = $u32 0;
+[__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_OUT     = $u32 2;
+[__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_IN      = $u32 3;
+
+// Data Stage TRB constants
+[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_ENT      = $u32 0b0000000000000010;
+[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_ISP      = $u32 0b0000000000000100;
+[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_NS       = $u32 0b0000000000001000;
+[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_CH       = $u32 0b0000000000010000;
+[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_IOC      = $u32 0b0000000000100000;
+[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_IDT      = $u32 0b0000000001000000;
+[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_DIR      = $u32 0b0000000000000001 << $u32 16;
+
+// Status Stage TRB constants
+[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_ENT    = $u32 0b0000000000000010;              // evaluate next TRB : if set, xHC will fetch and evaluate the next TRB before saving endpoint state
+[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_CH     = $u32 0b0000000000010000;              // chain bit : if set, this TRB is associated with the next TRB in the ring
+[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_IOC    = $u32 0b0000000000100000;              // interrupt on completion
+[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_DIR    = $u32 0b0000000000000001 << $u32 16;   // direction : indicates the direction of data transfer, IN if set, OUT if cleared
+
+// USB standard requests
+// bRequest constants (Setup Stage field)
+// https://www.beyondlogic.org/usbnutshell/usb6.shtml
+[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_STATUS          = $u32 0x00;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_CLEAR_FEATURE       = $u32 0x01;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_FEATURE         = $u32 0x03;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_ADDRESS         = $u32 0x05;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_DESCRIPTOR      = $u32 0x06;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_DESCRIPTOR      = $u32 0x07;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_CONFIGURATION   = $u32 0x08;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_CONFIGURATION   = $u32 0x09;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_INTERFACE       = $u32 0x0A;
+[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_INTERFACE       = $u32 0x0B;
+
+// bmRequestType constants (Setup Stage field)
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_OUT                 = $u32 0b00000000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_IN                  = $u32 0b10000000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_STANDARD            = $u32 0b00000000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_CLASS               = $u32 0b00100000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_VENDOR              = $u32 0b01000000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE    = $u32 0b00000000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_INTERFACE = $u32 0b00000001;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_ENDPOINT  = $u32 0b00000010;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_OTHER     = $u32 0b00000011;
+
+// USB descriptor types
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_DEVICE                      = $u32 1;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_CONFIGURATION               = $u32 2;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_STRING                      = $u32 3;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_INTERFACE                   = $u32 4;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_ENDPOINT                    = $u32 5;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_DEVICE_QUALIFIER            = $u32 6;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_OTHER_SPEED_CONFIGURATION   = $u32 7;
+[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_INTERFACE_POWER             = $u32 8;
+
+struct xHCI_TRB {
+    u64 parameter;
+    u32 status;
+    u32 control;
+}
+
+// Event Ring Segment Table 
+// used to define multi-segment event rings and enable runtime expansion and shrinking of the event ring
+struct xHCI_ERST_ent {
+    u64 ring_segment_base_addr;         // the low 6 bits are reserved
+    u16 ring_segment_size;              // the number of TRBs in this ring, this must be in range [16, 4096]
+    u16 reserved0;
+    u32 reserved1;
+}
+
+// Input Control Context
+// header for Input Context data blob used to configure device endpoints
+// Input Context struct contains this header, a Slot Context struct, and 31 endpoint context structs. 
+// tells xHC what endpoints this Input Context should affect via bitmasks
+// this is the 32-byte version, the 64-byte version is just this but with 32-bytes of 0-padding added on the end
+struct xHCI_input_control_ctx32 {
+    u32 drop_context_flags;     // this bitmask identifies which contexts should be disabled, if set to 1, the respective context is disabled, otherwise its ignored
+    u32 add_context_flags;      // this bitmask identifies which contexts should be evaluated/enabled by this command, if set to 1, the respective context is evaluated/enabled.
+    u32[5] reserved0;
+    u8 config_value;
+    u8 interface_number;
+    u8 alternate_setting;
+    u8 reserved1;
+}
+
+// Slot Context
+// defines information that applies to the device as a whole
+// defined in section 6.2.2 in manual
+struct xHCI_slot_ctx32 {
+    u32 dev_info0;
+    u32 dev_info1;
+    u32 dev_info2;
+    u32 dev_info3;
+    u32[4] reserved;
+}
+
+// dev_info0
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_ROUTE_STRING           = $u32 0x000FFFFF;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_MTT                    = $u32 0x02000000;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_HUB                    = $u32 0x04000000;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_CONTEXT_ENTRIES        = $u32 0xF8000000;
+
+// dev_info1
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_MAX_EXIT_LATENCY       = $u32 0x0000FFFF;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_ROOT_HUB_PORT_NUMBER   = $u32 0x00FF0000;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_NUMBER_OF_PORTS        = $u32 0xFF000000;
+
+// dev_info2
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_PARENT_HUB_SLOT_ID     = $u32 0x000000FF;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_PARENT_PORT_NUMBER     = $u32 0x0000FF00;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_TTT                    = $u32 0x00030000;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_INTERRUPTER_TARGET     = $u32 0xFFC00000;
+
+// dev_info3
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_USB_DEVICE_ADDRESS     = $u32 0x000000FF;
+[__GLOBAL_FIRST__] u32 XHCI_SLOT_CTX_SLOT_STATE             = $u32 0xFF800000;
+
+// Endpoint Context
+// defines information that applies to a specific endpoint
+// defined in section 6.2.3 in manual
+struct xHCI_endpoint_ctx32 {
+    u32 ep_info0;
+    u32 ep_info1;
+    u64 deque_ptr;
+    u32 ep_info2;
+    u32[3] reserved;
+}
+
+// ep_info0
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_EP_STATE               = $u32 0x00000007;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_MULT                   = $u32 0x00000300;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_MAX_P_STREAMS          = $u32 0x00007C00;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_LSA                    = $u32 0x00008000;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_INTERVAL               = $u32 0x00FF0000;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_MAX_ESIT_PAYLOAD_HI    = $u32 0xFF000000;
+
+// ep_info1
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_CERR                   = $u32 0x00000007;      // error count : maximum amount of consecutive bus errors allowed 
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_EP_TYPE                = $u32 0x00000038;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_HID                    = $u32 0x00000080;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_MAX_BURST_SIZE         = $u32 0x0000FF00;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_MAX_PACKET_SIZE        = $u32 0xFFFF0000;
+
+// deque_ptr
+[__GLOBAL_FIRST__] u64 XHCI_ENDPOINT_CTX_DCS                    = 0x0000000000000001;   // deque cycle state : endpoint TRB ring cycle state
+[__GLOBAL_FIRST__] u64 XHCI_ENDPOINT_CTX_DEQUE_PTR              = 0xFFFFFFFFFFFFFFF0;   // deque ptr : physical memory pointer to start of endpoint TRB ring
+
+// ep_info2
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_AVG_TRB_LENGTH         = $u32 0x0000FFFF;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_CTX_MAX_ESIT_PAYLOAD_LO    = $u32 0xFFFF0000;
+
+// endpoint states
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_STATE_DISABLED     = $u32 0;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_STATE_RUNNING      = $u32 1;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_STATE_HALTED       = $u32 2;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_STATE_STOPPED      = $u32 3;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_STATE_ERROR        = $u32 4;
+
+// endpoint types
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_INVALID       = $u32 0;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_ISOCH_OUT     = $u32 1;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_BULK_OUT      = $u32 2;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_INTERRUPT_OUT = $u32 3;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_CONTROL_BI    = $u32 4;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_ISOCH_IN      = $u32 5;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_BULK_IN       = $u32 6;
+[__GLOBAL_FIRST__] u32 XHCI_ENDPOINT_TYPE_INTERRUPT_IN  = $u32 7;
+
+//the main method of communication between the host and hardware is via TRBs in ring buffers
+//since we don't have a synchronized 'start' and 'end' buffer pointer, the way that the consumer
+//knows to keep reading entries is the cycle flag on each TRB. 
+//the consumer has an internal 'cycle state', and if the cycle flag on the TRB matches the cycle state,
+//then the TRB is considered fresh. Otherwise it's stale and the consumer should stop reading. 
+//when the producer writes a new TRB, they'll write the TRB and assign the cycle flag to their internal cycle state.
+//when the consumer/producer reaches the end of the ring buffer, it should encounter a link TRB with the TC flag on, 
+//this should cause the producer and consumer to toggle their internal states. 
+//when initializing the ring buffers, we want to initialize them with all stale TRBs. For ease of initialization,
+//we'll just initialize the consumer/producer cycle state to 1, this way cycle=0 is stale and we can just zero 
+//out the TRB ring buffers. 
+[__GLOBAL_FIRST__] xHCI_TRB* XHCI_COMMAND_RING;
+[__GLOBAL_FIRST__] u32 XHCI_COMMAND_PRODUCER_STATE;
+[__GLOBAL_FIRST__] u64 XHCI_COMMAND_PRODUCER_INDEX;
+
+//number of TRBs in all command/transfer rings, including the link TRB 
+[__GLOBAL_FIRST__] u64 XHCI_TRB_RING_SIZE; 
+
+[__GLOBAL_FIRST__] xHCI_cap_regs* XHCI_CAP_REGS;
+[__GLOBAL_FIRST__] xHCI_op_regs* XHCI_OP_REGS;
+[__GLOBAL_FIRST__] xHCI_port_regs* XHCI_PORT_REGS;
+[__GLOBAL_FIRST__] xHCI_runtime_regs* XHCI_RUNTIME_REGS;
+[__GLOBAL_FIRST__] xHCI_INTRS* XHCI_INTERRUPTERS;       
+[__GLOBAL_FIRST__] u32* XHCI_DB_REGS;                       //doorbell registers
+[__GLOBAL_FIRST__] u64* XHCI_DCBAA;                         //array of 64-bit pointers to memory hardware can use
+
+[__GLOBAL_FIRST__] u64 XHCI_MAX_PORTS;                      //amount of ports connected to the root hub
+[__GLOBAL_FIRST__] u32* XHCI_PORT_PROTOCOL_SLOT_TYPE_MAP;
+[__GLOBAL_FIRST__] u64* XHCI_PORT_SLOT_MAP;                 //TODO
+[__GLOBAL_FIRST__] u8* XHCI_PORT_PROTOCOL_MAP;
+[__GLOBAL_FIRST__] u8 XHCI_PORT_PROTOCOL_UNKNOWN = $u8 0;
+[__GLOBAL_FIRST__] u8 XHCI_PORT_PROTOCOL_USB2 = $u8 2;
+[__GLOBAL_FIRST__] u8 XHCI_PORT_PROTOCOL_USB3 = $u8 3;
+
+[__GLOBAL_FIRST__] u64 XHCI_MAX_SLOTS;
+[__GLOBAL_FIRST__] xHCI_TRB*** XHCI_SLOT_RINGS;             //each slot has up to 31 endpoints
+[__GLOBAL_FIRST__] u64** XHCI_SLOT_PRODUCER_INDEXES;
+[__GLOBAL_FIRST__] u32** XHCI_SLOT_PRODUCER_STATES;
+[__GLOBAL_FIRST__] i32* XHCI_SLOT_IN_USE;   
+
+//should be 1-to-1 with interrupters
+[__GLOBAL_FIRST__] u64* XHCI_EVENT_RING_PTRS;   
+[__GLOBAL_FIRST__] u32* XHCI_EVENT_RING_STATES;
+
+//notifies xHC that there is some available TRBs to read at the corresponding transfer ring
+void xhci_ring_transfer_doorbell(u32 slot, u64 endpoint) {
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_consumer_index() : slot out of range [1, XHCI_MAX_SLOTS]");
+    assert(endpoint < $u64 32, "xhci_get_slot_consumer_index() : endpoint out of range");
+
+    asm!("mfence"); //ensure any TRB writes before this are flushed
+    u32 dci = $u32 endpoint;
+    XHCI_DB_REGS[slot] = $u32 (dci & $u32 0xFF);
+}
+
+//notifies xHC that there is some available TRBs to read on the command ring
+void xhci_ring_command_doorbell() {
+    asm!("mfence"); //ensure any TRB writes before this are flushed
+    XHCI_DB_REGS[0] = $u32 0;
+}
+
+//writes a TRB to the corresponding transfer ring
+u64 xhci_write_transfer(u32 slot, u64 endpoint, xHCI_TRB* trb) {
+    xHCI_TRB* ring = xhci_get_slot_transfer_ring(slot, endpoint);
+    return xhci_write_trb_to_ring(
+        trb, 
+        ring, 
+        XHCI_TRB_RING_SIZE, 
+        xhci_get_slot_producer_index(slot, endpoint), 
+        xhci_get_slot_producer_state(slot, endpoint)
+    );
+}
+
+//writes a TRB to the command ring
+u64 xhci_write_command(xHCI_TRB* trb) {
+    return xhci_write_trb_to_ring(trb, XHCI_COMMAND_RING, XHCI_TRB_RING_SIZE, XHCI_COMMAND_PRODUCER_INDEX, XHCI_COMMAND_PRODUCER_STATE);
+}
+
+//on a transfer ring, many commands take multiple TRBs, and you do not want these multi-TRB commands to cross a link TRB border. 
+//if the specified transfer ring does not have enough slots to fit amt TRBs before wrapping, 
+// this just writes No-Op TRBs to the specified transfer ring until it loops back around
+void xhci_ensure_space_on_transfer_ring(u32 slot, u64 endpoint, u64 amt) {
+    xHCI_TRB* ring = xhci_get_slot_transfer_ring(slot, endpoint);
+    u64& producer_ind = xhci_get_slot_producer_index(slot, endpoint);
+    u32& producer_state = xhci_get_slot_producer_state(slot, endpoint);
+    u64 ring_sz = XHCI_TRB_RING_SIZE;
+
+    assert(amt <= ring_sz - 0x1, "xhci_ensure_space_on_transfer_ring() : amt is too big for ring");
+    assert(producer_ind < ring_sz - 0x1, "xhci_ensure_space_on_transfer_ring() : should always have enough space for one TRB");
+    if((ring_sz - 0x1) - producer_ind >= amt) {
+        //already have enough space
+        return;
+    }
+
+    //write no-op until wrap
+    xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+    trb->status |= $u32 0 << $u32 22;   //interrupter target
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_NO_OP);
+
+    while(producer_ind != 0x0) {
+        xhci_write_trb_to_ring(trb, ring, ring_sz, producer_ind, producer_state);
+    }
+
+    free($void* trb, sizeof(xHCI_TRB));
+}
+
+//writes a TRB to the given ring
+//updates the provided producer state
+//assumes a ring with one contiguous segment of TRBs and a link TRB at the end
+//returns the address at which the TRB was written
+u64 xhci_write_trb_to_ring(xHCI_TRB* trb, xHCI_TRB* ring, u64 ring_sz, u64& producer_ind, u32& producer_state) {
+    assert(trb != nullptr, "xhci_write_trb_to_ring() : null TRB");
+    assert(ring != nullptr, "xhci_write_trb_to_ring() : null ring");
+    assert(ring_sz > 0x1, "xhci_write_trb_to_ring() : ring has to be larger than 1 TRB");
+    assert(producer_ind < ring_sz - 0x1, "xhci_write_trb_to_ring() : producer_ind has to be before the link TRB");
+    assert(producer_state == $u32 0 || producer_state == XHCI_TRB_C, "xhci_write_trb_to_ring() : invalid producer state");
+
+    //write TRB
+    xHCI_TRB* t = @(ring[producer_ind]);
+    t->parameter = trb->parameter;
+    t->status = trb->status;
+    t->control = (trb->control & ~XHCI_TRB_C) | producer_state;            
+
+    //advance
+    producer_ind ++;
+    if(producer_ind == ring_sz - 0x1) {
+        //should be at link TRB
+        xHCI_TRB* link_trb = @(ring[producer_ind]);
+        u32 type = ((link_trb->control & XHCI_TRB_TYPE) >> $u32 10);
+        assert(type == XHCI_TRB_TYPE_LINK, "xhci_write_command() : this TRB should be the link TRB");
+
+        //set cycle state equal to producer state
+        link_trb->control = (link_trb->control & ~XHCI_TRB_C) | producer_state;
+
+        //we need to toggle producer state
+        assert((link_trb->control & XHCI_TRB_LINK_TC) != $u32 0, "xhci_write_trb_to_ring() : link TRB needs to have LINK_TC on");
+        producer_state ^= XHCI_TRB_C;
+
+        //go back to beginning
+        producer_ind = 0x0;
+    }
+
+    return $u64 t;
+}
+
+//should be able to handle all event TRBs not generated by a direct command
+void xhci_handle_event(xHCI_TRB* ev_trb) {
+    u32 trb_type = xhci_trb_type(ev_trb);
+    if(trb_type == XHCI_TRB_TYPE_PORT_STATUS) {
+        println("xhci_handle_event() : port status changed");
+
+        //get port
+        u64 port_id = (ev_trb->parameter >> $u64 24) & 0xFF;
+        assert(0x1 <= port_id && port_id <= XHCI_MAX_PORTS, "xhci_handle_event() : port status invalid port id");
+        xHCI_port_regs* port = xhci_get_port(port_id);
+
+        //for now, just ack whatever changed
+        xhci_portsc_write_bits(port, port->PORTSC, port->PORTSC & XHCI_PORTSC_RW1C_MASK);
+    }
+    else println("xhci_handle_event() : ignoring event ", trb_type);
+}
+
+//polls events on an interrupter until it sees an event that has a matching type and TRB ptr
+void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u64 intr_ind, xHCI_TRB* out_trb) {
+    vector<xHCI_TRB> events;
+    xHCI_TRB* buf = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    while(1) {
+        while(xhci_poll_event(intr_ind, buf)) {
+            // spin
+        }
+
+        u32 type = xhci_trb_type(buf);
+        u64 ptr = buf->parameter;
+        if(type == tgt_type && ptr == tgt_ptr) {
+            break;
+        }
+
+        //some events may require limited immediate action, do that here
+        //TODO
+
+        events.push_back(*buf);
+    }
+    
+    //write to out_trb
+    memcpy($void* out_trb, $void* buf, sizeof(xHCI_TRB));
+    free($void* buf, sizeof(xHCI_TRB));
+
+    //handle all other events recieved
+    for(u64 i = 0x0; i < events.size(); i++) {
+        xhci_handle_event(@(events[i]));
+    }
+}
+
+//retrieves the next TRB from the given interrupter
+//does not check IMAN.IP
+//returns 0 on success, 1 on failure
+i32 xhci_poll_event(u64 ind, xHCI_TRB* out_trb) {
+    xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[ind]);
+    u64 ev_ptr = XHCI_EVENT_RING_PTRS[ind];
+    u32 ev_state = XHCI_EVENT_RING_STATES[ind];
+    assert(intr->ERSTSZ == $u32 1, "xhci_read_event() : only support event rings with one segment for now");
+
+    xHCI_ERST_ent* erst = $xHCI_ERST_ent* intr->ERSTBA;
+    xHCI_TRB* event_ring = $xHCI_TRB* erst->ring_segment_base_addr;
+    u64 ring_sz = $u64 erst->ring_segment_size;
+    assert(ev_ptr < ring_sz, "xhci_read_event() : ev_ptr is out of bounds");
+    xHCI_TRB* trb = @(event_ring[ev_ptr]);
+
+    //check TRB freshness
+    if((trb->control & XHCI_TRB_C) != ev_state) {
+        return 1;   
+    }
+
+    //copy to out_trb
+    out_trb->parameter = trb->parameter;
+    out_trb->status    = trb->status;
+    out_trb->control   = trb->control;
+
+    //advance dequeue
+    ev_ptr ++;
+    if(ev_ptr == ring_sz) {
+        ev_ptr = 0x0;
+        ev_state ^= XHCI_TRB_C;
+    }
+
+    //update ERDP
+    u64 new_ERDP = (($u64 event_ring + ev_ptr * sizeof(xHCI_TRB)) & ~0xF) | XHCI_ERDP_EHB;
+    intr->ERDP = new_ERDP;
+
+    //update consumer state
+    XHCI_EVENT_RING_PTRS[ind] = ev_ptr;
+    XHCI_EVENT_RING_STATES[ind] = ev_state;
+
+    return 0;
+}
+
+//extracts the type of the TRB
+u32 xhci_trb_type(xHCI_TRB* trb) {
+    return (trb->control & XHCI_TRB_TYPE) >> $u32 10;
+}
+
+void xhci_trb_set_type(xHCI_TRB* trb, u32 type) {
+    trb->control = trb->control | (type << $u32 10);
+}
+
+//extracts the completion code from an event TRB
+u32 xhci_event_trb_completion_code(xHCI_TRB* trb) {
+    return trb->status >> $u32 24;
+}
+
+//extracts slot id from an event TRB
+u32 xhci_event_trb_slot_id(xHCI_TRB* trb) {
+    return trb->control >> $u32 24;
+}
+
+//initializes a command / transfer TRB ring buffer with a link TRB at the end
+void xhci_init_page_TRB_ring(void* buf) {
+    assert($u64 buf % PAGE_SIZE == 0x0, "xhci_init_page_TRB_ring() : buf should be page aligned");
+    memset(buf, 0, PAGE_SIZE);
+
+    xHCI_TRB* link_trb = $xHCI_TRB* ($u64 buf + PAGE_SIZE - sizeof(xHCI_TRB));
+    link_trb->parameter = $u64 buf;                                                 //point link TRB back to first TRB
+    link_trb->status = $u32 0;
+    link_trb->control = $u32 (XHCI_TRB_TYPE_LINK << $u32 10) | XHCI_TRB_LINK_TC;    //link TRB should toggle cycle state
+}
+
+void init_xhci(u64 addr) {
+    assert(!XHCI_DID_INIT, "init_xhci() : double init");
+    println("start init xhci");
+
+    assert(sizeof(xHCI_TRB) == 0x10, "init_xhci() : sizeof(TRB) should be 16");
+
+    //initialize host command producer
+    XHCI_COMMAND_PRODUCER_STATE = XHCI_TRB_C;
+    XHCI_COMMAND_PRODUCER_INDEX = 0x0;
+
+    XHCI_TRB_RING_SIZE = PAGE_SIZE / sizeof(xHCI_TRB);  
+
+    //need to find address and size of xHCI MMIO from PCI header
+    u64 xhci_mmio = 0x0;
+    u64 xhci_mmio_size = 0x0;
+    PCIHeader0* pci_hdr = $PCIHeader0* addr;
+    {
+        u64 BAR0 = $u64 pci_hdr->BAR0;
+        u64 BAR1 = $u64 pci_hdr->BAR1;
+        assert((BAR0 & 0x1) == 0x0, "init_xhci() : make sure this is a memory BAR");
+        u64 type = (BAR0 >> 0x1) & 0x3;
+        if(type == 0x0) {
+            // 32-bit 
+            xhci_mmio = BAR0 & ~0xF;
+
+            //get size
+            pci_hdr->BAR0 = $u32 0xFFFFFFFF;
+            u32 mask = pci_hdr->BAR0;
+            pci_hdr->BAR0 = $u32 BAR0;
+            xhci_mmio_size = $u64 (~(mask & $u32 ~0xF) + $u32 1);
+        }
+        else if(type == 0x2) {
+            // 64-bit
+            xhci_mmio = (BAR1 << $u64 32) | (BAR0 & ~0xF);
+
+            //get size
+            pci_hdr->BAR0 = $u32 0xFFFFFFFF;
+            pci_hdr->BAR1 = $u32 0xFFFFFFFF;
+            u32 mask0 = pci_hdr->BAR0;
+            u32 mask1 = pci_hdr->BAR1;
+            pci_hdr->BAR0 = $u32 BAR0;
+            pci_hdr->BAR1 = $u32 BAR1;
+
+            u64 mask = ($u64 mask1 << $u64 32) | ($u64 mask0 & ~0xF);
+            xhci_mmio_size = (~mask) + 0x1;
+        }
+        else panic("init_xhci() : unknown type value");
+    }
+    assert(xhci_mmio != 0x0, "init_xhci() : xhci mmio base shouldn\'t be 0?");
+    assert(xhci_mmio_size != 0x0, "init_xhci() : xhci size should not be 0");
+
+    println("xHCI MMIO size : ", xhci_mmio_size);
+
+    //if xHCI MMIO isn't identity mapped, map it here
+    pagetable_t pt = pt_get_current();
+    for(u64 i = 0x0; i < xhci_mmio_size; i += PAGE_SIZE) {
+        void* vaddr = $void* (xhci_mmio + i);
+        pt_map_page_if_not_mapped(pt, vaddr, vaddr, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
+    }
+
+    //set bits in command register
+    {
+        u16 cmd = pci_hdr->command; 
+        cmd |= $u16 (1 << 1);   // MSE (memory space enable)
+        cmd |= $u16 (1 << 2);   // BME (bus master enable)
+        pci_hdr->command = cmd;
+    }
+
+    //gather xHCI registers
+    xHCI_cap_regs* cap_regs = $xHCI_cap_regs* xhci_mmio;
+    u64 rtsoff = $u64 cap_regs->RTSOFF & ~0x1F;
+    u64 dboff = $u64 cap_regs->DBOFF & ~0x3;
+
+    xHCI_op_regs* op_regs = $xHCI_op_regs* (xhci_mmio + $u64 cap_regs->CAPLENGTH);
+    xHCI_port_regs* port_regs = $xHCI_port_regs* ($u64 op_regs + 0x400);
+    xHCI_runtime_regs* runtime_regs = $xHCI_runtime_regs* (xhci_mmio + rtsoff);
+    assert(sizeof(xHCI_runtime_regs) == 0x20, "init_xhci() : runtime regs should be size 0x20");
+    xHCI_INTRS* interrupters = $xHCI_INTRS* ($u64 runtime_regs + sizeof(xHCI_runtime_regs));
+    u32* db_regs = $u32* (xhci_mmio + dboff);
+
+    XHCI_CAP_REGS = cap_regs;
+    XHCI_OP_REGS = op_regs;
+    XHCI_PORT_REGS = port_regs;
+    XHCI_RUNTIME_REGS = runtime_regs;
+    XHCI_INTERRUPTERS = interrupters;
+    XHCI_DB_REGS = db_regs;
+
+    //only support 64-bit addressing for now
+    assert((cap_regs->HCCPARAMS1 & XHCI_HCCPARAMS1_AC64) != $u32 0x0, "init_xhci() : only support 64-bit addressing for now");
+
+    //host controller should not be running currently
+    assert((op_regs->USBCMD & XHCI_USBCMD_RS) == $u32 0, "init_xhci() : host controller should not be running");
+
+    //reset host controller
+    op_regs->USBCMD |= XHCI_USBCMD_HCRST;
+    while(op_regs->USBCMD & XHCI_USBCMD_HCRST) {
+        // spin
+    }
+
+    //wait until controller is ready
+    while(op_regs->USBSTS & XHCI_USBSTS_CNR) {
+        // spin
+    }
+
+    //alloc stuff for host controller 
+    {
+        // Device Context Base Address Array
+        //256 64-bit pointers = 2048 bytes
+        u64 DCBAA_addr = $u64 palloc();
+        memset($void* DCBAA_addr, 0, PAGE_SIZE);
+        {
+            //find max number of scratchpads
+            u64 nr_scratch_lo = ($u64 cap_regs->HCSPARAMS2 >> $u64 27) & 0x1F;
+            u64 nr_scratch_hi = ($u64 cap_regs->HCSPARAMS2 >> $u64 21) & 0x1F;
+            u64 nr_scratch = (nr_scratch_hi << $u64 5) | nr_scratch_lo;
+            println("Nr Scratchpads : ", nr_scratch);
+            
+            //need to alloc scratchpad buffer
+            if (nr_scratch != 0x0) {
+                assert(nr_scratch <= $u64 512, "init_xhci() : currently can\'t alloc more than 4096 contiguous physical bytes");
+
+                // Scratchpad Buffer Array (SBA)
+                u64 sba_addr = $u64 palloc();
+                memset($void* sba_addr, 0, PAGE_SIZE);
+
+                // allocate scratchpad buffers and store their physical addresses in SBA
+                u64* sba = $u64* sba_addr;
+                for (u64 i = 0x0; i < nr_scratch; i++) {
+                    u64 buf = $u64 palloc();                       // 4KB scratchpad buffer
+                    memset($void* buf, 0, PAGE_SIZE);
+                    sba[i] = buf; 
+                }
+
+                // DCBAA[0] points to SBA 
+                ($u64* DCBAA_addr)[0] = sba_addr;
+            }
+        }
+        op_regs->DCBAAP = DCBAA_addr;
+        XHCI_DCBAA = $u64* DCBAA_addr;
+
+        // Command TRB Ring
+        // used by the host to communicate with xHC
+        // 256 16-byte TRBs = 4096 bytes
+        u64 command_ring_addr = $u64 palloc();
+        memset($void* command_ring_addr, 0, PAGE_SIZE);
+        xhci_init_page_TRB_ring($void* command_ring_addr);
+        op_regs->CRCR = (command_ring_addr & ~0x3F) | XHCI_CRCR_RCS;    //initialize hardware consumer with cycle=1
+        XHCI_COMMAND_RING = $xHCI_TRB* command_ring_addr;
+
+        // Event TRB Ring + ERST
+        // 256 16-byte TRBs = 4096 bytes
+        // for now, just allocate one ERST entry
+        u64 event_ring_addr = $u64 palloc();
+        u64 ERST_addr = $u64 palloc();
+        memset($void* event_ring_addr, 0, PAGE_SIZE);
+        memset($void* ERST_addr, 0, PAGE_SIZE);
+        {
+            xHCI_ERST_ent* ents = $xHCI_ERST_ent* ERST_addr;
+
+            //just point first entry to event_ring_addr
+            ents[0].ring_segment_base_addr = event_ring_addr;
+            ents[0].ring_segment_size = $u16 (PAGE_SIZE / sizeof(xHCI_TRB));
+
+            //point first interrupter to this ERST
+            interrupters[0].ERSTSZ = $u32 1;
+            interrupters[0].ERSTBA = ERST_addr;
+            interrupters[0].ERDP = event_ring_addr;
+        }
+
+        //allocate room for event ring consumer state storage
+        XHCI_EVENT_RING_PTRS = $u64* palloc();
+        XHCI_EVENT_RING_STATES = $u32* palloc();
+        memset($void* XHCI_EVENT_RING_PTRS, 0, PAGE_SIZE);
+        memset($void* XHCI_EVENT_RING_STATES, 0, PAGE_SIZE);
+
+        //initialize all consumer states to 1
+        for(u64 i = 0x0; i * sizeof(u32) < PAGE_SIZE; i++) {
+            XHCI_EVENT_RING_STATES[i] = XHCI_TRB_C;
+        }
+
+        //set max device slots in CONFIG
+        u32 max_slots = cap_regs->HCSPARAMS1 & XHCI_HCSPARAMS1_MAXSLOTS;
+        op_regs->CONFIG = (op_regs->CONFIG & ~XHCI_CONFIG_MAXSLOTS) | max_slots;
+        XHCI_MAX_SLOTS = $u64 max_slots;
+        println("xHCI Max Slots : ", max_slots);
+
+        //get number of ports
+        XHCI_MAX_PORTS = $u64 (cap_regs->HCSPARAMS1 >> $u32 24);
+        println("xHCI Max Ports : ", XHCI_MAX_PORTS);
+
+        //alloc memory for slot transfer rings
+        XHCI_SLOT_RINGS = $xHCI_TRB*** malloc(sizeof(xHCI_TRB**) * (XHCI_MAX_SLOTS + 0x1));
+        XHCI_SLOT_PRODUCER_INDEXES = $u64** malloc(sizeof(u64*) * (XHCI_MAX_SLOTS + 0x1));
+        XHCI_SLOT_PRODUCER_STATES = $u32** malloc(sizeof(u32*) * (XHCI_MAX_SLOTS + 0x1));
+        XHCI_SLOT_IN_USE = $i32* malloc(sizeof(i32) * (XHCI_MAX_SLOTS + 0x1));
+        for(u64 i = 0x0; i <= XHCI_MAX_SLOTS; i++) {
+            XHCI_SLOT_RINGS[i] = $xHCI_TRB** malloc(sizeof(xHCI_TRB*) * $u64 32);
+            XHCI_SLOT_PRODUCER_INDEXES[i] = $u64* malloc(sizeof(u64) * $u64 32);
+            XHCI_SLOT_PRODUCER_STATES[i] = $u32* malloc(sizeof(u32) * $u64 32);
+            XHCI_SLOT_IN_USE[i] = 0;
+
+            for(u64 j = 0x0; j < $u64 32; j++) {
+                XHCI_SLOT_RINGS[i][j] = $xHCI_TRB* palloc();
+            }
+        }
+
+        //alloc one page for each DCBAA pointer up to XHCI_MAX_SLOTS
+        //this is for hardware storage of endpoint contexts
+        for(u64 i = 0x1; i <= XHCI_MAX_SLOTS; i++) {
+            XHCI_DCBAA[i] = $u64 palloc();
+        }
+    }
+
+    //parse extended capabilities 
+    // - determine for each port, what protocol it uses (USB2 / USB3)
+    {
+        u64 ecp_off = ($u64 (cap_regs->HCCPARAMS1 & XHCI_HCCPARAMS1_ECP)) >> 0x10;
+        assert(ecp_off != 0x0, "init_xhci() : expect extended capabilities to exist");
+        ecp_off = (ecp_off << 0x2) + xhci_mmio;
+
+        XHCI_PORT_PROTOCOL_MAP = $u8* malloc(sizeof(u8) * XHCI_MAX_PORTS);
+        XHCI_PORT_PROTOCOL_SLOT_TYPE_MAP = $u32* malloc(sizeof(u32) * XHCI_MAX_PORTS);
+        for(u64 i = 0x0; i < XHCI_MAX_PORTS; i++) {
+            XHCI_PORT_PROTOCOL_MAP[i] = XHCI_PORT_PROTOCOL_UNKNOWN;
+            XHCI_PORT_PROTOCOL_SLOT_TYPE_MAP[i] = $u32 0;
+        }
+
+        u32* extcap_regs = $u32* ecp_off;
+        while(1) {
+            u8 cap_id = $u8 (*extcap_regs & XHCI_EXTCAP_CAPID);
+            u64 next_off = $u64 ((*extcap_regs & XHCI_EXTCAP_NEXTOFF) >> $u32 8);
+            u16 data = $u16 (((*extcap_regs & XHCI_EXTCAP_DATA)) >> $u32 16);
+            println("Found extcap : ", $u64 cap_id);
+            if(cap_id == XHCI_EXTCAP_SUPPORTED_PROTOCOL) {
+                println("xHCI Supported Protocols");
+
+                u32 name_str = extcap_regs[1];
+                print("Name : ");
+                for(u64 i = 0x0; i < 0x4; i++) {
+                    u8 c = $u8 (name_str >> $u32 (i * 0x8));
+                    print(c);
+                }
+                println("");
+
+                u8 minor_rev = $u8 (data & $u16 0x00FF);
+                u8 major_rev = $u8 ((data & $u16 0xFF00) >> $u16 8);
+                println("Major / Minor rev : ", $u64 major_rev, " ", $u64 minor_rev);
+                
+                u32 port_offset_mask = $u32 0x000000FF;
+                u32 port_count_mask = $u32 0x0000FF00;
+                u32 PSIC_mask = $u32 0xF0000000;
+
+                u32 port_offset = extcap_regs[2] & port_offset_mask;
+                u32 port_count = (extcap_regs[2] & port_count_mask) >> $u32 8;
+                u32 PSIC = (extcap_regs[2] & PSIC_mask) >> $u32 28;
+                assert(PSIC == $u32 0, "init_xhci() : PSI mappings not supported");
+
+                u32 protocol_slot_type_mask = $u32 0x0000001F;
+                u32 protocol_slot_type = extcap_regs[3] & protocol_slot_type_mask;
+
+                println("offset, count : ", port_offset, " ", port_count);
+
+                for(u64 i = 0x0; i < $u64 port_count; i++) {
+                    u64 ind = $u64 port_offset + i - 0x1;
+                    assert(XHCI_PORT_PROTOCOL_MAP[ind] == XHCI_PORT_PROTOCOL_UNKNOWN, "init_xhci() : these ranges should not overlap");
+                    if(major_rev == $u8 2) XHCI_PORT_PROTOCOL_MAP[ind] = XHCI_PORT_PROTOCOL_USB2;
+                    else if(major_rev == $u8 3) XHCI_PORT_PROTOCOL_MAP[ind] = XHCI_PORT_PROTOCOL_USB3;
+                    else panic("init_xhci() : unknown major_rev");
+
+                    XHCI_PORT_PROTOCOL_SLOT_TYPE_MAP[ind] = protocol_slot_type;
+                }   
+            }
+
+            //see if there is next one
+            if(next_off == 0x0) {
+                break;
+            }
+
+            //move to next one
+            extcap_regs = $u32* ($u64 extcap_regs + (next_off << 0x2));
+        }
+    }
+
+    //start host controller
+    op_regs->USBCMD |= XHCI_USBCMD_RS;
+    while(op_regs->USBSTS & XHCI_USBSTS_HCH) {
+        // spin
+    }
+
+    assert((op_regs->USBSTS & XHCI_USBSTS_HSE) == $u32 0x0, "init_xhci() : should not have error D:");
+
+    XHCI_DID_INIT = 1;
+    println("done init xhci");
+}
+
+
+// --- COMMANDS ---
+//sends Address Device command to xHC
+//supplies an initial Input Context for a slot
+//transitions the selected slot from the default to addressed state
+void xhci_address_device(u32 slot_id, u64 input_ctx_addr) {
+    //address device command trb
+    xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+    assert((input_ctx_addr & 0xF) == 0x0, "xhci_address_device() : low bits of input context address are reserved");
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_ADDRESS_DEVICE);
+    trb->control |= slot_id << $u32 24;
+    trb->parameter |= input_ctx_addr;
+
+    xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_exec_command(trb, out_trb);
+    assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_address_device() : result of command should be command completion TRB");
+    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_address_device() : for now, command must succeed");
+
+    free($void* trb, sizeof(xHCI_TRB));
+    free($void* out_trb, sizeof(xHCI_TRB));
+}
+
+//sends Configure Endpoint command to xHC
+//like Address Device, but should be used on an already addressed slot
+void xhci_configure_endpoint(u32 slot_id, u64 input_ctx_addr) {
+    panic("xhci_configure_endpoint() : not implemented");
+}
+
+//tells the xHC to select an available device slot to enable
+//returns the ID of the selected slot
+u32 xhci_enable_slot(u32 protocol_slot_type) {
+    //enable slot command trb
+    xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_ENABLE_SLOT);
+    trb->control = trb->control | (protocol_slot_type << $u32 16);
+
+    xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_exec_command(trb, out_trb);
+    assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_enable_slot() : result of command should be command completion TRB");
+    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_enable_slot() : for now, command must succeed");
+
+    //parse slot id
+    u32 slot_id = out_trb->control >> $u32 24;
+    assert(slot_id != $u32 0, "xhci_enable_slot() : enable slot failed");
+
+    free($void* trb, sizeof(xHCI_TRB));
+    free($void* out_trb, sizeof(xHCI_TRB));
+
+    return slot_id;
+}
+
+//writes the command and polls the event ring until it recieves the corresponding command completion TRB
+//if any other TRBs that are not command completion TRBs are recieved, these get handled after the command completion TRB is recieved
+//handling is deferred as handling an event may require another command to be executed
+void xhci_exec_command(xHCI_TRB* cmd, xHCI_TRB* out_trb) {
+    //write command and ring doorbell
+    u64 trb_ptr = xhci_write_command(cmd);
+    xhci_ring_command_doorbell();
+
+    //poll until we get command completion TRB
+    xhci_poll_events_until(XHCI_TRB_TYPE_CMD_COMPLETION, trb_ptr, 0x0, out_trb);
+}   
+
+
+// --- PORT HELPERS ---
+void xhci_reset_port_usb2(xHCI_port_regs* port) {
+    assert(port != nullptr, "xhci_reset_port_usb2() : null port");
+
+    // check if there is a device connected
+    assert((port->PORTSC & XHCI_PORTSC_CCS) != $u32 0, "xhci_reset_port_usb2() : no device connected");
+
+    // initiate port reset
+    xhci_portsc_write_bits(port, port->PORTSC | XHCI_PORTSC_PR, $u32 0);
+
+    // wait for controller to clear PR back to 0
+    while(port->PORTSC & XHCI_PORTSC_PR) {
+        // spin
+    }
+
+    // wait for PRC to be set (reset complete indication)
+    while((port->PORTSC & XHCI_PORTSC_PRC) == $u32 0) {
+        // spin
+    }
+
+    // clear PRC (RW1C)
+    xhci_portsc_write_bits(port, port->PORTSC, XHCI_PORTSC_PRC);
+
+    // make sure port is connected + enabled
+    assert((port->PORTSC & XHCI_PORTSC_CCS) != $u32 0, "xhci_reset_port_usb2() : port not connected after reset");
+    assert((port->PORTSC & XHCI_PORTSC_PED) != $u32 0, "xhci_reset_port_usb2() : port not enabled after reset");
+}
+
+void xhci_reset_port_usb3(xHCI_port_regs* port) {
+    assert(port != nullptr, "xhci_reset_port_usb3() : null port");
+
+    // check if there is a device connected
+    assert((port->PORTSC & XHCI_PORTSC_CCS) != $u32 0, "xhci_reset_port_usb3() : no device connected");
+
+    // initiate warm port reset
+    xhci_portsc_write_bits(port, port->PORTSC | XHCI_PORTSC_WPR, $u32 0);
+
+    // wait for controller to clear WPR back to 0
+    while(port->PORTSC & XHCI_PORTSC_WPR) {
+        // spin
+    }
+
+    // wait for WRC to be set (warm reset complete indication)
+    while((port->PORTSC & XHCI_PORTSC_WRC) == $u32 0) {
+        // spin
+    }
+
+    // Clear WRC (RW1C)
+    xhci_portsc_write_bits(port, port->PORTSC, XHCI_PORTSC_WRC);
+
+    // make sure port is connected + enabled
+    assert((port->PORTSC & XHCI_PORTSC_CCS) != $u32 0, "xhci_reset_port_usb2() : port not connected after reset");
+    assert((port->PORTSC & XHCI_PORTSC_PED) != $u32 0, "xhci_reset_port_usb2() : port not enabled after reset");
+}
+
+//helper to ensure we don't write to RW1C bits accidentally
+//you still need to make sure to maintain any RW bits via set_bits
+//something like xhci_portsc_write_bits(port, port->PORTSC, XHCI_PORTSC_PR)
+void xhci_portsc_write_bits(xHCI_port_regs* port, u32 set_bits, u32 rw1c_bits) {
+    assert((rw1c_bits & XHCI_PORTSC_RW1C_MASK) == rw1c_bits, "xhci_portsc_write_bits() : unknown RW1C bit");
+
+    //mask out RW1C bits
+    set_bits = set_bits & ~XHCI_PORTSC_RW1C_MASK;
+
+    //write to PORTSC
+    port->PORTSC = set_bits | rw1c_bits;
+}
+
+//resets a port connected to root hub
+void xhci_reset_port(u64 ind) {
+    assert(0x1 <= ind && ind <= XHCI_MAX_PORTS, "xhci_reset_port() : ind out of range");
+    xHCI_port_regs* port = xhci_get_port(ind);
+
+    u8 protocol = xhci_get_port_protocol(ind);
+    if(protocol == XHCI_PORT_PROTOCOL_USB3) xhci_reset_port_usb3(port);
+    else if(protocol == XHCI_PORT_PROTOCOL_USB2) xhci_reset_port_usb2(port);
+    else panic("xhci_reset_port() : unknown protocol");
+}
+
+//ports are 1-indexed, so valid values are in range [1, XHCI_MAX_PORTS]
+xHCI_port_regs* xhci_get_port(u64 ind) {
+    assert(0x1 <= ind && ind <= XHCI_MAX_PORTS, "xhci_get_port() : ind out of range");
+    return @(XHCI_PORT_REGS[ind - 0x1]);
+}
+
+u8 xhci_get_port_protocol(u64 ind) {
+    assert(0x1 <= ind && ind <= XHCI_MAX_PORTS, "xhci_get_port_protocol() : ind out of range");
+    return XHCI_PORT_PROTOCOL_MAP[ind - 0x1];
+}
+
+u32 xhci_get_port_slot_type(u64 ind) {
+    assert(0x1 <= ind && ind <= XHCI_MAX_PORTS, "xhci_get_port_slot_type() : ind out of range");
+    return XHCI_PORT_PROTOCOL_SLOT_TYPE_MAP[ind - 0x1];
+}
+
+i32 xhci_port_is_device_connected(u64 ind) {
+    assert(0x1 <= ind && ind <= XHCI_MAX_PORTS, "xhci_port_is_device_connected() : ind out of range");
+    xHCI_port_regs* port = xhci_get_port(ind);
+    return (port->PORTSC & XHCI_PORTSC_CCS) != $u32 0;
+}
+
+//builds the initial Input Context struct that you use to setup a device
+//just sets up endpoint 0
+void xhci_build_initial_input_ctx32(
+    void* buf,                  // should be physical buf, at least 33 * 32 = 1056 bytes
+    u32 port_id,                // 1-indexed
+    u32 interrupter_target,     // should be 0 for now
+    u64 ep0_ring_phys,          // physical address to EP0 transfer ring
+    u32 ep0_mps                 // should be 8 for USB2, 512 for USB3           
+) { 
+    u32 usb_dev_addr = $u32 0;
+    assert(interrupter_target == $u32 0, "xhci_build_initial_input_ctx32() : only have interrupter 0 setup for now");
+    
+    //clear buf
+    memset(buf, 0, $u64 32 * $u64 33);
+
+    // - Input Control Context -
+    xHCI_input_control_ctx32* icc = $xHCI_input_control_ctx32* buf;
+    icc->drop_context_flags = $u32 0;
+    icc->add_context_flags = $u32 ((1 << 0) | (1 << 1));    //slot and EP0
+
+    // - Slot Context -
+    xHCI_slot_ctx32* slot = $xHCI_slot_ctx32* ($u64 buf + $u64 32);
+    slot->dev_info0 |= $u32 1 << $u32 27;                       //nr context entries = 1
+    slot->dev_info1 |= port_id << $u32 16;                      //root hub port number
+    slot->dev_info2 |= interrupter_target << $u32 22;           //interrupter target
+
+    // - EP0 Context -
+    xHCI_endpoint_ctx32* ep0 = $xHCI_endpoint_ctx32* ($u64 buf + $u64 64);
+    ep0->ep_info1 |= $u32 3 << $u32 1;                          //max allowed consecutive errors = 3
+    ep0->ep_info1 |= XHCI_ENDPOINT_TYPE_CONTROL_BI << $u32 3;   //endpoint type
+    ep0->ep_info1 |= ep0_mps << $u32 16;                        //max packet size
+
+    assert((ep0_ring_phys & ~XHCI_ENDPOINT_CTX_DEQUE_PTR) == 0x0, "xhci_build_initial_input_ctx32() : deque pointer setting reserved bits");
+    ep0->deque_ptr |= ep0_ring_phys;                            //deque physical address
+    ep0->deque_ptr |= XHCI_ENDPOINT_CTX_DCS;                    //deque cycle state = 1
+}
+
+//resets the port, allocs a slot for it, and addresses it using an input context with just EP0
+//returns the slot that was alloc'd for the port
+u32 xhci_initialize_port(u64 ind) {
+    assert(0x1 <= ind && ind <= XHCI_MAX_PORTS, "xhci_initialize_port() : ind out of range");
+
+    //reset port
+    xhci_reset_port(ind);
+
+    //alloc a slot
+    u32 slot = xhci_alloc_slot(xhci_get_port_slot_type(ind));
+
+    //build initial input context
+    assert((XHCI_CAP_REGS->HCCPARAMS1 & XHCI_HCCPARAMS1_CSZ) == $u32 0, "init_usb() : only support 32-bit context structs");
+    u64 EP0 = 0x1;
+    u8 port_protocol = xhci_get_port_protocol(ind);
+    void* input_ctx_buf = palloc();
+    u32 mps;
+    if(port_protocol == XHCI_PORT_PROTOCOL_USB2) mps = $u32 8;
+    else if(port_protocol == XHCI_PORT_PROTOCOL_USB3) mps = $u32 512;
+    else panic("init_usb() : unrecognized port protocol");
+    xhci_build_initial_input_ctx32(input_ctx_buf, $u32 ind, $u32 0, $u64 xhci_get_slot_transfer_ring(slot, EP0), mps);
+
+    //address device
+    xhci_address_device(slot, $u64 input_ctx_buf);
+    pfree(input_ctx_buf);
+
+    return slot;
+}
+
+
+// --- SLOT HELPERS --- 
+u64& xhci_get_slot_producer_index(u32 slot, u64 endpoint) {
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_consumer_index() : slot out of range [1, XHCI_MAX_SLOTS]");
+    assert(endpoint < $u64 32, "xhci_get_slot_consumer_index() : endpoint out of range");
+    return XHCI_SLOT_PRODUCER_INDEXES[slot][endpoint];
+}
+
+u32& xhci_get_slot_producer_state(u32 slot, u64 endpoint) {
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_consumer_state() : slot out of range [1, XHCI_MAX_SLOTS]");
+    assert(endpoint < $u64 32, "xhci_get_slot_consumer_state() : endpoint out of range");
+    return XHCI_SLOT_PRODUCER_STATES[slot][endpoint];
+}
+
+xHCI_TRB* xhci_get_slot_transfer_ring(u32 slot, u64 endpoint) {
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_transfer_ring() : slot out of range [1, XHCI_MAX_SLOTS]");
+    assert(endpoint < $u64 32, "xhci_get_slot_transfer_ring() : endpoint out of range");
+    return XHCI_SLOT_RINGS[slot][endpoint];
+}
+
+void xhci_free_slot(u32 slot) {
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_free_slot() : slot out of range [1, XHCI_MAX_SLOTS]");
+    assert(XHCI_SLOT_IN_USE[slot], "xhci_free_slot() : slot not in use");
+    XHCI_SLOT_IN_USE[slot] = 0;
+}
+
+u32 xhci_alloc_slot(u32 protocol_slot_type) {
+    u32 slot = xhci_enable_slot(protocol_slot_type);
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_alloc_slot() : slot out of range [1, XHCI_MAX_SLOTS]");
+    assert(!XHCI_SLOT_IN_USE[slot], "xhci_alloc_slot() : slot in use");
+    XHCI_SLOT_IN_USE[slot] = 1; 
+    xhci_init_slot(slot);
+    return slot;
+}
+
+//resets all the transfer rings and consumer transfer states of the specified slot
+void xhci_init_slot(u32 slot) {
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_init_slot() : slot out of range [1, XHCI_MAX_SLOTS]");
+    for(u64 i = 0x0; i < $u64 32; i++) {
+        XHCI_SLOT_PRODUCER_INDEXES[slot][i] = 0x0;
+        XHCI_SLOT_PRODUCER_STATES[slot][i] = XHCI_TRB_C;
+        xhci_init_page_TRB_ring($void* XHCI_SLOT_RINGS[slot][i]);
+    }
+}
+
+
+// --- TRANSFER HELPERS ---
+//sends a standard SET_CONFIGURATION request to EP0 of the provided slot
+void xhci_device_set_configuration(u32 slot) {
+    xHCI_TRB* setup_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xHCI_TRB* data_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xHCI_TRB* status_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+
+    //TODO
+
+    free($void* setup_trb, sizeof(xHCI_TRB));
+    free($void* data_trb, sizeof(xHCI_TRB));
+    free($void* status_trb, sizeof(xHCI_TRB));
+}
+
+//sends a standard GET_DESCRIPTOR request to EP0 of the provided slot
+//populates buf with the first amt bytes of the descriptor
+//buf must be a physical buffer
+//returns the amount actually transferred
+u64 xhci_device_get_descriptor(u32 slot, u32 desc_type, u32 desc_index, void* buf, u64 amt) {
+    xHCI_TRB* setup_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xHCI_TRB* data_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xHCI_TRB* status_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    u32 interrupter_target = $u32 0;
+
+    //build TRBs
+    {
+        u32 bm_request_type = $u32 0;
+        bm_request_type |= XHCI_BM_REQUEST_TYPE_IN;
+        bm_request_type |= XHCI_BM_REQUEST_TYPE_STANDARD;
+        bm_request_type |= XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
+        u32 b_request = XHCI_REQ_GET_DESCRIPTOR;
+
+        // high 8-bit is descriptor type
+        // low 8-bit is descriptor index
+        u32 w_value = (desc_type << $u32 8) | desc_index;
+        
+        //if desc_type == XHCI_DESCRIPTOR_TYPE_STRING, this should be a language index
+        //otherwise, this should be 0
+        u32 w_index = $u32 0;
+        u32 w_length = $u32 amt;
+
+        xhci_build_setup_stage_trb(
+            setup_trb,
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            w_length,
+            interrupter_target,
+            XHCI_SETUP_STAGE_TRT_IN
+        );
+
+        xhci_build_data_stage_trb(
+            data_trb,
+            buf,
+            $u32 amt,
+            interrupter_target,
+            1
+        );
+
+        xhci_build_status_stage_trb(
+            status_trb,
+            interrupter_target,
+            0
+        );    
+    }
+
+    //send request to EP0 and ring doorbell
+    u64 EP0 = 0x1;
+    xhci_ensure_space_on_transfer_ring(slot, EP0, $u64 3);
+    xhci_write_transfer(slot, EP0, setup_trb);
+    xhci_write_transfer(slot, EP0, data_trb);
+    u64 trb_ptr = xhci_write_transfer(slot, EP0, status_trb);
+    xhci_ring_transfer_doorbell(slot, EP0);
+
+    //poll until we recieve a matching transfer event TRB
+    xHCI_TRB* transfer_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, $u64 interrupter_target, transfer_trb);
+    assert(xhci_event_trb_completion_code(transfer_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_device_get_descriptor() : result of command should be success");
+    u64 transfer_amt = amt - ($u64 transfer_trb->status & 0x00FFFFFF);  //it tells you the part that was not transferred
+
+    free($void* setup_trb, sizeof(xHCI_TRB));
+    free($void* data_trb, sizeof(xHCI_TRB));
+    free($void* status_trb, sizeof(xHCI_TRB));
+    free($void* transfer_trb, sizeof(xHCI_TRB));
+
+    return transfer_amt;
+}
+
+void xhci_build_setup_stage_trb(
+    xHCI_TRB* trb, 
+    u32 request_type, 
+    u32 request, 
+    u32 value, 
+    u32 index, 
+    u32 length, 
+    u32 interrupter_target, 
+    u32 trt
+) {
+    assert(trb != nullptr, "xhci_build_setup_stage_trb() : null trb");
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+
+    trb->parameter |= $u64 request_type << $u64 0;
+    trb->parameter |= $u64 request << $u64 8;
+    trb->parameter |= $u64 value << $u64 16;
+    trb->parameter |= $u64 index << $u64 32;
+    trb->parameter |= $u64 length << $u64 48;
+
+    trb->status |= $u32 8 << $u32 0;    //TRB length = 8
+    trb->status |= interrupter_target << $u32 22;
+
+    trb->control |= XHCI_SETUP_STAGE_IDT;
+    trb->control |= trt << $u32 16;
+
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_SETUP_STAGE);
+}
+
+void xhci_build_data_stage_trb(
+    xHCI_TRB* trb,
+    void* buf,
+    u32 transfer_len,
+    u32 interrupter_target,
+    i32 dir_in
+) {
+    assert(trb != nullptr, "xhci_build_data_stage_trb() : null trb");
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+
+    trb->parameter = $u64 buf;
+
+    assert(transfer_len < ($u32 1 << $u32 17), "xhci_build_data_stage() : transfer_len too big");
+    trb->status |= transfer_len << $u32 0;
+    trb->status |= $u32 0 << $u32 17;               //set TD size to 0 for now
+    trb->status |= interrupter_target << $u32 22;
+
+    if(dir_in) trb->control |= XHCI_DATA_STAGE_DIR;
+
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_DATA_STAGE);
+}
+
+void xhci_build_status_stage_trb(
+    xHCI_TRB* trb, 
+    u32 interrupter_target,
+    i32 dir_in
+) {
+    assert(trb != nullptr, "xhci_build_status_stage_trb() : null trb");
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+
+    trb->status |= interrupter_target << $u32 22;
+
+    if(dir_in) trb->control |= XHCI_STATUS_STAGE_DIR;
+    trb->control |= XHCI_STATUS_STAGE_IOC;
+
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_STATUS_STAGE);
+}

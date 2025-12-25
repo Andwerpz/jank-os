@@ -1,0 +1,389 @@
+// USB core
+// each interface on a device should correspond to some driver
+
+// USB descriptors : https://www.beyondlogic.org/usbnutshell/usb5.shtml
+// all USB descriptors should have this as their header
+struct USB_descriptor_header {
+    u8 bLength;
+    u8 bDescriptorType;
+}
+
+struct USB_device_descriptor {
+    u8 bLength;                 // = 18 
+    u8 bDescriptorType;         // = 1
+    u16 bcdUSB;                 
+    u8 bDeviceClass;            
+    u8 bDeviceSubclass;         
+    u8 bDeviceProtocol;         
+    u8 bMaxPacketSize;          // maximum packet size for EP0
+    u16 idVendor;               
+    u16 idProduct;
+    u16 bcdDevice;
+    u8 iManufacturer;
+    u8 iProduct;
+    u8 iSerialNumber;
+    u8 bNumConfigurations;
+}
+
+struct USB_configuration_descriptor {
+    u8 bLength;                 
+    u8 bDescriptorType;         // = 2
+    u16 wTotalLength;           
+    u8 bNumInterfaces;          
+    u8 bConfigurationValue;     // value to use when selecting this configuration
+    u8 iConfiguration;          // index of string descriptor describing this configuration
+    u8 bmAttributes;            // bit 6 : self powered, bit 5 : remote wakeup
+    u8 bMaxPower;               // max power consumption in 2mA units
+}
+
+struct USB_interface_descriptor {
+    u8 bLength;                 
+    u8 bDescriptorType;
+    u8 bInterfaceNumber;        // interface number, one interface can have multiple alternate settings
+    u8 bAlternateSetting;       // value used to select alternate setting. if this is 0, this is the default setting
+    u8 bNumEndpoints;           
+    u8 bInterfaceClass;         // class code (assigned by USB.org)
+    u8 bInterfaceSubClass;      // subclass code (assigned by USB.org)
+    u8 bInterfaceProtocol;      // protocol code (assigned by USB.org)
+    u8 iInterface;              // index of string descriptor describing this interface
+}
+
+struct USB_endpoint_descriptor {
+    u8 bLength;                 // = 7
+    u8 bDescriptorType;         // = 5
+    u8 bEndpointAddress;        // bits 0123 : endpoint number, bit 7 : direction 0=out 1=in
+    u8 bmAttributes;            // bits 01 : transfer type, rest of bits only matter for isochronous endpoints
+    u16 wMaxPacketSize;         // maximum packet size this endpoint is capable of sending or receiving
+    u8 bInterval;               // interval for polling endpoint data transfers
+}
+
+
+struct USB_device { 
+    vector<USB_configuration*> configurations;
+    i32 configured;
+    u32 slot;               // xHCI slot index of this device
+    u64 ep0_max_packet_size;
+
+    USB_device() {
+        this.configured = 0;
+    }
+
+    ~USB_device() {
+        for(u64 i = 0x0; i < this.configurations.size(); i++) {
+            this.configurations[i]->~();
+            free($void* this.configurations[i], sizeof(USB_configuration));
+        }
+        xhci_free_slot(this.slot);
+    }
+}
+
+struct USB_configuration {
+    vector<USB_interface*> interfaces;
+    u64 configuration_value;
+
+    ~USB_configuration() {
+        for(u64 i = 0x0; i < this.interfaces.size(); i++) {
+            this.interfaces[i]->~();
+            free($void* this.interfaces[i], sizeof(USB_interface));
+        }
+    }
+}
+
+struct USB_interface {
+    vector<USB_endpoint*> endpoints;
+    u64 interface_number;
+    u64 alternate_setting_value;
+
+    //can identify the intended type of this interface from these fields
+    u8 class;
+    u8 subclass;
+    u8 protocol;
+
+    ~USB_interface() {
+        for(u64 i = 0x0; i < this.endpoints.size(); i++) {
+            this.endpoints[i]->~();
+            free($void* this.endpoints[i], sizeof(USB_endpoint));
+        }
+    }
+}
+
+[__GLOBAL_FIRST__] u8 USB_ENDPOINT_TRANSFER_TYPE_CONTROL        = $u8 0;
+[__GLOBAL_FIRST__] u8 USB_ENDPOINT_TRANSFER_TYPE_ISOCHRONOUS    = $u8 1;
+[__GLOBAL_FIRST__] u8 USB_ENDPOINT_TRANSFER_TYPE_BULK           = $u8 2;
+[__GLOBAL_FIRST__] u8 USB_ENDPOINT_TRANSFER_TYPE_INTERRUPT      = $u8 3;
+
+struct USB_endpoint {
+    u64 endpoint;           // DCI endpoint address 
+    u8 transfer_type;       // Control / Isochronous / Bulk / Interrupt
+    u64 max_packet_size;    // in bytes
+    u64 interval;           // only matters for Interrupt + Isochronous endpoints
+
+    // USB3 endpoints
+
+
+    ~USB_endpoint() {
+
+    }
+}
+
+[__GLOBAL_FIRST__] u8 USB_CLASS_MASS_STORAGE = $u8 0x08;
+
+[__GLOBAL_FIRST__] u8 USB_SUBCLASS_SCSI = $u8 0x06;
+
+[__GLOBAL_FIRST__] u8 USB_PROTOCOL_BOT = $u8 0x50;  // bulk only transfers
+
+// // class == 0x08 : mass storage
+// // subclass == 0x06 : SCSI
+// // protocol == 0x50 : BOT
+// if(class == 0x08 && subclass == 0x06 && protocol == 0x50) {
+//     println("Found BOT Storage Device");
+// }  
+
+//configures the provided USB device
+//the given device should not have been configured before. 
+//also makes device interfaces public for use elsewhere (BOT -> blockdev for example)
+void usb_configure_device(USB_device* dev) {
+    assert(!dev->configured, "usb_configure_device() : device has already been configured");
+
+    //choose configuration
+    //for now, always choose the first configuration
+    assert(dev->configurations.size() != 0x0, "usb_configure_device() : device has no configurations");
+    USB_configuration* cfg = dev->configurations[0];
+
+    //choose interface settings
+    //for now, always choose default settings
+    vector<USB_interface*> selected_interfaces;
+    for(u64 i = 0x0; i < cfg->interfaces.size(); i++) {
+        USB_interface* int = cfg->interfaces[i];
+        if(int->alternate_setting_value != 0x0) {
+            //not default, skip this one
+            continue;
+        }
+
+        //select this one
+        selected_interfaces.push_back(int);
+    }
+
+    //configure device itself
+    //TODO
+
+    //let xHC know about configuration
+    //TODO
+
+    //classify selected interfaces
+    for(u64 i = 0x0; i < selected_interfaces.size(); i++) {
+        USB_interface* int = cfg->interfaces[i];
+        u8 class = int->class;
+        u8 subclass = int->subclass;
+        u8 protocol = int->protocol;
+
+        if(class == USB_CLASS_MASS_STORAGE && subclass == USB_SUBCLASS_SCSI && protocol == USB_PROTOCOL_BOT) {
+            println("Found BOT Storage Device");
+        }  
+    }
+}
+
+//should be called when a device is newly connected to a port
+//initializes the port and produces a USB_device struct
+//does not enable any configurations, just indexes the device
+USB_device* usb_index_device(u64 port_ind) {
+    assert(xhci_port_is_device_connected(port_ind), "usb_index_device() : no device to index");
+    USB_device* dev = $USB_device* malloc(sizeof(USB_device));
+    new (dev) USB_device();
+    void* buf = palloc();
+    u64 transfer_amt;
+
+    //initialize port
+    u32 slot = xhci_initialize_port(port_ind);
+    dev->slot = slot;
+
+    //get device descriptor
+    u64 nr_configurations;
+    {
+        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_DEVICE, $u32 0, buf, sizeof(USB_device_descriptor));
+        assert(transfer_amt == sizeof(USB_device_descriptor), "usb_index_device() : failed to transmit entire device descriptor");
+        USB_device_descriptor* dev_desc = $USB_device_descriptor* buf;
+
+        nr_configurations = $u64 dev_desc->bNumConfigurations;
+        dev->ep0_max_packet_size = $u64 dev_desc->bMaxPacketSize;
+    }
+    assert(nr_configurations != 0x0, "usb_index_device() : there should be non-zero amount of configurations I think");
+    println("Nr Configurations : ", nr_configurations);
+
+    //index configurations
+    for(u64 cfg_ind = 0x0; cfg_ind < nr_configurations; cfg_ind++) {
+        //get configuration descriptor
+        USB_configuration* cfg = $USB_configuration* malloc(sizeof(USB_configuration));
+        new (cfg) USB_configuration();
+        u64 cfg_tot_sz;
+        u64 nr_interfaces;
+        {
+            transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 cfg_ind, buf, sizeof(USB_configuration_descriptor));
+            assert(transfer_amt == sizeof(USB_configuration_descriptor), "usb_index_device() : failed to transmit entire configuration descriptor");
+            USB_configuration_descriptor* cfg_desc = $USB_configuration_descriptor* buf;
+
+            cfg_tot_sz = $u64 cfg_desc->wTotalLength;
+            nr_interfaces = $u64 cfg_desc->bNumInterfaces;
+            cfg->configuration_value = $u64 cfg_desc->bConfigurationValue;
+        }
+        println("Nr Interfaces : ", nr_interfaces);
+        println("Cfg Total Size : ", cfg_tot_sz);   
+        assert(cfg_tot_sz <= PAGE_SIZE, "usb_index_device() : for now, can only support transferring up to a page at a time");
+
+        //get entire configuration descriptor
+        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 cfg_ind, buf, cfg_tot_sz);
+        assert(transfer_amt == cfg_tot_sz, "usb_index_device() : failed to transmit entire configuration data blob");
+
+        //parse remainder of configuration
+        u64 buf_ptr = sizeof(USB_configuration_descriptor);
+        USB_interface* int = $USB_interface* nullptr;
+        USB_endpoint* end = $USB_endpoint* nullptr;
+        println(" ");
+        while(buf_ptr < cfg_tot_sz) {
+            USB_descriptor_header* header = $USB_descriptor_header* ($u64 buf + buf_ptr);
+            u64 length = $u64 header->bLength;
+            u32 type = $u32 header->bDescriptorType;
+
+            if(type == XHCI_DESCRIPTOR_TYPE_INTERFACE) {
+                if(end != nullptr) {
+                    //add previous endpoint to interface
+                    int->endpoints.push_back(end);
+                    end = $USB_endpoint* nullptr;
+                }
+
+                if(int != nullptr) {
+                    //add previous interface to configuration
+                    assert(int->endpoints.size() != 0x0, "usb_index_device() : empty interface");
+                    cfg->interfaces.push_back(int);
+                    int = $USB_interface* nullptr;
+                }
+
+                USB_interface_descriptor* int_desc = $USB_interface_descriptor* ($u64 buf + buf_ptr);
+                u64 interface_number = $u64 int_desc->bInterfaceNumber;
+                u64 alternate_setting_value = $u64 int_desc->bAlternateSetting;
+                u64 nr_endpoints = $u64 int_desc->bNumEndpoints;
+                u8 class = int_desc->bInterfaceClass;
+                u8 subclass = int_desc->bInterfaceSubClass;
+                u8 protocol = int_desc->bInterfaceProtocol;
+
+                assert(int == nullptr, "usb_index_device() : need int to be null when overwriting");
+                int = $USB_interface* malloc(sizeof(USB_interface));
+                new (int) USB_interface();
+                int->interface_number = interface_number;
+                int->alternate_setting_value = alternate_setting_value;
+                int->class = class;
+                int->subclass = subclass;
+                int->protocol = protocol;
+
+                println("USB Interface Descriptor : ");
+                println("Interface Number : ", interface_number);
+                println("Alternate Setting Value : ", alternate_setting_value);
+                println("Nr Endpoints : ", nr_endpoints);
+                println("Class : ", $u64 class);
+                println("Subclass : ", $u64 subclass);
+                println("Protocol : ", $u64 protocol); 
+            }
+            else if(type == XHCI_DESCRIPTOR_TYPE_ENDPOINT) {
+                if(end != nullptr) {
+                    //add previous endpoint to interface
+                    int->endpoints.push_back(end);
+                    end = $USB_endpoint* nullptr;
+                }
+
+                USB_endpoint_descriptor* ep_desc = $USB_endpoint_descriptor* ($u64 buf + buf_ptr);
+                u64 endpoint = $u64 ep_desc->bEndpointAddress;
+                u64 attributes = $u64 ep_desc->bmAttributes;
+                u64 max_packet_size = $u64 ep_desc->wMaxPacketSize;
+                u64 interval = $u64 ep_desc->bInterval;
+
+                //convert endpoint from USB addr to xHCI DCI
+                println("EP : ", $void* endpoint);
+                if(endpoint & 0x80) {   
+                    endpoint -= 0x80;
+                    endpoint = (endpoint * 0x2) + 0x1;
+                }
+                else {
+                    endpoint = endpoint * 0x2;
+                }
+                assert(0x1 <= endpoint && endpoint < 0x20, "usb_index_device() : endpoint DCI out of range");
+
+                //parse attributes
+                u8 transfer_type = $u8 (attributes & 0b11);
+
+                assert(end == nullptr, "usb_index_device() : need end to be null when overwriting");
+                end = $USB_endpoint* malloc(sizeof(USB_endpoint));
+                new (end) USB_endpoint();
+                end->endpoint = endpoint;
+                end->transfer_type = transfer_type;
+                end->max_packet_size = max_packet_size;
+                end->interval = interval;
+
+                println("USB Endpoint Descriptor : ");
+                println("Endpoint : ", endpoint);
+                println("Attributes : ", $void* attributes);
+                println("Max Packet Size : ", max_packet_size);
+                println("Interval : ", interval);
+            }
+            else {
+                println("Unhandled descriptor : ", type);
+            }
+            println(" ");
+
+            buf_ptr += length;
+        }
+        assert(buf_ptr == cfg_tot_sz, "usb_index_device() : buf ptr should be at very end of config now");
+
+        if(end != nullptr) {
+            //add previous endpoint to interface
+            int->endpoints.push_back(end);
+            end = $USB_endpoint* nullptr;
+        }
+
+        if(int != nullptr) {
+            //add previous interface to configuration
+            assert(int->endpoints.size() != 0x0, "usb_index_device() : empty interface");
+            cfg->interfaces.push_back(int);
+            int = $USB_interface* nullptr;
+        }
+
+        assert(cfg->interfaces.size() == nr_interfaces, "usb_index_device() : interface count does not line up with metadata");
+
+        //add configuration to usb device
+        dev->configurations.push_back(cfg);
+    }
+
+    pfree(buf);
+    return dev;
+}
+
+void init_usb() {
+    assert(XHCI_DID_INIT, "init_usb() : need to have XHCI");
+    println("start init usb");
+
+    assert(sizeof(USB_device_descriptor) == $u64 18, "init_usb() : sizeof(device_descriptor) should be 18");
+    assert(sizeof(USB_configuration_descriptor) == $u64 9, "init_usb() : sizeof(configuration_descriptor) should be 9");
+    assert(sizeof(USB_interface_descriptor) == $u64 9, "init_usb() : sizeof(interface_descriptor) should be 9");
+    assert(sizeof(USB_endpoint_descriptor) == $u64 7, "init_usb() : sizeof(endpoint_descriptor) should be 7");
+
+    //do root ports sweep
+    for(u64 i = 0x1; i <= XHCI_MAX_PORTS; i++) {
+        //check if anything is connected here
+        if(!xhci_port_is_device_connected(i)) {
+            //nothing connected
+            continue;
+        }   
+        println("Found something on port : ", i);
+
+        //index device
+        USB_device* dev = usb_index_device(i);
+        println("Done indexing device");
+
+        //configure device
+        usb_configure_device(dev);
+        println("Done configuring device");
+    }
+
+    panic("init_usb() : stop here for now");
+
+    println("done init usb");
+}
