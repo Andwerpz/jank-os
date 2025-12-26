@@ -9,12 +9,15 @@
 
 // host software talking to xHC (hardware) uses command and event ring buffers filled with TRBs
 
+// !!! IMPORTANT ASSUMPTIONS !!!
+// - all devices are plugged directly into the root. To actually identify a device, you need its port number, and also the path it takes from the root (path string)
+// - HCCPARAMS1.CSZ = 0, this means I only handle 32-byte context structs
+
 // ports vs. slots:
 // a port is the physical thing on your computer
 // a slot is a logical interface provided by the xHC. 
 // since the USB system can look like a rooted tree with hubs as nodes, you can't just identify ports by a single number
 //  you need to identify it by the rooted path to the hub + port number. 
-// for now, i'm going to assume all devices are plugged directly into the root, so we forego the path string. (TODO undo this assumption)
 
 // host talking to a device uses endpoints. Endpoint is a 1-way communication channel, identified by a number and direction. 
 // endpoint 0 is special, it always exists and is used for control. 
@@ -279,6 +282,9 @@ struct xHCI_INTRS {
 [__GLOBAL_FIRST__] u32 XHCI_REQ_SET_INTERFACE       = $u32 0x0B;
 
 // bmRequestType constants (Setup Stage field)
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_DIR_MASK            = $u32 0b10000000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_TYPE_MASK           = $u32 0b01100000;
+[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_MASK      = $u32 0b00011111;
 [__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_OUT                 = $u32 0b00000000;
 [__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_IN                  = $u32 0b10000000;
 [__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_STANDARD            = $u32 0b00000000;
@@ -436,7 +442,7 @@ struct xHCI_endpoint_ctx32 {
 [__GLOBAL_FIRST__] xHCI_runtime_regs* XHCI_RUNTIME_REGS;
 [__GLOBAL_FIRST__] xHCI_INTRS* XHCI_INTERRUPTERS;       
 [__GLOBAL_FIRST__] u32* XHCI_DB_REGS;                       //doorbell registers
-[__GLOBAL_FIRST__] u64* XHCI_DCBAA;                         //array of 64-bit pointers to memory hardware can use
+[__GLOBAL_FIRST__] u64* XHCI_DCBAA;                         //device context base address array, array of pointers to memory that xHC can use to store device contexts for slots
 
 [__GLOBAL_FIRST__] u64 XHCI_MAX_PORTS;                      //amount of ports connected to the root hub
 [__GLOBAL_FIRST__] u32* XHCI_PORT_PROTOCOL_SLOT_TYPE_MAP;
@@ -456,10 +462,13 @@ struct xHCI_endpoint_ctx32 {
 [__GLOBAL_FIRST__] u64* XHCI_EVENT_RING_PTRS;   
 [__GLOBAL_FIRST__] u32* XHCI_EVENT_RING_STATES;
 
+//endpoint 0 of every device should be the control endpoint
+[__GLOBAL_FIRST__] u32 XHCI_EP0 = $u32 0x1;
+
 //notifies xHC that there is some available TRBs to read at the corresponding transfer ring
-void xhci_ring_transfer_doorbell(u32 slot, u64 endpoint) {
-    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_consumer_index() : slot out of range [1, XHCI_MAX_SLOTS]");
-    assert(endpoint < $u64 32, "xhci_get_slot_consumer_index() : endpoint out of range");
+void xhci_ring_transfer_doorbell(u32 slot, u32 endpoint) {
+    assert(0x1 <= $u64  slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_consumer_index() : slot out of range [1, XHCI_MAX_SLOTS]");
+    assert(endpoint < $u32 32, "xhci_get_slot_consumer_index() : endpoint out of range");
 
     asm!("mfence"); //ensure any TRB writes before this are flushed
     u32 dci = $u32 endpoint;
@@ -473,7 +482,7 @@ void xhci_ring_command_doorbell() {
 }
 
 //writes a TRB to the corresponding transfer ring
-u64 xhci_write_transfer(u32 slot, u64 endpoint, xHCI_TRB* trb) {
+u64 xhci_write_transfer(u32 slot, u32 endpoint, xHCI_TRB* trb) {
     xHCI_TRB* ring = xhci_get_slot_transfer_ring(slot, endpoint);
     return xhci_write_trb_to_ring(
         trb, 
@@ -492,7 +501,7 @@ u64 xhci_write_command(xHCI_TRB* trb) {
 //on a transfer ring, many commands take multiple TRBs, and you do not want these multi-TRB commands to cross a link TRB border. 
 //if the specified transfer ring does not have enough slots to fit amt TRBs before wrapping, 
 // this just writes No-Op TRBs to the specified transfer ring until it loops back around
-void xhci_ensure_space_on_transfer_ring(u32 slot, u64 endpoint, u64 amt) {
+void xhci_ensure_space_on_transfer_ring(u32 slot, u32 endpoint, u64 amt) {
     xHCI_TRB* ring = xhci_get_slot_transfer_ring(slot, endpoint);
     u64& producer_ind = xhci_get_slot_producer_index(slot, endpoint);
     u32& producer_state = xhci_get_slot_producer_state(slot, endpoint);
@@ -999,7 +1008,24 @@ void xhci_address_device(u32 slot_id, u64 input_ctx_addr) {
 //sends Configure Endpoint command to xHC
 //like Address Device, but should be used on an already addressed slot
 void xhci_configure_endpoint(u32 slot_id, u64 input_ctx_addr) {
-    panic("xhci_configure_endpoint() : not implemented");
+    //configure endpoint command trb
+    xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+    assert((input_ctx_addr & 0xF) == 0x0, "xhci_configure_endpoint() : low bits of input context address are reserved");
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_CONFIGURE_EP);
+    println("slot id : ", slot_id);
+    println("input ctx addr : ", $void* input_ctx_addr);
+    trb->control |= slot_id << $u32 24;
+    trb->parameter |= input_ctx_addr;
+
+    xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_exec_command(trb, out_trb);
+    assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_configure_endpoint() : result of command should be command completion TRB");
+    println("completion code : ", xhci_event_trb_completion_code(out_trb));
+    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_configure_endpoint() : for now, command must succeed");
+
+    free($void* trb, sizeof(xHCI_TRB));
+    free($void* out_trb, sizeof(xHCI_TRB));
 }
 
 //tells the xHC to select an available device slot to enable
@@ -1162,7 +1188,7 @@ void xhci_build_initial_input_ctx32(
 
     // - Slot Context -
     xHCI_slot_ctx32* slot = $xHCI_slot_ctx32* ($u64 buf + $u64 32);
-    slot->dev_info0 |= $u32 1 << $u32 27;                       //nr context entries = 1
+    slot->dev_info0 |= $u32 1 << $u32 27;                       //last valid context entry = 1
     slot->dev_info1 |= port_id << $u32 16;                      //root hub port number
     slot->dev_info2 |= interrupter_target << $u32 22;           //interrupter target
 
@@ -1190,14 +1216,13 @@ u32 xhci_initialize_port(u64 ind) {
 
     //build initial input context
     assert((XHCI_CAP_REGS->HCCPARAMS1 & XHCI_HCCPARAMS1_CSZ) == $u32 0, "init_usb() : only support 32-bit context structs");
-    u64 EP0 = 0x1;
     u8 port_protocol = xhci_get_port_protocol(ind);
     void* input_ctx_buf = palloc();
     u32 mps;
     if(port_protocol == XHCI_PORT_PROTOCOL_USB2) mps = $u32 8;
     else if(port_protocol == XHCI_PORT_PROTOCOL_USB3) mps = $u32 512;
     else panic("init_usb() : unrecognized port protocol");
-    xhci_build_initial_input_ctx32(input_ctx_buf, $u32 ind, $u32 0, $u64 xhci_get_slot_transfer_ring(slot, EP0), mps);
+    xhci_build_initial_input_ctx32(input_ctx_buf, $u32 ind, $u32 0, $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), mps);
 
     //address device
     xhci_address_device(slot, $u64 input_ctx_buf);
@@ -1208,21 +1233,27 @@ u32 xhci_initialize_port(u64 ind) {
 
 
 // --- SLOT HELPERS --- 
-u64& xhci_get_slot_producer_index(u32 slot, u64 endpoint) {
+//returns a read-only pointer to the device context struct pointed to by DCBAA
+void* xhci_get_slot_device_ctx(u32 slot) {
+    assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_device_ctx() : slot out of range [1, XHCI_MAX_SLOTS]");
+    return $void* XHCI_DCBAA[slot];
+}
+
+u64& xhci_get_slot_producer_index(u32 slot, u32 endpoint) {
     assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_consumer_index() : slot out of range [1, XHCI_MAX_SLOTS]");
-    assert(endpoint < $u64 32, "xhci_get_slot_consumer_index() : endpoint out of range");
+    assert(endpoint < $u32 32, "xhci_get_slot_consumer_index() : endpoint out of range");
     return XHCI_SLOT_PRODUCER_INDEXES[slot][endpoint];
 }
 
-u32& xhci_get_slot_producer_state(u32 slot, u64 endpoint) {
+u32& xhci_get_slot_producer_state(u32 slot, u32 endpoint) {
     assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_consumer_state() : slot out of range [1, XHCI_MAX_SLOTS]");
-    assert(endpoint < $u64 32, "xhci_get_slot_consumer_state() : endpoint out of range");
+    assert(endpoint < $u32 32, "xhci_get_slot_consumer_state() : endpoint out of range");
     return XHCI_SLOT_PRODUCER_STATES[slot][endpoint];
 }
 
-xHCI_TRB* xhci_get_slot_transfer_ring(u32 slot, u64 endpoint) {
+xHCI_TRB* xhci_get_slot_transfer_ring(u32 slot, u32 endpoint) {
     assert(0x1 <= $u64 slot && $u64 slot <= XHCI_MAX_SLOTS, "xhci_get_slot_transfer_ring() : slot out of range [1, XHCI_MAX_SLOTS]");
-    assert(endpoint < $u64 32, "xhci_get_slot_transfer_ring() : endpoint out of range");
+    assert(endpoint < $u32 32, "xhci_get_slot_transfer_ring() : endpoint out of range");
     return XHCI_SLOT_RINGS[slot][endpoint];
 }
 
@@ -1254,91 +1285,151 @@ void xhci_init_slot(u32 slot) {
 
 // --- TRANSFER HELPERS ---
 //sends a standard SET_CONFIGURATION request to EP0 of the provided slot
-void xhci_device_set_configuration(u32 slot) {
-    xHCI_TRB* setup_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    xHCI_TRB* data_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    xHCI_TRB* status_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+void xhci_device_set_configuration(u32 slot, u32 config_value) {
+    u32 bm_request_type = XHCI_BM_REQUEST_TYPE_OUT | XHCI_BM_REQUEST_TYPE_STANDARD | XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
+    u32 b_request = XHCI_REQ_SET_CONFIGURATION;
+    u32 w_value = config_value;
+    u32 w_index = $u32 0;
+    u32 w_length = $u32 0;
 
-    //TODO
-
-    free($void* setup_trb, sizeof(xHCI_TRB));
-    free($void* data_trb, sizeof(xHCI_TRB));
-    free($void* status_trb, sizeof(xHCI_TRB));
+    xHCI_TRB* transfer_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_standard_request(
+        $u32 0,
+        slot,
+        bm_request_type,
+        b_request,
+        w_value,
+        w_index,
+        w_length,
+        nullptr,
+        transfer_trb
+    );
+    assert(xhci_event_trb_completion_code(transfer_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_device_get_descriptor() : result of command should be success");
+    free($void* transfer_trb, sizeof(xHCI_TRB));
 }
 
 //sends a standard GET_DESCRIPTOR request to EP0 of the provided slot
 //populates buf with the first amt bytes of the descriptor
 //buf must be a physical buffer
 //returns the amount actually transferred
-u64 xhci_device_get_descriptor(u32 slot, u32 desc_type, u32 desc_index, void* buf, u64 amt) {
+u64 xhci_device_get_descriptor(u32 slot, u32 desc_type, u32 desc_index, u32 lang_index, void* buf, u64 amt) {
+    assert(amt != 0x0, "xhci_device_get_descriptor() : amt needs to be non-zero");
+    assert(buf != nullptr, "xhci_device_get_descriptor() : null buf");
+    if(desc_type != XHCI_DESCRIPTOR_TYPE_STRING) assert(lang_index == $u32 0, "xhci_device_get_descriptor() : lang_index must be 0 when not requesting string descriptor");
+
+    u32 bm_request_type = XHCI_BM_REQUEST_TYPE_IN | XHCI_BM_REQUEST_TYPE_STANDARD | XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
+    u32 b_request = XHCI_REQ_GET_DESCRIPTOR;
+
+    // high 8-bit is descriptor type
+    // low 8-bit is descriptor index
+    u32 w_value = (desc_type << $u32 8) | desc_index;
+    u32 w_index = lang_index;
+    u32 w_length = $u32 amt;
+
+    xHCI_TRB* transfer_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_standard_request(
+        $u32 0,
+        slot,
+        bm_request_type,
+        b_request,
+        w_value,
+        w_index,
+        w_length,
+        buf, 
+        transfer_trb
+    );
+    assert(xhci_event_trb_completion_code(transfer_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_device_get_descriptor() : result of command should be success");
+    u64 transfer_amt = amt - ($u64 transfer_trb->status & 0x00FFFFFF);  //it tells you the part that was not transferred
+
+    free($void* transfer_trb, sizeof(xHCI_TRB));
+    return transfer_amt;
+}
+
+//sends a standard USB control request to the given slot via EP0
+//writes the resulting event TRB to out_trb
+void xhci_standard_request(u32 interrupter_target, u32 slot, u32 bmRequestType, u32 bRequest, u32 wValue, u32 wIndex, u32 wLength, void* buf, xHCI_TRB* out_trb) {
+    assert(interrupter_target == $u32 0, "xhci_standard_request() : only interrupter 0 is setup for now");
+    assert(out_trb != nullptr, "xhci_standard_request() : null out_trb");
+    if(wLength != $u32 0) assert(buf != nullptr, "xhci_standard_request() : null buf on non-zero wLength");
+    assert((bmRequestType & XHCI_BM_REQUEST_TYPE_TYPE_MASK) == XHCI_BM_REQUEST_TYPE_STANDARD, "xhci_standard_request() : non-standard request");
+
     xHCI_TRB* setup_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     xHCI_TRB* data_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     xHCI_TRB* status_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    u32 interrupter_target = $u32 0;
+
+    //figure out TRT (transfer type)
+    u32 trt;
+    if(wLength == $u32 0) {
+        //no data stage
+        trt = XHCI_SETUP_STAGE_TRT_NODATA;
+    }
+    else if(bmRequestType & XHCI_BM_REQUEST_TYPE_IN) {
+        // device -> host
+        trt = XHCI_SETUP_STAGE_TRT_IN;
+    }
+    else {
+        // host -> device
+        trt = XHCI_SETUP_STAGE_TRT_OUT;
+    }
 
     //build TRBs
-    {
-        u32 bm_request_type = $u32 0;
-        bm_request_type |= XHCI_BM_REQUEST_TYPE_IN;
-        bm_request_type |= XHCI_BM_REQUEST_TYPE_STANDARD;
-        bm_request_type |= XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
-        u32 b_request = XHCI_REQ_GET_DESCRIPTOR;
+    xhci_build_setup_stage_trb(
+        setup_trb,
+        bmRequestType,
+        bRequest,
+        wValue,
+        wIndex,
+        wLength,
+        interrupter_target,
+        trt
+    );
 
-        // high 8-bit is descriptor type
-        // low 8-bit is descriptor index
-        u32 w_value = (desc_type << $u32 8) | desc_index;
-        
-        //if desc_type == XHCI_DESCRIPTOR_TYPE_STRING, this should be a language index
-        //otherwise, this should be 0
-        u32 w_index = $u32 0;
-        u32 w_length = $u32 amt;
-
-        xhci_build_setup_stage_trb(
-            setup_trb,
-            bm_request_type,
-            b_request,
-            w_value,
-            w_index,
-            w_length,
-            interrupter_target,
-            XHCI_SETUP_STAGE_TRT_IN
-        );
-
+    if(trt != XHCI_SETUP_STAGE_TRT_NODATA) {
+        i32 data_stage_in = trt == XHCI_SETUP_STAGE_TRT_IN;
         xhci_build_data_stage_trb(
             data_trb,
             buf,
-            $u32 amt,
+            wLength,
             interrupter_target,
-            1
+            data_stage_in
         );
 
         xhci_build_status_stage_trb(
             status_trb,
             interrupter_target,
-            0
-        );    
+            !data_stage_in
+        );  
     }
-
+    else {
+        xhci_build_status_stage_trb(
+            status_trb,
+            interrupter_target,
+            1
+        ); 
+    }
+  
     //send request to EP0 and ring doorbell
-    u64 EP0 = 0x1;
-    xhci_ensure_space_on_transfer_ring(slot, EP0, $u64 3);
-    xhci_write_transfer(slot, EP0, setup_trb);
-    xhci_write_transfer(slot, EP0, data_trb);
-    u64 trb_ptr = xhci_write_transfer(slot, EP0, status_trb);
-    xhci_ring_transfer_doorbell(slot, EP0);
-
-    //poll until we recieve a matching transfer event TRB
-    xHCI_TRB* transfer_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, $u64 interrupter_target, transfer_trb);
-    assert(xhci_event_trb_completion_code(transfer_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_device_get_descriptor() : result of command should be success");
-    u64 transfer_amt = amt - ($u64 transfer_trb->status & 0x00FFFFFF);  //it tells you the part that was not transferred
+    u64 trb_ptr;
+    if(trt != XHCI_SETUP_STAGE_TRT_NODATA) {
+        xhci_ensure_space_on_transfer_ring(slot, XHCI_EP0, $u64 3);
+        xhci_write_transfer(slot, XHCI_EP0, setup_trb);
+        xhci_write_transfer(slot, XHCI_EP0, data_trb);
+        trb_ptr = xhci_write_transfer(slot, XHCI_EP0, status_trb);
+    }
+    else {
+        xhci_ensure_space_on_transfer_ring(slot, XHCI_EP0, $u64 2);
+        xhci_write_transfer(slot, XHCI_EP0, setup_trb);
+        trb_ptr = xhci_write_transfer(slot, XHCI_EP0, status_trb);
+    }
+    xhci_ring_transfer_doorbell(slot, XHCI_EP0);
+    
+    //poll until we recieve the expected event TRB
+    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, $u64 interrupter_target, out_trb);
+    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_standard_request() : result of command should be success");
 
     free($void* setup_trb, sizeof(xHCI_TRB));
     free($void* data_trb, sizeof(xHCI_TRB));
     free($void* status_trb, sizeof(xHCI_TRB));
-    free($void* transfer_trb, sizeof(xHCI_TRB));
-
-    return transfer_amt;
 }
 
 void xhci_build_setup_stage_trb(

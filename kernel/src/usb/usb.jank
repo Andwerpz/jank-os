@@ -60,6 +60,7 @@ struct USB_endpoint_descriptor {
 
 struct USB_device { 
     vector<USB_configuration*> configurations;
+    u64 port;               // root port index of this device
     i32 configured;
     u32 slot;               // xHCI slot index of this device
     u64 ep0_max_packet_size;
@@ -127,17 +128,8 @@ struct USB_endpoint {
 }
 
 [__GLOBAL_FIRST__] u8 USB_CLASS_MASS_STORAGE = $u8 0x08;
-
 [__GLOBAL_FIRST__] u8 USB_SUBCLASS_SCSI = $u8 0x06;
-
 [__GLOBAL_FIRST__] u8 USB_PROTOCOL_BOT = $u8 0x50;  // bulk only transfers
-
-// // class == 0x08 : mass storage
-// // subclass == 0x06 : SCSI
-// // protocol == 0x50 : BOT
-// if(class == 0x08 && subclass == 0x06 && protocol == 0x50) {
-//     println("Found BOT Storage Device");
-// }  
 
 //configures the provided USB device
 //the given device should not have been configured before. 
@@ -164,11 +156,72 @@ void usb_configure_device(USB_device* dev) {
         selected_interfaces.push_back(int);
     }
 
-    //configure device itself
-    //TODO
+    vector<USB_endpoint*> selected_endpoints;
+    for(u64 i = 0x0; i < selected_interfaces.size(); i++) {
+        USB_interface* int = selected_interfaces[i];
+        for(u64 j = 0x0; j < int->endpoints.size(); j++) {
+            selected_endpoints.push_back(int->endpoints[j]);
+        }
+    }
 
-    //let xHC know about configuration
-    //TODO
+    //configure device itself
+    //all interfaces will be enabled with their default settings (alternate_setting_value = 0)
+    xhci_device_set_configuration(dev->slot, $u32 cfg->configuration_value);
+
+    //configure endpoint for xHC
+    {
+        void* buf = palloc();
+        memset(buf, 0, PAGE_SIZE);
+
+        // - Input Control Context -
+        xHCI_input_control_ctx32* icc = $xHCI_input_control_ctx32* buf;
+        icc->drop_context_flags = $u32 0;
+        icc->add_context_flags = $u32 ((1 << 0));                   //slot
+
+        u32 last_ctx_entry = $u32 XHCI_EP0;
+        for(u64 i = 0x0; i < selected_endpoints.size(); i++) {
+            USB_endpoint* end = selected_endpoints[i];
+            u32 dci = $u32 end->endpoint;
+            assert(dci > $u32 XHCI_EP0, "usb_configure_device() : DCI should not be EP0 or slot");
+            assert((icc->add_context_flags & ($u32 1 << dci)) == $u32 0, "usb_configure_device() : duplicate endpoint");
+            icc->add_context_flags |= ($u32 1 << dci);
+            if(dci > last_ctx_entry) last_ctx_entry = dci;
+        }
+
+        // - Slot Context -
+        //copy over slot context from output device context
+        void* dev_ctx_buf = xhci_get_slot_device_ctx(dev->slot);
+        xHCI_slot_ctx32* slot = $xHCI_slot_ctx32* ($u64 buf + $u64 32);
+        memcpy($void* slot, dev_ctx_buf, sizeof(xHCI_slot_ctx32));
+        
+        //update last valid context entry
+        slot->dev_info0 = (slot->dev_info0 & $u32 0xF8000000) | (last_ctx_entry << $u32 27);
+
+        // - other endpoints -
+        for(u64 i = 0x0; i < selected_endpoints.size(); i++) {
+            USB_endpoint* end = selected_endpoints[i];
+            u32 dci = $u32 end->endpoint;
+            assert(dci > $u32 XHCI_EP0, "usb_configure_device() : DCI should not be EP0 or slot");
+            i32 is_in = (dci % $u32 2 == $u32 1);                   //odd numbered endpoints are IN, even is OUT
+            u32 endpoint_type = $u32 end->transfer_type;
+            if(is_in) endpoint_type += $u32 4;
+
+            xHCI_endpoint_ctx32* ep_ctx = $xHCI_endpoint_ctx32* ($u64 buf + $u64 32 * ($u64 dci + 0x1));
+            ep_ctx->ep_info1 |= $u32 3 << $u32 1;                   //max allowed consecutive errors = 3
+            ep_ctx->ep_info1 |= endpoint_type << $u32 3;            //endpoint type
+            ep_ctx->ep_info1 |= $u32 (end->max_packet_size & 0xFFFF) << $u32 16;
+            
+            u64 ep_ring_phys = $u64 xhci_get_slot_transfer_ring(dev->slot, dci);
+            assert(ep_ring_phys != 0x0, "usb_configure_device() : null ep ring");
+            ep_ctx->deque_ptr |= ep_ring_phys;                      //deque physical address
+            ep_ctx->deque_ptr |= XHCI_ENDPOINT_CTX_DCS;             //deque cycle state = 1
+        }
+
+        //configure endpoints
+        xhci_configure_endpoint(dev->slot, $u64 buf);
+
+        pfree(buf);
+    }
 
     //classify selected interfaces
     for(u64 i = 0x0; i < selected_interfaces.size(); i++) {
@@ -195,12 +248,13 @@ USB_device* usb_index_device(u64 port_ind) {
 
     //initialize port
     u32 slot = xhci_initialize_port(port_ind);
+    dev->port = port_ind;
     dev->slot = slot;
 
     //get device descriptor
     u64 nr_configurations;
     {
-        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_DEVICE, $u32 0, buf, sizeof(USB_device_descriptor));
+        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_DEVICE, $u32 0, $u32 0, buf, sizeof(USB_device_descriptor));
         assert(transfer_amt == sizeof(USB_device_descriptor), "usb_index_device() : failed to transmit entire device descriptor");
         USB_device_descriptor* dev_desc = $USB_device_descriptor* buf;
 
@@ -218,7 +272,7 @@ USB_device* usb_index_device(u64 port_ind) {
         u64 cfg_tot_sz;
         u64 nr_interfaces;
         {
-            transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 cfg_ind, buf, sizeof(USB_configuration_descriptor));
+            transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 cfg_ind, $u32 0, buf, sizeof(USB_configuration_descriptor));
             assert(transfer_amt == sizeof(USB_configuration_descriptor), "usb_index_device() : failed to transmit entire configuration descriptor");
             USB_configuration_descriptor* cfg_desc = $USB_configuration_descriptor* buf;
 
@@ -231,7 +285,7 @@ USB_device* usb_index_device(u64 port_ind) {
         assert(cfg_tot_sz <= PAGE_SIZE, "usb_index_device() : for now, can only support transferring up to a page at a time");
 
         //get entire configuration descriptor
-        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 cfg_ind, buf, cfg_tot_sz);
+        transfer_amt = xhci_device_get_descriptor(slot, XHCI_DESCRIPTOR_TYPE_CONFIGURATION, $u32 cfg_ind, $u32 0, buf, cfg_tot_sz);
         assert(transfer_amt == cfg_tot_sz, "usb_index_device() : failed to transmit entire configuration data blob");
 
         //parse remainder of configuration
