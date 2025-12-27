@@ -745,34 +745,9 @@ void ahci_find() {
 	for(u64 i = 0x0; i < ahci_hbas.size(); i++) {
 		vector<HBA_PORT*> hba_ports;
 		hba_setup(ahci_hbas[i], hba_ports);
-
+        
 		for(u64 j = 0x0; j < hba_ports.size(); j++) {
-            //see if this drive is partitioned
-            mbr* mbr = $mbr* palloc();
-            if(ahci_read(hba_ports[j], $u32 0, $u32 0, $u32 1, $u16* mbr)) {
-                println("read MBR sector failed");
-                pfree($void* mbr);
-                continue;
-            }
-
-            if(mbr->signature[0] == $u8 0x55 && mbr->signature[1] == $u8 0xAA) {
-                println("found partitioned drive");
-
-                //look through each partition
-                for(u64 k = 0x0; k < 0x4; k++) {
-                    mbr_partition_entry* p = @mbr->partition_entries[k];
-                    if(p->type == MBR_PARTITION_TYPE_EMPTY) continue;
-                    blockdev_create_ahci(hba_ports[j], $u64 p->lba_first, $u64 AHCI_SECTOR_SIZE, p->type);
-                }
-            }
-            else {
-                println("found unpartitioned drive");
-
-                //assume drive is one big partition
-                blockdev_create_ahci(hba_ports[j], 0x0, $u64 AHCI_SECTOR_SIZE, $u8 0x00);
-            }
-
-            pfree($void* mbr);
+            blockdev_create_ahci(hba_ports[j], $u64 AHCI_SECTOR_SIZE);
 		}
 	}
 }

@@ -268,11 +268,20 @@ void usb_configure_device(USB_device* dev) {
 
             println("Last LBA : ", $void* last_lba);
             println("Block Size : ", block_size);
+            
+            // void* buf = palloc();
+            // memcpy(buf, $void* ("bello bello 123"), strlen("bello bello 123") + 0x1);
+            // scsi_write(scsi, $u64 0, $u64 1, buf);
 
-            println("First Sector : ");
-            void* buf = malloc($u64 512);
-            scsi_read(scsi, $u64 0, $u64 1, buf);
-            hexdump(buf, $u64 512);
+            // println("First Sector : ");
+            // scsi_read(scsi, $u64 0, $u64 1, buf);
+            // hexdump(buf, $u64 512);
+
+            // println("str : ", $u8* buf);
+            // pfree(buf);
+
+            blockdev_create_usb_scsi(scsi, block_size);
+            println("USB SCSI block device created");
         }  
     }
 }
@@ -480,8 +489,6 @@ void init_usb() {
         usb_configure_device(dev);
         println("Done configuring device");
     }
-
-    panic("init_usb() : stop here for now");
 
     println("done init usb");
 }

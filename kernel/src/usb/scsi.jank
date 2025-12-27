@@ -48,11 +48,11 @@ i32 scsi_read(SCSI_disk* scsi, u64 lba_start, u64 count, void* buf) {
     assert(buf != nullptr, "scsi_read() : null buf");
     assert(count != $u64 0, "scsi_read() : count must be > 0");
     assert(scsi->block_size != $u64 0, "scsi_read() : block size must be known");
-    assert(scsi->block_size <= PAGE_SIZE, "scsi_reac() : can only alloc PAGE_SIZE contiguous physical memory for now");
+    assert(scsi->block_size <= PAGE_SIZE, "scsi_read() : can only alloc PAGE_SIZE contiguous physical memory for now");
 
     // READ(10) uses 32-bit LBA and 16-bit transfer length (in blocks)
-    assert(lba_start <= $u64 0xFFFFFFFF, "scsi_read() : lba_start too large for READ(10)");
-    assert(count <= $u64 0xFFFF, "scsi_read() : count too large for READ(10)");
+    assert(lba_start <= 0xFFFFFFFF, "scsi_read() : lba_start too large for READ(10)");
+    assert(count <= 0xFFFF, "scsi_read() : count too large for READ(10)");
 
     u64 block_size = scsi->block_size;
     u64 total_bytes = block_size * count;
@@ -88,6 +88,60 @@ i32 scsi_read(SCSI_disk* scsi, u64 lba_start, u64 count, void* buf) {
 
         // copy into out buffer and advance
         memcpy(buf, pbuf, chunk_bytes);
+        buf = $void* ($u64 buf + chunk_bytes);
+        cur_lba += chunk;
+        rem -= chunk;
+    }
+
+    pfree(pbuf);
+    return 0;
+}
+
+i32 scsi_write(SCSI_disk* scsi, u64 lba_start, u64 count, void* buf) {
+    assert(scsi != nullptr, "scsi_write() : null scsi");
+    assert(buf != nullptr, "scsi_write() : null buf");
+    assert(count != $u64 0, "scsi_write() : count must be > 0");
+    assert(scsi->block_size != $u64 0, "scsi_write() : block size must be known");
+    assert(scsi->block_size <= PAGE_SIZE, "scsi_write() : can only alloc PAGE_SIZE contiguous physical memory for now");
+
+    // WRITE(10) uses 32-bit LBA and 16-bit transfer length (in blocks)
+    assert(lba_start <= 0xFFFFFFFF, "scsi_write() : lba_start too large for WRITE(10)");
+    assert(count <= 0xFFFF, "scsi_write() : count too large for WRITE(10)");
+
+    u64 block_size = scsi->block_size;
+    u64 total_bytes = block_size * count;
+
+    void* pbuf = palloc();
+    u64 cur_lba = lba_start;
+    u64 rem = count;
+    u64 blocks_per_page = PAGE_SIZE / block_size;
+    while(rem != $u64 0) {
+        u64 chunk = rem;
+        if(chunk > blocks_per_page) chunk = blocks_per_page;
+        u64 chunk_bytes = chunk * block_size;
+        assert(chunk_bytes <= PAGE_SIZE, "scsi_write() : chunk_bytes <= PAGE_SIZE");
+
+        // build WRITE(10) cmd
+        u8[10] write10;
+        memset($void* @write10, 0, sizeof(u8[10]));
+        write10[0] = $u8 0x2A;  
+
+        // LBA (big-endian u32) at bytes 2-5
+        ($u32* @(($u8* @write10)[2]))[0] = cpu_to_be($u32 cur_lba);
+
+        // transfer length in blocks (big-endian u16) at bytes 7-8
+        ($u16* @(($u8* @write10)[7]))[0] = cpu_to_be($u16 chunk);
+
+        // copy into out buffer and execute WRITE(10)
+        memcpy(pbuf, buf, chunk_bytes);
+        i64 exec_status = scsi_exec_with_retry(scsi, $u8* @write10, $u64 10, 0, pbuf, chunk_bytes);
+        if(exec_status < $i64 0) {
+            pfree(pbuf);
+            return -1;
+        }
+        assert($u64 exec_status == chunk_bytes, "scsi_write() : should return all data for now");
+
+        // advance
         buf = $void* ($u64 buf + chunk_bytes);
         cur_lba += chunk;
         rem -= chunk;
@@ -160,22 +214,24 @@ i64 scsi_exec_with_retry(SCSI_disk* scsi, u8* cmd, u64 cmd_len, i32 data_dir_in,
 }
 
 
-[__GLOBAL_FIRST__] blockdev_ops* BLOCKDEV_OPS_SCSI;
+[__GLOBAL_FIRST__] blockdev_ops* BLOCKDEV_OPS_USB_SCSI;
 void init_scsi_blockdev_ops() {
-    BLOCKDEV_OPS_SCSI = $blockdev_ops* malloc(sizeof(blockdev_ops));
-    new (BLOCKDEV_OPS_SCSI) blockdev_ops();
-    BLOCKDEV_OPS_SCSI->read = #<scsi_read(blockdev*, u64, u64, void*)>;
-    BLOCKDEV_OPS_SCSI->write = #<scsi_write(blockdev*, u64, u64, void*)>;
+    BLOCKDEV_OPS_USB_SCSI = $blockdev_ops* malloc(sizeof(blockdev_ops));
+    new (BLOCKDEV_OPS_USB_SCSI) blockdev_ops();
+    BLOCKDEV_OPS_USB_SCSI->read = #<scsi_read(blockdev*, u64, u64, void*)>;
+    BLOCKDEV_OPS_USB_SCSI->write = #<scsi_write(blockdev*, u64, u64, void*)>;
 }
 
 i32 scsi_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
-    // TODO
-    return -1;
+    assert(dev->type == BLOCKDEV_TYPE_USB_SCSI, "scsi_read() : wrong blockdev type");
+    SCSI_disk* scsi = $SCSI_disk* dev->resource_ptr;
+    return scsi_read(scsi, lba_start, count, buf);
 }
 
 i32 scsi_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
-    // TODO
-    return -1;
+    assert(dev->type == BLOCKDEV_TYPE_USB_SCSI, "scsi_write() : wrong blockdev type");
+    SCSI_disk* scsi = $SCSI_disk* dev->resource_ptr;
+    return scsi_write(scsi, lba_start, count, buf);
 }
 
 

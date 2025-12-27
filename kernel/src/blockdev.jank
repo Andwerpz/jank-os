@@ -1,29 +1,42 @@
 // standard interface for block device drivers
 
-[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI       = 0x1;
-[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_USB_SCSI   = 0x2;
+[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_PARTITION  = 0x1;
+[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI       = 0x2;
+[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_USB_SCSI   = 0x3;
 
 struct blockdev_ops {
     fn<i32(blockdev*, u64, u64, void*)> read;       //reads some sectors from the block device into the provided buffer. returns 0 on success
     fn<i32(blockdev*, u64, u64, void*)> write;      //writes some sectors to the provided block device from the provided buffer. returns 0 on success
-    fn<u64(blockdev*)> block_size;                  //returns the logical block size of this block device
 }
 
 struct blockdev {
     u64 type;
+    i32 is_root;
+    u64 block_size;         //block size in bytes of underlying driver  
+
+    // root
     void* resource_ptr;
     blockdev_ops* ops;
 
+    // not root
+    blockdev* parent;       
     u64 lba_start;          //start of this device partition
-    u64 block_size;         //block size in bytes of underlying driver
     u8 partition_type;      //partition type indicator from MBR (GPT has different structure)
 }
 
 i32 blockdev_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    while(!(dev->is_root)) {
+        lba_start += dev->lba_start;
+        dev = dev->parent;
+    }
     return dev->ops->read#(dev, dev->lba_start + lba_start, count, buf);
 }
 
 i32 blockdev_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    while(!(dev->is_root)) {
+        lba_start += dev->lba_start;
+        dev = dev->parent;
+    }
     return dev->ops->write#(dev, dev->lba_start + lba_start, count, buf);
 }
 
@@ -31,35 +44,93 @@ i32 blockdev_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
 [__GLOBAL_FIRST__] u64 BLOCKDEV_BUF_MAX = $u64 32;
 [__GLOBAL_FIRST__] blockdev* BLOCKDEV_BUF;
 
-//these should create a block device and add it to the block device buffer
-void blockdev_create_ahci(HBA_PORT* hba, u64 lba_start, u64 block_size, u8 partition_type) {
-    assert(BLOCKDEV_BUF_CNT < BLOCKDEV_BUF_MAX, "blockdev_create_ahci() : too many block devices!!");
+void blockdev_add_dev(blockdev* dev) {
+    assert(BLOCKDEV_BUF_CNT < BLOCKDEV_BUF_MAX, "blockdev_add_dev() : too many block devices!!");
+    blockdev* ndev = $blockdev* @(BLOCKDEV_BUF[BLOCKDEV_BUF_CNT ++]);
+    memcpy($void* ndev, $void* dev, sizeof(blockdev));
 
-    blockdev* dev = $blockdev* @(BLOCKDEV_BUF[BLOCKDEV_BUF_CNT ++]);
+    if(dev->is_root) blockdev_find_partitions(ndev);
+}
+
+//these should create a block device and add it to the block device buffer
+void blockdev_create_ahci(HBA_PORT* hba, u64 block_size) {
+    blockdev* dev = $blockdev* malloc(sizeof(blockdev));
     new (dev) blockdev();
 
     dev->type = BLOCKDEV_TYPE_AHCI;
+    dev->is_root = 1;
+    dev->block_size = block_size;
+
     dev->resource_ptr = $void* hba;
     dev->ops = BLOCKDEV_OPS_AHCI;
 
-    dev->lba_start = lba_start;
-    dev->block_size = block_size;
-    dev->partition_type = partition_type;
+    blockdev_add_dev(dev);
+    free($void* dev, sizeof(blockdev));
 }
 
-void blockdev_create_usb_scsi(SCSI_disk* scsi, u64 lba_start, u64 block_size, u8 partition_type) {
-    assert(BLOCKDEV_BUF_CNT < BLOCKDEV_BUF_MAX, "blockdev_create_usb_scsi() : too many block devices!!");
-
-    blockdev* dev = $blockdev* @(BLOCKDEV_BUF[BLOCKDEV_BUF_CNT ++]);
+void blockdev_create_usb_scsi(SCSI_disk* scsi, u64 block_size) {
+    blockdev* dev = $blockdev* malloc(sizeof(blockdev));
     new (dev) blockdev();
 
     dev->type = BLOCKDEV_TYPE_USB_SCSI;
-    dev->resource_ptr = $void* scsi;
-    dev->ops = BLOCKDEV_OPS_SCSI;
-
-    dev->lba_start = lba_start;
+    dev->is_root = 1;
     dev->block_size = block_size;
-    dev->partition_type = partition_type;
+
+    dev->resource_ptr = $void* scsi;
+    dev->ops = BLOCKDEV_OPS_USB_SCSI;
+
+    blockdev_add_dev(dev);
+    free($void* dev, sizeof(blockdev));
+}
+
+void blockdev_create_partition(blockdev* dev, u64 lba_start, u8 partition_type) {
+    blockdev* ndev = $blockdev* malloc(sizeof(blockdev));
+    new (ndev) blockdev();
+
+    ndev->type = BLOCKDEV_TYPE_PARTITION;
+    ndev->is_root = 0;
+    ndev->block_size = dev->block_size;
+
+    ndev->parent = dev;
+    ndev->lba_start = lba_start;
+    ndev->partition_type = partition_type;
+
+    blockdev_add_dev(ndev);
+    free($void* ndev, sizeof(blockdev));
+}
+
+//looks for partitions within the block device 
+//dev must be root block device
+//only works with MBR for now, TODO add GPT
+void blockdev_find_partitions(blockdev* dev) {
+    assert(dev->is_root, "blockdev_find_partitions() : cannot find partitions in non-root blockdev");
+
+    mbr* mbr = $mbr* palloc();
+    if(blockdev_read(dev, 0x0, 0x1, $void* mbr)) {
+        println("blockdev_find_partitions() : read MBR sector failed");
+        pfree($void* mbr);
+        return;
+    }
+
+    if(mbr->signature[0] == $u8 0x55 && mbr->signature[1] == $u8 0xAA) {
+        println("blockdev_find_partitions() : found partitioned drive");
+
+        //look through each partition
+        for(u64 k = 0x0; k < 0x4; k++) {
+            mbr_partition_entry* p = @mbr->partition_entries[k];
+            if(p->type == MBR_PARTITION_TYPE_EMPTY) continue;
+            println("blockdev_find_partitions() : found MBR partition type : ", $u64 p->type);
+            blockdev_create_partition(dev, $u64 p->lba_first, p->type);
+        }
+    }
+    else {
+        println("blockdev_find_partitions() : found unpartitioned drive");
+
+        //assume drive is one big partition
+        blockdev_create_partition(dev, 0x0, $u8 0x00);
+    }
+
+    pfree($void* mbr);
 }
 
 //initializes all drivers
