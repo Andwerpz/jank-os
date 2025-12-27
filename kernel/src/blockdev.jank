@@ -1,10 +1,12 @@
 // standard interface for block device drivers
 
-[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI = 0x0;
+[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI       = 0x1;
+[__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_USB_SCSI   = 0x2;
 
 struct blockdev_ops {
-    fn<i32(blockdev*, u64, u64, void*)> read;       //reads some sectors from the block device into the provided buffer
-    fn<i32(blockdev*, u64, u64, void*)> write;      //writes some sectors to the provided block device from the provided buffer
+    fn<i32(blockdev*, u64, u64, void*)> read;       //reads some sectors from the block device into the provided buffer. returns 0 on success
+    fn<i32(blockdev*, u64, u64, void*)> write;      //writes some sectors to the provided block device from the provided buffer. returns 0 on success
+    fn<u64(blockdev*)> block_size;                  //returns the logical block size of this block device
 }
 
 struct blockdev {
@@ -45,6 +47,21 @@ void blockdev_create_ahci(HBA_PORT* hba, u64 lba_start, u64 block_size, u8 parti
     dev->partition_type = partition_type;
 }
 
+void blockdev_create_usb_scsi(SCSI_disk* scsi, u64 lba_start, u64 block_size, u8 partition_type) {
+    assert(BLOCKDEV_BUF_CNT < BLOCKDEV_BUF_MAX, "blockdev_create_usb_scsi() : too many block devices!!");
+
+    blockdev* dev = $blockdev* @(BLOCKDEV_BUF[BLOCKDEV_BUF_CNT ++]);
+    new (dev) blockdev();
+
+    dev->type = BLOCKDEV_TYPE_USB_SCSI;
+    dev->resource_ptr = $void* scsi;
+    dev->ops = BLOCKDEV_OPS_SCSI;
+
+    dev->lba_start = lba_start;
+    dev->block_size = block_size;
+    dev->partition_type = partition_type;
+}
+
 //initializes all drivers
 //tries to find all supported block devices 
 //populates blockdev buffer, up to BLOCKDEV_BUF_MAX devices
@@ -53,4 +70,6 @@ void init_blockdev() {
 
     init_ahci_blockdev_ops();
     ahci_find();
+
+    init_scsi_blockdev_ops();
 }

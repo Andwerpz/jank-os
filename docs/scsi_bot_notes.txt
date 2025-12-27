@@ -1,0 +1,21 @@
+
+Small Computer System Interface (SCSI)
+https://www.seagate.com/files/staticfiles/support/docs/manual/Interface%20manuals/100293068j.pdf
+set of standards for connecting devices with peripherals. 
+
+Bulk-Only Transfer (BOT)
+https://www.usb.org/sites/default/files/usbmassbulk_10.pdf
+data wrapper protocol
+
+how are they used together?
+seems like BOT acts as a wrapper for the actual SCSI commands
+
+so 'Normal TRB's are used to transmit bulk data between host and device. 
+the data being transmitted follows the BOT protocol
+and the BOT protocol itself acts as a wrapper for SCSI commands
+
+a BOT transfer has 3 distinct phases:
+ - CBW (Command Block Wrapper)
+ - Data
+ - CSW (Command Status Wrapper)
+

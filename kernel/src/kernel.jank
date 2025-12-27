@@ -34,6 +34,8 @@
 #include "kb.jank";
 #include "usb/xhci.jank";
 #include "usb/usb.jank";
+#include "usb/bot.jank";
+#include "usb/scsi.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();

@@ -1,0 +1,181 @@
+// Small Computer System Interface (SCSI)
+// https://www.seagate.com/files/staticfiles/support/docs/manual/Interface%20manuals/100293068j.pdf
+
+// this should be the block device facing layer for USB storage devices
+// for now, only going to support BOT transport protocol
+// later should look into supporting UAS (maybe, but we'll have to work on multithreading in the kernel)
+
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_NO_SENSE        = $u8 0x0;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_RECOVERED_ERROR = $u8 0x1;  // command completed successfully with some recovery action performed by the device
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_NOT_READY       = $u8 0x2;  // logical unit is not accessible currently. Intervention may be required to correct this condition
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_MEDIUM_ERROR    = $u8 0x3;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_HARDWARE_ERROR  = $u8 0x4;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_ILLEGAL_REQUEST = $u8 0x5;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_UNIT_ATTENTION  = $u8 0x6; 
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_DATA_PROTECT    = $u8 0x7;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_BLANK_CHECK     = $u8 0x8;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_VENDOR_SPECIFIC = $u8 0x9;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_COPY_ABORTED    = $u8 0xA;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_ABORTED_COMMAND = $u8 0xB;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_RESERVED        = $u8 0xC;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_VOLUME_OVERFLOW = $u8 0xD;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_MISCOMPARE      = $u8 0xE;
+[__GLOBAL_FIRST__] u8 SCSI_SENSEKEY_COMPLETED       = $u8 0xF;
+
+struct SCSI_disk {
+    MSC_BOT* bot;
+    u64 block_size;
+}
+
+i32 scsi_read_capacity(SCSI_disk* scsi, u64& out_last_lba, u64& out_block_size) {
+    u8[10] rc10;
+    memset($void* @rc10, 0, sizeof(u8[10]));
+    rc10[0] = $u8 0x25;
+    void* data = palloc();
+    i64 exec_status = scsi_exec_with_retry(scsi, $u8* @rc10, $u64 10, 1, data, $u64 8);
+    if(exec_status < $i64 0) {
+        return -1;
+    }
+    assert($u64 exec_status == 0x8, "scsi_read_capacity() : should return all data for now");
+    out_last_lba = $u64 (be_to_cpu(($u32* data)[0]));
+    out_block_size = $u64 (be_to_cpu(($u32* data)[1]));
+    pfree(data);
+    return 0;
+}
+
+i32 scsi_read(SCSI_disk* scsi, u64 lba_start, u64 count, void* buf) {
+    assert(scsi != nullptr, "scsi_read() : null scsi");
+    assert(buf != nullptr, "scsi_read() : null buf");
+    assert(count != $u64 0, "scsi_read() : count must be > 0");
+    assert(scsi->block_size != $u64 0, "scsi_read() : block size must be known");
+    assert(scsi->block_size <= PAGE_SIZE, "scsi_reac() : can only alloc PAGE_SIZE contiguous physical memory for now");
+
+    // READ(10) uses 32-bit LBA and 16-bit transfer length (in blocks)
+    assert(lba_start <= $u64 0xFFFFFFFF, "scsi_read() : lba_start too large for READ(10)");
+    assert(count <= $u64 0xFFFF, "scsi_read() : count too large for READ(10)");
+
+    u64 block_size = scsi->block_size;
+    u64 total_bytes = block_size * count;
+
+    void* pbuf = palloc();
+    u64 cur_lba = lba_start;
+    u64 rem = count;
+    u64 blocks_per_page = PAGE_SIZE / block_size;
+    while(rem != $u64 0) {
+        u64 chunk = rem;
+        if(chunk > blocks_per_page) chunk = blocks_per_page;
+        u64 chunk_bytes = chunk * block_size;
+        assert(chunk_bytes <= PAGE_SIZE, "scsi_read() : chunk_bytes <= PAGE_SIZE");
+
+        // build READ(10) cmd
+        u8[10] read10;
+        memset($void* @read10, 0, sizeof(u8[10]));
+        read10[0] = $u8 0x28;  
+
+        // LBA (big-endian u32) at bytes 2-5
+        ($u32* @(($u8* @read10)[2]))[0] = cpu_to_be($u32 cur_lba);
+
+        // transfer length in blocks (big-endian u16) at bytes 7-8
+        ($u16* @(($u8* @read10)[7]))[0] = cpu_to_be($u16 chunk);
+
+        // execute READ(10)
+        i64 exec_status = scsi_exec_with_retry(scsi, $u8* @read10, $u64 10, 1, pbuf, chunk_bytes);
+        if(exec_status < $i64 0) {
+            pfree(pbuf);
+            return -1;
+        }
+        assert($u64 exec_status == chunk_bytes, "scsi_read() : should return all data for now");
+
+        // copy into out buffer and advance
+        memcpy(buf, pbuf, chunk_bytes);
+        buf = $void* ($u64 buf + chunk_bytes);
+        cur_lba += chunk;
+        rem -= chunk;
+    }
+
+    pfree(pbuf);
+    return 0;
+}
+
+//returns some minimal diagnostic information about the previous command
+// ASC : additional sense code
+// ASCQ : additional sense code qualifier
+// sense code gives you broad error category, ASC/ASCQ gives you exact condition within that category
+i32 scsi_request_sense(SCSI_disk* scsi, u8& response_code, u8& sense_key, u8& ASC, u8& ASCQ) {
+    u8[6] rs6;
+    memset($void* @rs6, 0, 0x6);
+    rs6[0] = $u8 0x03;   
+    rs6[4] = $u8 18;     // allocation length
+    void* data = palloc();
+    i64 exec_status = bot_exec(scsi->bot, $u8* @rs6, $u64 6, 1, data, $u64 18);
+    if(exec_status < $i64 0) {
+        return -1;
+    }
+    assert($u64 exec_status == $u64 18, "scsi_request_sense() : should return all data for now");
+
+    response_code = (($u8* data)[0] & $u8 0x7F);
+    sense_key = (($u8* data)[2] & $u8 0x07);
+    ASC = (($u8* data)[12]);
+    ASCQ = (($u8* data)[13]);
+
+    pfree(data);
+    return 0;
+}
+
+//executes a scsi command 
+//on scsi failure, checks the failure reason via request_sense
+// if the failure reason is recoverable, will try to recover
+// otherwise, will return with an error
+//on success, will return the number of bytes transferred
+i64 scsi_exec_with_retry(SCSI_disk* scsi, u8* cmd, u64 cmd_len, i32 data_dir_in, void* data, u64 data_len) {
+    while(1) {
+        i64 exec_status = bot_exec(scsi->bot, cmd, cmd_len, data_dir_in, data, data_len);
+        if(exec_status >= $i64 0) {
+            assert($u64 exec_status == data_len, "scsi_exec_with_retry() : should transfer all data for now");
+            return exec_status;
+        }
+        
+        //command failed, figure out why
+        u8 response_code;
+        u8 sense_key;
+        u8 ASC;
+        u8 ASCQ;
+        if(scsi_request_sense(scsi, response_code, sense_key, ASC, ASCQ)) {
+            panic("scsi_exec_with_retry() : request sense failed");
+        }
+        if(sense_key == SCSI_SENSEKEY_UNIT_ATTENTION) {
+            //just retry
+            // TODO not in all cases we should retry, figure out what those are
+            continue;
+        }
+        else if(sense_key == SCSI_SENSEKEY_NOT_READY) {
+            // TODO poll with TEST_UNIT_READY until it succeeds
+            panic("scsi_exec_with_retry() : TEST_UNIT_READY_POLL not implemented");
+        }
+        
+        // unhandled error
+        break;
+    }
+    return $i64 -1;
+}
+
+
+[__GLOBAL_FIRST__] blockdev_ops* BLOCKDEV_OPS_SCSI;
+void init_scsi_blockdev_ops() {
+    BLOCKDEV_OPS_SCSI = $blockdev_ops* malloc(sizeof(blockdev_ops));
+    new (BLOCKDEV_OPS_SCSI) blockdev_ops();
+    BLOCKDEV_OPS_SCSI->read = #<scsi_read(blockdev*, u64, u64, void*)>;
+    BLOCKDEV_OPS_SCSI->write = #<scsi_write(blockdev*, u64, u64, void*)>;
+}
+
+i32 scsi_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    // TODO
+    return -1;
+}
+
+i32 scsi_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
+    // TODO
+    return -1;
+}
+
+

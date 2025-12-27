@@ -114,13 +114,13 @@ struct USB_interface {
 [__GLOBAL_FIRST__] u8 USB_ENDPOINT_TRANSFER_TYPE_INTERRUPT      = $u8 3;
 
 struct USB_endpoint {
-    u64 endpoint;           // DCI endpoint address 
-    u8 transfer_type;       // Control / Isochronous / Bulk / Interrupt
+    u32 endpoint;           // DCI endpoint address 
+    u32 endpoint_type;      // XHCI_ENDPOINT_TYPE_*
     u64 max_packet_size;    // in bytes
     u64 interval;           // only matters for Interrupt + Isochronous endpoints
 
     // USB3 endpoints
-
+    // TODO read descriptor type 48 
 
     ~USB_endpoint() {
 
@@ -201,10 +201,8 @@ void usb_configure_device(USB_device* dev) {
         for(u64 i = 0x0; i < selected_endpoints.size(); i++) {
             USB_endpoint* end = selected_endpoints[i];
             u32 dci = $u32 end->endpoint;
+            u32 endpoint_type = end->endpoint_type;
             assert(dci > $u32 XHCI_EP0, "usb_configure_device() : DCI should not be EP0 or slot");
-            i32 is_in = (dci % $u32 2 == $u32 1);                   //odd numbered endpoints are IN, even is OUT
-            u32 endpoint_type = $u32 end->transfer_type;
-            if(is_in) endpoint_type += $u32 4;
 
             xHCI_endpoint_ctx32* ep_ctx = $xHCI_endpoint_ctx32* ($u64 buf + $u64 32 * ($u64 dci + 0x1));
             ep_ctx->ep_info1 |= $u32 3 << $u32 1;                   //max allowed consecutive errors = 3
@@ -231,7 +229,50 @@ void usb_configure_device(USB_device* dev) {
         u8 protocol = int->protocol;
 
         if(class == USB_CLASS_MASS_STORAGE && subclass == USB_SUBCLASS_SCSI && protocol == USB_PROTOCOL_BOT) {
-            println("Found BOT Storage Device");
+            //see if we can uniquely identify a bulk_in and bulk_out endpoint
+            i32 is_valid = 1;
+            USB_endpoint* bulk_in = $USB_endpoint* nullptr;
+            USB_endpoint* bulk_out = $USB_endpoint* nullptr;
+            for(u64 j = 0x0; j < int->endpoints.size(); j++) {
+                USB_endpoint* end = int->endpoints[j];
+                if(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_IN) {
+                    if(bulk_in != nullptr) is_valid = 0;
+                    bulk_in = end;
+                }
+                else if(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_OUT) {
+                    if(bulk_out != nullptr) is_valid = 0;
+                    bulk_out = end;
+                }
+            }
+            if(bulk_in == nullptr || bulk_out == nullptr) is_valid = 0;
+            if(!is_valid) continue;
+
+            println("Found SCSI BOT Storage Device");
+            MSC_BOT* bot = $MSC_BOT* malloc(sizeof(MSC_BOT));
+            new (bot) MSC_BOT();
+            bot->dev = dev;
+            bot->bulk_in = bulk_in;
+            bot->bulk_out = bulk_out;
+
+            SCSI_disk* scsi = $SCSI_disk* malloc(sizeof(SCSI_disk));
+            new (scsi) SCSI_disk();
+            scsi->bot = bot;
+
+            assert(sizeof(BOT_CBW) == $u64 31, "CBW bruh");
+            assert(sizeof(BOT_CSW) == $u64 13, "CSW bruh");
+            
+            u64 last_lba;
+            u64 block_size;
+            scsi_read_capacity(scsi, last_lba, block_size);
+            scsi->block_size = block_size;
+
+            println("Last LBA : ", $void* last_lba);
+            println("Block Size : ", block_size);
+
+            println("First Sector : ");
+            void* buf = malloc($u64 512);
+            scsi_read(scsi, $u64 0, $u64 1, buf);
+            hexdump(buf, $u64 512);
         }  
     }
 }
@@ -350,25 +391,28 @@ USB_device* usb_index_device(u64 port_ind) {
                 u64 max_packet_size = $u64 ep_desc->wMaxPacketSize;
                 u64 interval = $u64 ep_desc->bInterval;
 
+                //parse attributes
+                u32 endpoint_type = $u32 (attributes & 0b11);
+
                 //convert endpoint from USB addr to xHCI DCI
                 println("EP : ", $void* endpoint);
                 if(endpoint & 0x80) {   
+                    // IN endpoint
                     endpoint -= 0x80;
                     endpoint = (endpoint * 0x2) + 0x1;
+                    endpoint_type += $u32 4;
                 }
                 else {
+                    // OUT endpoint
                     endpoint = endpoint * 0x2;
                 }
                 assert(0x1 <= endpoint && endpoint < 0x20, "usb_index_device() : endpoint DCI out of range");
 
-                //parse attributes
-                u8 transfer_type = $u8 (attributes & 0b11);
-
                 assert(end == nullptr, "usb_index_device() : need end to be null when overwriting");
                 end = $USB_endpoint* malloc(sizeof(USB_endpoint));
                 new (end) USB_endpoint();
-                end->endpoint = endpoint;
-                end->transfer_type = transfer_type;
+                end->endpoint = $u32 endpoint;
+                end->endpoint_type = endpoint_type;
                 end->max_packet_size = max_packet_size;
                 end->interval = interval;
 
@@ -441,3 +485,27 @@ void init_usb() {
 
     println("done init usb");
 }
+
+
+// -- BULK TRANSPORT --
+//executes a bulk OUT (host -> device) transfer
+//the given endpoint must be of type XHCI_ENDPOINT_TYPE_BULK_OUT
+//buf must be a physical buffer
+//on success, returns the number of bytes transferred, on failure returns -1
+i64 usb_bulk_out(u32 slot, USB_endpoint* end, void* buf, u64 amt) {
+    assert(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_OUT, "usb_bulk_out() : wrong endpoint type");
+    i64 retval = xhci_bulk_transfer(slot, end->endpoint, XHCI_INTR0, buf, amt);
+    return retval;
+}
+
+//executes a bulk IN (device -> host) transfer 
+//the given endpoint must be of type XHCI_ENDPOINT_TYPE_BULK_IN
+//buf must be a physical buffer
+//on success, returns the number of bytes transferred, on failure returns -1
+i64 usb_bulk_in(u32 slot, USB_endpoint* end, void* buf, u64 amt) {
+    assert(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_IN, "usb_bulk_in() : wrong endpoint type");
+    i64 retval = xhci_bulk_transfer(slot, end->endpoint, XHCI_INTR0, buf, amt);
+    return retval;
+}
+
+

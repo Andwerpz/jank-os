@@ -12,6 +12,7 @@
 // !!! IMPORTANT ASSUMPTIONS !!!
 // - all devices are plugged directly into the root. To actually identify a device, you need its port number, and also the path it takes from the root (path string)
 // - HCCPARAMS1.CSZ = 0, this means I only handle 32-byte context structs
+// - there is only one interrupter (interrupter 0)
 
 // ports vs. slots:
 // a port is the physical thing on your computer
@@ -239,33 +240,22 @@ struct xHCI_INTRS {
 [__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_RESOURCE_ERROR          = $u32 7;
 
 // TRB control bits
-[__GLOBAL_FIRST__] u32 XHCI_TRB_C           = $u32 0b0000000000000001;      // cycle : determines if this TRB is new or stale for this lap
-[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE        = $u32 0b1111110000000000;      // type : starts at bit 10
+[__GLOBAL_FIRST__] u32 XHCI_TRB_C           = $u32 0b0000000000000001;              // cycle : determines if this TRB is new or stale for this lap
+[__GLOBAL_FIRST__] u32 XHCI_TRB_ENT         = $u32 0b0000000000000010;              // evaluate next TRB : if set, xHC will fetch and evaluate the next TRB before saving endpoint state
+[__GLOBAL_FIRST__] u32 XHCI_TRB_ISP         = $u32 0b0000000000000100;              // interrupt on short packet
+[__GLOBAL_FIRST__] u32 XHCI_TRB_NS          = $u32 0b0000000000001000;              // no snoop
+[__GLOBAL_FIRST__] u32 XHCI_TRB_CH          = $u32 0b0000000000010000;              // chain bit : if set, this TRB is associated with the next TRB in the ring
+[__GLOBAL_FIRST__] u32 XHCI_TRB_IOC         = $u32 0b0000000000100000;              // interrupt on completion
+[__GLOBAL_FIRST__] u32 XHCI_TRB_IDT         = $u32 0b0000000001000000;              // immediate data : if set, xHC will interpret parameter field as data, instead of as a pointer to data
+[__GLOBAL_FIRST__] u32 XHCI_TRB_TYPE        = $u32 0b1111110000000000;              // type : starts at bit 10
+[__GLOBAL_FIRST__] u32 XHCI_TRB_DIR         = $u32 0b0000000000000001 << $u32 16;   // direction : indicates the direction of data transfer, IN if set, OUT if cleared
 
 [__GLOBAL_FIRST__] u32 XHCI_TRB_LINK_TC     = $u32 0b0000000000000010;      // toggle cycle : if this is set, internal cycle state should be toggled after processing this link TRB
 
 // Setup Stage TRB constants
-[__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_IOC                 = $u32 0b0000000000100000;              // interrupt on completion 
-[__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_IDT                 = $u32 0b0000000001000000;              // immediate data : should be set to 1 for a setup stage TRB, specifies this TRB contains data, not a pointer
-
 [__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_NODATA  = $u32 0;
 [__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_OUT     = $u32 2;
 [__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_IN      = $u32 3;
-
-// Data Stage TRB constants
-[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_ENT      = $u32 0b0000000000000010;
-[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_ISP      = $u32 0b0000000000000100;
-[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_NS       = $u32 0b0000000000001000;
-[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_CH       = $u32 0b0000000000010000;
-[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_IOC      = $u32 0b0000000000100000;
-[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_IDT      = $u32 0b0000000001000000;
-[__GLOBAL_FIRST__] u32 XHCI_DATA_STAGE_DIR      = $u32 0b0000000000000001 << $u32 16;
-
-// Status Stage TRB constants
-[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_ENT    = $u32 0b0000000000000010;              // evaluate next TRB : if set, xHC will fetch and evaluate the next TRB before saving endpoint state
-[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_CH     = $u32 0b0000000000010000;              // chain bit : if set, this TRB is associated with the next TRB in the ring
-[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_IOC    = $u32 0b0000000000100000;              // interrupt on completion
-[__GLOBAL_FIRST__] u32 XHCI_STATUS_STAGE_DIR    = $u32 0b0000000000000001 << $u32 16;   // direction : indicates the direction of data transfer, IN if set, OUT if cleared
 
 // USB standard requests
 // bRequest constants (Setup Stage field)
@@ -463,7 +453,8 @@ struct xHCI_endpoint_ctx32 {
 [__GLOBAL_FIRST__] u32* XHCI_EVENT_RING_STATES;
 
 //endpoint 0 of every device should be the control endpoint
-[__GLOBAL_FIRST__] u32 XHCI_EP0 = $u32 0x1;
+[__GLOBAL_FIRST__] u32 XHCI_EP0 = $u32 1;
+[__GLOBAL_FIRST__] u32 XHCI_INTR0 = $u32 0;
 
 //notifies xHC that there is some available TRBs to read at the corresponding transfer ring
 void xhci_ring_transfer_doorbell(u32 slot, u32 endpoint) {
@@ -584,11 +575,11 @@ void xhci_handle_event(xHCI_TRB* ev_trb) {
 }
 
 //polls events on an interrupter until it sees an event that has a matching type and TRB ptr
-void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u64 intr_ind, xHCI_TRB* out_trb) {
+void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB* out_trb) {
     vector<xHCI_TRB> events;
     xHCI_TRB* buf = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     while(1) {
-        while(xhci_poll_event(intr_ind, buf)) {
+        while(xhci_poll_event(interrupter, buf)) {
             // spin
         }
 
@@ -617,10 +608,10 @@ void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u64 intr_ind, xHCI_TRB* o
 //retrieves the next TRB from the given interrupter
 //does not check IMAN.IP
 //returns 0 on success, 1 on failure
-i32 xhci_poll_event(u64 ind, xHCI_TRB* out_trb) {
-    xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[ind]);
-    u64 ev_ptr = XHCI_EVENT_RING_PTRS[ind];
-    u32 ev_state = XHCI_EVENT_RING_STATES[ind];
+i32 xhci_poll_event(u32 interrupter, xHCI_TRB* out_trb) {
+    xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[interrupter]);
+    u64 ev_ptr = XHCI_EVENT_RING_PTRS[interrupter];
+    u32 ev_state = XHCI_EVENT_RING_STATES[interrupter];
     assert(intr->ERSTSZ == $u32 1, "xhci_read_event() : only support event rings with one segment for now");
 
     xHCI_ERST_ent* erst = $xHCI_ERST_ent* intr->ERSTBA;
@@ -651,8 +642,8 @@ i32 xhci_poll_event(u64 ind, xHCI_TRB* out_trb) {
     intr->ERDP = new_ERDP;
 
     //update consumer state
-    XHCI_EVENT_RING_PTRS[ind] = ev_ptr;
-    XHCI_EVENT_RING_STATES[ind] = ev_state;
+    XHCI_EVENT_RING_PTRS[interrupter] = ev_ptr;
+    XHCI_EVENT_RING_STATES[interrupter] = ev_state;
 
     return 0;
 }
@@ -1013,15 +1004,12 @@ void xhci_configure_endpoint(u32 slot_id, u64 input_ctx_addr) {
     memset($void* trb, 0, sizeof(xHCI_TRB));
     assert((input_ctx_addr & 0xF) == 0x0, "xhci_configure_endpoint() : low bits of input context address are reserved");
     xhci_trb_set_type(trb, XHCI_TRB_TYPE_CONFIGURE_EP);
-    println("slot id : ", slot_id);
-    println("input ctx addr : ", $void* input_ctx_addr);
     trb->control |= slot_id << $u32 24;
     trb->parameter |= input_ctx_addr;
 
     xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     xhci_exec_command(trb, out_trb);
     assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_configure_endpoint() : result of command should be command completion TRB");
-    println("completion code : ", xhci_event_trb_completion_code(out_trb));
     assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_configure_endpoint() : for now, command must succeed");
 
     free($void* trb, sizeof(xHCI_TRB));
@@ -1061,7 +1049,7 @@ void xhci_exec_command(xHCI_TRB* cmd, xHCI_TRB* out_trb) {
     xhci_ring_command_doorbell();
 
     //poll until we get command completion TRB
-    xhci_poll_events_until(XHCI_TRB_TYPE_CMD_COMPLETION, trb_ptr, 0x0, out_trb);
+    xhci_poll_events_until(XHCI_TRB_TYPE_CMD_COMPLETION, trb_ptr, XHCI_INTR0, out_trb);
 }   
 
 
@@ -1284,6 +1272,46 @@ void xhci_init_slot(u32 slot) {
 
 
 // --- TRANSFER HELPERS ---
+//sends a normal transfer TRB to the specified slot and endpoint
+//buf must be a physical buffer
+//writes the resulting transfer TRB to out_trb
+//for now, null transfers are not supported
+//on success, returns the number of bytes transferred, on failure returns -1
+i64 xhci_bulk_transfer(u32 slot, u32 endpoint, u32 interrupter, void* buf, u64 amt) {
+    assert(amt != 0x0, "xhci_bulk_transfer() : amt has to be >= 0");
+    assert(buf != nullptr, "xhci_bulk_transfer() : null buf");
+    assert(amt < (0x1 << $u64 17), "xhci_bulk_transfer() : amt too big");
+
+    //build TRB
+    xHCI_TRB* normal_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    memset($void* normal_trb, 0, sizeof(xHCI_TRB));
+    normal_trb->parameter = $u64 buf;
+    normal_trb->status |= $u32 amt;
+    normal_trb->status |= $u32 0 << $u32 17;                // TD size
+    normal_trb->status |= interrupter << $u32 22;           // interrupter target
+    normal_trb->control |= XHCI_TRB_IOC;                    // interrupt on completion
+    xhci_trb_set_type(normal_trb, XHCI_TRB_TYPE_NORMAL);
+
+    //write TRB to transfer ring and ring doorbell
+    u64 trb_ptr = xhci_write_transfer(slot, endpoint, normal_trb);
+    xhci_ring_transfer_doorbell(slot, endpoint);
+
+    //poll for transfer TRB
+    xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, interrupter, out_trb);
+    
+    i64 retval;
+    if(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS) {
+        retval = $i64 (amt - $u64 out_trb->status & 0x00FFFFFF);
+    }
+    else retval = $i64 -1;
+
+    free($void* out_trb, sizeof(xHCI_TRB));
+    free($void* normal_trb, sizeof(xHCI_TRB));
+
+    return retval;
+}
+
 //sends a standard SET_CONFIGURATION request to EP0 of the provided slot
 void xhci_device_set_configuration(u32 slot, u32 config_value) {
     u32 bm_request_type = XHCI_BM_REQUEST_TYPE_OUT | XHCI_BM_REQUEST_TYPE_STANDARD | XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
@@ -1347,8 +1375,8 @@ u64 xhci_device_get_descriptor(u32 slot, u32 desc_type, u32 desc_index, u32 lang
 
 //sends a standard USB control request to the given slot via EP0
 //writes the resulting event TRB to out_trb
-void xhci_standard_request(u32 interrupter_target, u32 slot, u32 bmRequestType, u32 bRequest, u32 wValue, u32 wIndex, u32 wLength, void* buf, xHCI_TRB* out_trb) {
-    assert(interrupter_target == $u32 0, "xhci_standard_request() : only interrupter 0 is setup for now");
+void xhci_standard_request(u32 interrupter, u32 slot, u32 bmRequestType, u32 bRequest, u32 wValue, u32 wIndex, u32 wLength, void* buf, xHCI_TRB* out_trb) {
+    assert(interrupter == $u32 0, "xhci_standard_request() : only interrupter 0 is setup for now");
     assert(out_trb != nullptr, "xhci_standard_request() : null out_trb");
     if(wLength != $u32 0) assert(buf != nullptr, "xhci_standard_request() : null buf on non-zero wLength");
     assert((bmRequestType & XHCI_BM_REQUEST_TYPE_TYPE_MASK) == XHCI_BM_REQUEST_TYPE_STANDARD, "xhci_standard_request() : non-standard request");
@@ -1380,7 +1408,7 @@ void xhci_standard_request(u32 interrupter_target, u32 slot, u32 bmRequestType, 
         wValue,
         wIndex,
         wLength,
-        interrupter_target,
+        interrupter,
         trt
     );
 
@@ -1390,20 +1418,20 @@ void xhci_standard_request(u32 interrupter_target, u32 slot, u32 bmRequestType, 
             data_trb,
             buf,
             wLength,
-            interrupter_target,
+            interrupter,
             data_stage_in
         );
 
         xhci_build_status_stage_trb(
             status_trb,
-            interrupter_target,
+            interrupter,
             !data_stage_in
         );  
     }
     else {
         xhci_build_status_stage_trb(
             status_trb,
-            interrupter_target,
+            interrupter,
             1
         ); 
     }
@@ -1424,7 +1452,7 @@ void xhci_standard_request(u32 interrupter_target, u32 slot, u32 bmRequestType, 
     xhci_ring_transfer_doorbell(slot, XHCI_EP0);
     
     //poll until we recieve the expected event TRB
-    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, $u64 interrupter_target, out_trb);
+    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, interrupter, out_trb);
     assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_standard_request() : result of command should be success");
 
     free($void* setup_trb, sizeof(xHCI_TRB));
@@ -1454,7 +1482,7 @@ void xhci_build_setup_stage_trb(
     trb->status |= $u32 8 << $u32 0;    //TRB length = 8
     trb->status |= interrupter_target << $u32 22;
 
-    trb->control |= XHCI_SETUP_STAGE_IDT;
+    trb->control |= XHCI_TRB_IDT;
     trb->control |= trt << $u32 16;
 
     xhci_trb_set_type(trb, XHCI_TRB_TYPE_SETUP_STAGE);
@@ -1477,7 +1505,7 @@ void xhci_build_data_stage_trb(
     trb->status |= $u32 0 << $u32 17;               //set TD size to 0 for now
     trb->status |= interrupter_target << $u32 22;
 
-    if(dir_in) trb->control |= XHCI_DATA_STAGE_DIR;
+    if(dir_in) trb->control |= XHCI_TRB_DIR;
 
     xhci_trb_set_type(trb, XHCI_TRB_TYPE_DATA_STAGE);
 }
@@ -1492,8 +1520,8 @@ void xhci_build_status_stage_trb(
 
     trb->status |= interrupter_target << $u32 22;
 
-    if(dir_in) trb->control |= XHCI_STATUS_STAGE_DIR;
-    trb->control |= XHCI_STATUS_STAGE_IOC;
+    if(dir_in) trb->control |= XHCI_TRB_DIR;
+    trb->control |= XHCI_TRB_IOC;
 
     xhci_trb_set_type(trb, XHCI_TRB_TYPE_STATUS_STAGE);
 }

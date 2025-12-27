@@ -181,6 +181,48 @@ i32 copy_from_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
     return 0;
 }
 
+u16 be_to_cpu(u16 x) {
+    asm!("mov {x}, %rax");
+    asm!("xchg %al, %ah");
+    asm!("mov %rax, {x}");
+    return x;
+}
+
+u32 be_to_cpu(u32 x) {
+    asm!("mov {x}, %rax");
+    asm!("bswap %eax");
+    asm!("mov %rax, {x}");
+    return x;
+}
+
+u64 be_to_cpu(u64 x) {
+    asm!("mov {x}, %rax");
+    asm!("bswap %rax");
+    asm!("mov %rax, {x}");
+    return x;
+}
+
+u16 cpu_to_be(u16 x) {
+    asm!("mov {x}, %rax");
+    asm!("xchg %al, %ah");
+    asm!("mov %rax, {x}");
+    return x;
+}
+
+u32 cpu_to_be(u32 x) {
+    asm!("mov {x}, %rax");
+    asm!("bswap %eax");
+    asm!("mov %rax, {x}");
+    return x;
+}
+
+u64 cpu_to_be(u64 x) {
+    asm!("mov {x}, %rax");
+    asm!("bswap %rax");
+    asm!("mov %rax, {x}");
+    return x;
+}
+
 
 void print(u8 c) {
     serial_print(c);

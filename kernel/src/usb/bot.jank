@@ -1,0 +1,128 @@
+// Bulk-Only Transfer (BOT) protocol
+// wrapper protocol for containing other information
+// https://www.usb.org/sites/default/files/usbmassbulk_10.pdf
+
+[__GLOBAL_FIRST__] u8 BOT_STATUS_SUCCESS        = $u8 0;
+[__GLOBAL_FIRST__] u8 BOT_STATUS_FAILED         = $u8 1;
+[__GLOBAL_FIRST__] u8 BOT_STATUS_PHASE_ERROR    = $u8 2;
+
+[__GLOBAL_FIRST__] u8 BOT_DIR_OUT = $u8 0b00000000;
+[__GLOBAL_FIRST__] u8 BOT_DIR_IN  = $u8 0b10000000;
+
+[__GLOBAL_FIRST__] u32 BOT_CBW_SIGNATURE = $u32 0x43425355;
+[__GLOBAL_FIRST__] u32 BOT_CSW_SIGNATURE = $u32 0x53425355;
+
+// command block wrapper
+struct BOT_CBW {
+    u32 dCBWSignature;              // 0x43425355 : "USBC"
+    u32 dCBWTag;                    // identification number of this command sent by host. The device will copy this field into dCSWTag so that the host can associate it with a command
+    u32 dCBWDataTransferLength;     // the amount of data the host expects to transfer IN or OUT for the data phase of this command
+    u8 bmCBWFlags;                  // bit 7 : direction 1=IN 0=OUT, all other bits reserved
+    u8 bCBWLUN;                     // device Logical Unit Number to which this command is being sent. top 4 bits reserved
+    u8 bCBWCBLength;                // the length of the CBWCB in bytes, should be in range [1, 16]. top 3 bits reserved
+    u8[16] CBWCB;                   // the command to be executed by the device. The device will interpret the first bCBWDBLength bytes and ignore the rest
+}
+
+// command status wrapper
+struct BOT_CSW {
+    u32 dCSWSignature;              // 0x53425355 : "USBS"
+    u32 dCSWTag;                    // copied from dCBWTag field from associated command
+    u32 dCSWDataResidue;            // the difference in the amount of data transfered and dCBWDataTransferLength (the amount of data requested)
+    u8 bCSWStatus;                  // execution status of the command
+}
+
+// high level BOT transport struct
+struct MSC_BOT {
+    USB_device* dev;
+    USB_endpoint* bulk_in;
+    USB_endpoint* bulk_out;
+    u32 next_tag;
+}
+
+// sends a command to the device using the BOT protocol
+// optionally has a data phase if data_len != 0
+// data should be a physical buffer
+// on success, returns the amount of bytes transferred during the data phase
+// on command failure, returns -1
+// on BOT failure, should do BOT reset recovery
+// TODO actually handle errors
+i64 bot_exec(MSC_BOT* bot, u8* cmd, u64 cmd_len, i32 data_dir_in, void* data, u64 data_len) {
+    assert(0x1 <= cmd_len && cmd_len <= 0x10, "bot_exec() : cmd len should be in range [1, 16]");
+    assert(data_len <= 0xFFFFFFFF, "bot_exec() : data_len too big");
+    if(data_len != 0x0) assert(data != nullptr, "bot_exec() : null data");
+    i64 usb_transfer_status;
+    u32 cur_tag = bot->next_tag ++;
+
+    //build CBW
+    BOT_CBW* cbw = $BOT_CBW* palloc();
+    memset($void* cbw, 0, sizeof(BOT_CBW));
+    cbw->dCBWSignature              = BOT_CBW_SIGNATURE;
+    cbw->dCBWTag                    = cur_tag;
+    cbw->dCBWDataTransferLength     = $u32 data_len;
+    if(data_dir_in) cbw->bmCBWFlags = BOT_DIR_IN;
+    else cbw->bmCBWFlags            = BOT_DIR_OUT;
+    cbw->bCBWLUN                    = $u8 0;   // for now, only support LUN 0, TODO use GET_MAX_LUN to see how many logical units there are
+    cbw->bCBWCBLength               = $u8 cmd_len;
+    memcpy($void* @(cbw->CBWCB), $void* cmd, cmd_len);
+
+    //send CBW to device via bulk out
+    usb_transfer_status = usb_bulk_out(bot->dev->slot, bot->bulk_out, $void* cbw, sizeof(BOT_CBW));
+    if(usb_transfer_status < $i64 0) {
+        //transfer failed
+        panic("bot_exec() : transfer CBW failed");
+    }
+    assert($u64 usb_transfer_status == sizeof(BOT_CBW), "bot_exec() : for now should transmit entire command in one go");
+
+    //data stage
+    if(data_len != 0x0) {
+        if(data_dir_in) {
+            // BULK IN
+            usb_transfer_status = usb_bulk_in(bot->dev->slot, bot->bulk_in, data, data_len);
+        }
+        else {
+            // BULK OUT
+            usb_transfer_status = usb_bulk_out(bot->dev->slot, bot->bulk_out, data, data_len);
+        }
+        if(usb_transfer_status < $i64 0) {
+            //transfer failed
+            panic("bot_exec() : transfer data failed");
+        }
+        assert($u64 usb_transfer_status == data_len, "bot_exec() : for now should transmit entire data in one go");
+    }
+
+    //alloc mem for CSW and retrieve via bulk in
+    BOT_CSW* csw = $BOT_CSW* palloc();
+    usb_transfer_status = usb_bulk_in(bot->dev->slot, bot->bulk_in, $void* csw, sizeof(BOT_CSW));
+    if(usb_transfer_status < $i64 0) {
+        //transfer failed
+        panic("bot_exec() : transfer CSW failed");
+    }
+    assert($u64 usb_transfer_status == sizeof(BOT_CSW), "bot_exec() : for now should transmit entire status in one go");
+
+    //validate CSW
+    assert(csw->dCSWSignature == BOT_CSW_SIGNATURE, "bot_exec() : mismatching CSW signature");
+    assert(csw->dCSWTag == cur_tag, "bot_exec() : mismatching tag");
+
+    u32 residue = csw->dCSWDataResidue;
+    u8 csw_status = csw->bCSWStatus;
+
+    pfree($void* csw);
+    pfree($void* cbw);
+    
+    if(csw_status == BOT_STATUS_SUCCESS) {
+        return $i64 (data_len - $u64 residue);
+    }
+    else if(csw_status == BOT_STATUS_FAILED) {
+        return $i64 -1;
+    }
+    else if(csw_status == BOT_STATUS_PHASE_ERROR) {
+        // TODO BOT reset recovery
+        panic("bot_exec() : BOT reset recovery not implemented");
+    }
+    else panic("bot_exec() : unexpected CSW status");
+
+    panic("bot_exec() : should not be here");
+    return $i64 -1;
+}
+
+
