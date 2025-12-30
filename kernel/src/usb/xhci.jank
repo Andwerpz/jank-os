@@ -1364,8 +1364,8 @@ u32 xhci_initialize_port(u32 port_id) {
     else if(port_speed >= $u32 4) ep0_mps = $u32 512;   // super speed
     else panic("xhci_initialize_port() : unexpected port speed");
     xhci_build_initial_input_ctx32(buf, $u32 port_id, $u32 0, $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), ep0_mps);
-
-    if(0) {
+    
+    if(1) {
         //address device, BSR = 1
         println("xhci_initialize_port() : addressing device BSR = 1");
         println("xhci_initialize_port() : addressing port : ", port_id);
@@ -1396,8 +1396,8 @@ u32 xhci_initialize_port(u32 port_id) {
             println("xhci_initialize_port() : grab descriptor TRB status : ", trb_status);
             assert(status >= $i64 0, "usb_device_get_descriptor() : should succeed for now");
 
-            if(port_speed <= $u32 3) ep0_mps = $u32 ($u8* buf)[7];   // low - high speed
-            else ep0_mps = $u32 1 << ($u32 ($u8* buf)[7]);      // super speed
+            if(port_speed <= $u32 3) ep0_mps = $u32 ($u8* buf)[7];  // low - high speed
+            else ep0_mps = $u32 1 << ($u32 ($u8* buf)[7]);          // super speed
         }
 
         //build (final) initial input context, re-init slot
@@ -1408,14 +1408,9 @@ u32 xhci_initialize_port(u32 port_id) {
         println("xhci_initialize_port() : addressing device BSR = 0");
         xhci_address_device(slot, 0, $u64 buf);
     }
-    
+
     //address device, BSR = 0
     xhci_address_device(slot, 0, $u64 buf);
-
-    //no-op transfer on EP0
-    println("xhci_initialize_port() : testing no-op transfer");
-    println("xhci_initialize_port() : PORTSC : ", $void* $u64 port->PORTSC);
-    xhci_no_op_transfer(slot, XHCI_EP0, XHCI_INTR0);
 
     pfree(buf);
     return slot;

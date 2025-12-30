@@ -234,8 +234,8 @@ u64 cpu_to_be(u64 x) {
 
 
 void print(u8 c) {
-    write_serial(c);
-    // vga_debug_draw_char(c);
+    // write_serial(c);
+    vga_debug_draw_char(c);
 } 
 
 void print(u8* str) {
