@@ -1,7 +1,178 @@
-[__GLOBAL_FIRST__] u16 INTEL_VEND   = $u16 0x8086;
-[__GLOBAL_FIRST__] u16 E1000_DEV    = $u16 0x100E;
+// specs in docs/e1000.pdf
+// online ver: https://courses.cs.washington.edu/courses/cse451/16au/readings/e1000.pdf
+
+[__GLOBAL_FIRST__] u16 INTEL_VEND = $u16 0x8086;
+[__GLOBAL_FIRST__] u16 E1000_DEV = $u16 0x100E;
+[__GLOBAL_FIRST__] u8* MAC;
+[__GLOBAL_FIRST__] u8 EEPROM_EXISTS = $u8 0;
+[__GLOBAL_FIRST__] u64 MMIO_BASE = 0x0;
+
+// registers
+// table 13-2 contains the list of registers
+[__GLOBAL_FIRST__] u64 REG_EERD = 0x14;
+
+struct e1000_rx_desc {
+    u64 addr;
+    u16 length;
+    u16 checksum;
+    u8  status;
+    u8  errors;
+    u16 special;
+}
+
+struct e1000_tx_desc {
+    u64 addr;
+    u16 length;
+    u8  cso;
+    u8  cmd;
+    u8  status;
+    u8  css;
+    u16 special;
+}
 
 void init_e1000(u64 addr) {
-    println("start init intel e1000 nic");
+    println("init_e1000() : begin init");
+
+    PCIHeader0* pci_hdr = $PCIHeader0* addr;
+
+    u64 BAR0 = $u64 pci_hdr->BAR0;
+    u64 BAR1 = $u64 pci_hdr->BAR1;
+    
+    assert((BAR0 & 0x1) == 0x0, "init_e1000() : BAR0 is not a memory space");
+
+    u64 mmio_base_addr = 0x0;
+    u64 mmio_size = 0x0;
+
+    u64 type = (BAR0 & 0x6) >> 0x1;
+    if(type == 0x0) {
+        // 32 bit
+        println("init_e1000() : detected 32 bit memory register base address");
+        mmio_base_addr = $u64 (BAR0 & 0xFFFFFFF0);
+
+        // get size
+        pci_hdr->BAR0 = $u32 0xFFFFFFFF;
+        u32 mask = pci_hdr->BAR0;
+        pci_hdr->BAR0 = $u32 BAR0;
+
+        mask = ~(mask & $u32 0xFFFFFFF0);
+        mmio_size = $u64 mask + 0x1;
+    } else if(type == 0x2) {
+        // 64 bit
+        println("init_e1000() : detected 64 bit memory register base address");
+        u64 lower = $u64 (BAR0 & 0xFFFFFFF0);
+        u64 upper = BAR1 << $u64 32;
+        mmio_base_addr = upper | lower;
+
+        // get size
+        pci_hdr->BAR0 = $u32 0xFFFFFFFF;
+        u64 mask_lower = $u64 pci_hdr->BAR0;
+        pci_hdr->BAR0 = $u32 BAR0;
+
+        pci_hdr->BAR1 = $u32 0xFFFFFFFF;
+        u64 mask_upper = $u64 pci_hdr->BAR1;
+        pci_hdr->BAR1 = $u32 BAR1;
+
+        u64 mask = (mask_upper << $u64 32) | (mask_lower & 0xFFFFFFF0);
+        mmio_size = ~mask + 0x1;
+    } else {
+        panic("init_e1000() : unknown memory register base address space size");
+    }
+
+    // identity map
+    pagetable_t pt = pt_get_current();
+    for(u64 vaddr = mmio_base_addr; vaddr < mmio_base_addr + mmio_size; vaddr += PAGE_SIZE) {
+        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
+    }
+    MMIO_BASE = mmio_base_addr;
+    println("init_e1000() : memory mapping complete");
+
+    // check if eeprom exists
+    eeprom_check();
+
+    // read EEPROM for MAC address
+    MAC = $u8* malloc(sizeof(u8) * $u64 6);
+    u16 temp = $u16 0x0;
+    i32 mac_idx = 0;
+    for(i32 i = 0; i < 3; i++) {
+        temp = eeprom_read($u8 i);
+        MAC[mac_idx++] = $u8 (temp & $u16 0xFF);
+        MAC[mac_idx++] = $u8 (temp >> $u16 8);
+    }
+
+    print("init_e1000() : nic MAC address is ");
+    print("[");
+    for(i32 i = 0; i < 6; i++) {
+        print_hex(MAC[i]); 
+        if(i < 5) print(":");
+    }
+    print("]");
+    println("");
+
+    // command register modifications
+    u16 command = pci_hdr->command;
+    command |= $u16 0x2; // Memory Access Enable
+    command |= $u16 0x4; // Enable Mastering
+    pci_hdr->command = command;
+    println("init_e1000() : command register bits set");
+
+    // init rx and tx
+    init_e1000_rx();
+    init_e1000_tx();
+
+    println("init_e1000() : finish init");
     return;
-} 
+}
+
+void eeprom_check() {
+    println("eeprom_check() : checking EEPROM");
+    u32* eerd_ptr = $u32* (MMIO_BASE + REG_EERD);
+    *eerd_ptr = $u32 0x1; // set start bit
+    for(i32 i = 0; i < 10000; i++) {
+        u32 val = *eerd_ptr;
+        if(val & $u32 0x10) { // check for done bit
+            EEPROM_EXISTS = $u8 0x1;
+        }
+    }
+
+    if(EEPROM_EXISTS) {
+        println("eeprom_check() : EEPROM found");
+    } else {
+        println("eeprom_check() : EEPROM not found");
+    }
+
+    return;
+}
+
+u16 eeprom_read(u8 addr) {
+    if(!EEPROM_EXISTS) {
+        return $u16 0x0;
+    }
+
+    u16 data = $u16 0x0;
+    u32* eerd_ptr = $u32* (MMIO_BASE + REG_EERD);
+    u32 command = (($u32 addr) << $u32 8) | $u32 0x1; // set address bits and start bit
+    *eerd_ptr = command;
+
+    u32 temp = $u32 0x0;
+    while(0x1) {
+        temp = *eerd_ptr;
+        if(temp & $u32 0x10) {
+            break;
+        }
+    }
+
+    data = $u16 ((temp & $u32 0xFFFF0000) >> $u32 16);
+    return data;
+}
+
+void init_e1000_rx() {
+    println("init_e1000_rx() : begin init");
+    println("init_e1000_rx() : finish init");
+    return;
+}
+
+void init_e1000_tx() {
+    println("init_e1000_tx() : begin init");
+    println("init_e1000_rx() : finish init");
+    return;
+}
