@@ -37,10 +37,11 @@ boot_usb: drive user
 		-no-reboot \
 		-serial stdio \
 		-device qemu-xhci,id=xhci \
+		-device usb-hub,bus=xhci.0,id=hub0 \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-drive file=drive.img,if=none,id=usbdisk,format=raw \
-		-device usb-storage,bus=xhci.0,drive=usbdisk,bootindex=0
+		-device usb-storage,bus=xhci.0,drive=usbdisk,bootindex=0 
 
 # clean up
 clean:

@@ -257,44 +257,6 @@ struct xHCI_INTRS {
 [__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_OUT     = $u32 2;
 [__GLOBAL_FIRST__] u32 XHCI_SETUP_STAGE_TRT_IN      = $u32 3;
 
-// USB standard requests
-// bRequest constants (Setup Stage field)
-// https://www.beyondlogic.org/usbnutshell/usb6.shtml
-[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_STATUS          = $u32 0x00;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_CLEAR_FEATURE       = $u32 0x01;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_FEATURE         = $u32 0x03;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_ADDRESS         = $u32 0x05;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_DESCRIPTOR      = $u32 0x06;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_DESCRIPTOR      = $u32 0x07;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_CONFIGURATION   = $u32 0x08;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_CONFIGURATION   = $u32 0x09;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_GET_INTERFACE       = $u32 0x0A;
-[__GLOBAL_FIRST__] u32 XHCI_REQ_SET_INTERFACE       = $u32 0x0B;
-
-// bmRequestType constants (Setup Stage field)
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_DIR_MASK            = $u32 0b10000000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_TYPE_MASK           = $u32 0b01100000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_MASK      = $u32 0b00011111;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_OUT                 = $u32 0b00000000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_IN                  = $u32 0b10000000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_STANDARD            = $u32 0b00000000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_CLASS               = $u32 0b00100000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_VENDOR              = $u32 0b01000000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE    = $u32 0b00000000;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_INTERFACE = $u32 0b00000001;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_ENDPOINT  = $u32 0b00000010;
-[__GLOBAL_FIRST__] u32 XHCI_BM_REQUEST_TYPE_RECIPIENT_OTHER     = $u32 0b00000011;
-
-// USB descriptor types
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_DEVICE                      = $u32 1;
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_CONFIGURATION               = $u32 2;
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_STRING                      = $u32 3;
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_INTERFACE                   = $u32 4;
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_ENDPOINT                    = $u32 5;
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_DEVICE_QUALIFIER            = $u32 6;
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_OTHER_SPEED_CONFIGURATION   = $u32 7;
-[__GLOBAL_FIRST__] u32 XHCI_DESCRIPTOR_TYPE_INTERFACE_POWER             = $u32 8;
-
 struct xHCI_TRB {
     u64 parameter;
     u32 status;
@@ -1312,78 +1274,19 @@ i64 xhci_bulk_transfer(u32 slot, u32 endpoint, u32 interrupter, void* buf, u64 a
     return retval;
 }
 
-//sends a standard SET_CONFIGURATION request to EP0 of the provided slot
-void xhci_device_set_configuration(u32 slot, u32 config_value) {
-    u32 bm_request_type = XHCI_BM_REQUEST_TYPE_OUT | XHCI_BM_REQUEST_TYPE_STANDARD | XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
-    u32 b_request = XHCI_REQ_SET_CONFIGURATION;
-    u32 w_value = config_value;
-    u32 w_index = $u32 0;
-    u32 w_length = $u32 0;
-
-    xHCI_TRB* transfer_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    xhci_standard_request(
-        $u32 0,
-        slot,
-        bm_request_type,
-        b_request,
-        w_value,
-        w_index,
-        w_length,
-        nullptr,
-        transfer_trb
-    );
-    assert(xhci_event_trb_completion_code(transfer_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_device_get_descriptor() : result of command should be success");
-    free($void* transfer_trb, sizeof(xHCI_TRB));
-}
-
-//sends a standard GET_DESCRIPTOR request to EP0 of the provided slot
-//populates buf with the first amt bytes of the descriptor
-//buf must be a physical buffer
-//returns the amount actually transferred
-u64 xhci_device_get_descriptor(u32 slot, u32 desc_type, u32 desc_index, u32 lang_index, void* buf, u64 amt) {
-    assert(amt != 0x0, "xhci_device_get_descriptor() : amt needs to be non-zero");
-    assert(buf != nullptr, "xhci_device_get_descriptor() : null buf");
-    if(desc_type != XHCI_DESCRIPTOR_TYPE_STRING) assert(lang_index == $u32 0, "xhci_device_get_descriptor() : lang_index must be 0 when not requesting string descriptor");
-
-    u32 bm_request_type = XHCI_BM_REQUEST_TYPE_IN | XHCI_BM_REQUEST_TYPE_STANDARD | XHCI_BM_REQUEST_TYPE_RECIPIENT_DEVICE;
-    u32 b_request = XHCI_REQ_GET_DESCRIPTOR;
-
-    // high 8-bit is descriptor type
-    // low 8-bit is descriptor index
-    u32 w_value = (desc_type << $u32 8) | desc_index;
-    u32 w_index = lang_index;
-    u32 w_length = $u32 amt;
-
-    xHCI_TRB* transfer_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    xhci_standard_request(
-        $u32 0,
-        slot,
-        bm_request_type,
-        b_request,
-        w_value,
-        w_index,
-        w_length,
-        buf, 
-        transfer_trb
-    );
-    assert(xhci_event_trb_completion_code(transfer_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_device_get_descriptor() : result of command should be success");
-    u64 transfer_amt = amt - ($u64 transfer_trb->status & 0x00FFFFFF);  //it tells you the part that was not transferred
-
-    free($void* transfer_trb, sizeof(xHCI_TRB));
-    return transfer_amt;
-}
-
-//sends a standard USB control request to the given slot via EP0
-//writes the resulting event TRB to out_trb
-void xhci_standard_request(u32 interrupter, u32 slot, u32 bmRequestType, u32 bRequest, u32 wValue, u32 wIndex, u32 wLength, void* buf, xHCI_TRB* out_trb) {
-    assert(interrupter == $u32 0, "xhci_standard_request() : only interrupter 0 is setup for now");
-    assert(out_trb != nullptr, "xhci_standard_request() : null out_trb");
-    if(wLength != $u32 0) assert(buf != nullptr, "xhci_standard_request() : null buf on non-zero wLength");
-    assert((bmRequestType & XHCI_BM_REQUEST_TYPE_TYPE_MASK) == XHCI_BM_REQUEST_TYPE_STANDARD, "xhci_standard_request() : non-standard request");
+//sends a USB control request to the given slot via EP0
+//writes the resulting event TRB status to out_transfer_status
+//on success, returns the amount of bytes transferred
+//on failure, returns -1
+i64 xhci_device_request(u32 interrupter, u32 slot, u32 bmRequestType, u32 bRequest, u32 wValue, u32 wIndex, u32 wLength, void* buf, u32 out_transfer_status) {
+    assert(interrupter == $u32 0, "xhci_device_request() : only interrupter 0 is setup for now");
+    if(wLength != $u32 0) assert(buf != nullptr, "xhci_device_request() : null buf on non-zero wLength");
+    if(wLength == $u32 0) assert(buf == nullptr, "xhci_device_request() : non-null buf non zero wLength");
 
     xHCI_TRB* setup_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     xHCI_TRB* data_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     xHCI_TRB* status_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xHCI_TRB* transfer_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
 
     //figure out TRT (transfer type)
     u32 trt;
@@ -1391,7 +1294,7 @@ void xhci_standard_request(u32 interrupter, u32 slot, u32 bmRequestType, u32 bRe
         //no data stage
         trt = XHCI_SETUP_STAGE_TRT_NODATA;
     }
-    else if(bmRequestType & XHCI_BM_REQUEST_TYPE_IN) {
+    else if((bmRequestType & USB_REQUEST_TYPE_DIR_MASK) == USB_REQUEST_TYPE_DIR_IN) {
         // device -> host
         trt = XHCI_SETUP_STAGE_TRT_IN;
     }
@@ -1452,12 +1355,22 @@ void xhci_standard_request(u32 interrupter, u32 slot, u32 bmRequestType, u32 bRe
     xhci_ring_transfer_doorbell(slot, XHCI_EP0);
     
     //poll until we recieve the expected event TRB
-    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, interrupter, out_trb);
-    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_standard_request() : result of command should be success");
+    xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, interrupter, transfer_trb);
+    out_transfer_status = xhci_event_trb_completion_code(transfer_trb);
+    i64 retval;
+    if(out_transfer_status == XHCI_COMPLETION_CODE_SUCCESS) {
+        //it tells you the part that was not transferred
+        retval = $i64 ($u64 wLength - ($u64 transfer_trb->status & 0x00FFFFFF));  
+    }
+    else {
+        retval = $i64 -1;
+    }
 
     free($void* setup_trb, sizeof(xHCI_TRB));
     free($void* data_trb, sizeof(xHCI_TRB));
     free($void* status_trb, sizeof(xHCI_TRB));
+    free($void* transfer_trb, sizeof(xHCI_TRB));
+    return retval;
 }
 
 void xhci_build_setup_stage_trb(
