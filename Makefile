@@ -17,15 +17,14 @@ boot: drive user
 		-machine q35 \
 		-m 2G \
 		-no-reboot \
+		-d int \
 		-serial stdio \
 		-device qemu-xhci,id=xhci \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-device ich9-ahci,id=ahci \
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
-		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
-		-drive file=usb.img,if=none,id=usbdisk,format=raw \
-		-device usb-storage,bus=xhci.0,drive=usbdisk
+		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 
 
 .PHONY: boot_usb
 boot_usb: drive user
@@ -42,6 +41,9 @@ boot_usb: drive user
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-drive file=drive.img,if=none,id=usbdisk,format=raw \
 		-device usb-storage,bus=xhci.0,drive=usbdisk,bootindex=0 
+
+# real USB passthrough
+# -device usb-host,hostdevice=/dev/bus/usb/001/004,bus=xhci.0
 
 # clean up
 clean:

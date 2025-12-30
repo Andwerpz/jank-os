@@ -77,7 +77,7 @@ i32 init_serial() {
     // (not-loopback with IRQs enabled and OUT#1 and OUT#2 bits enabled)
     outb(COM1 + $u16 4, $u8 0x0f);
 
-    serial_print("init serial success\n");
+    print("init serial success\n");
 
     return $i32 0;
 }
@@ -113,50 +113,6 @@ void write_serial(u8 a) {
     }
     while(is_transmit_empty() == $u8 0) {}
     outb(COM1, a);
-}
-
-
-void serial_print(u8 c) {
-    write_serial(c);
-} 
-
-void serial_print(u8* str) {
-    while(*str != $u8 0) {
-        write_serial(*str);
-        str = $u8* ($u64 str + $u64 1);
-    }
-}
-
-void serial_print(string s) {
-    for(u64 i = 0x0; i < s.size(); i++){
-        write_serial(s[i]);
-    }
-}
-
-void serial_print(u64 x) {
-    serial_print(to_string(x));
-}
-
-void serial_print(u32 x){
-    serial_print(to_string(x));
-}
-
-void serial_print(u16 x) {
-    serial_print(to_string(x));
-}
-
-void serial_print(i64 x) {
-    serial_print(to_string(x));
-}
-
-void serial_print(i32 x) {
-    serial_print(to_string(x));
-}
-
-template<T>
-void serial_println(T x) {
-    serial_print(x);
-    serial_print("\n");
 }
 
 [__GLOBAL_FIRST__] file_ops* FILE_OPS_SERIAL;
