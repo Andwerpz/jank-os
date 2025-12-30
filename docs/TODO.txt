@@ -8,6 +8,7 @@ got some basic USB drivers working, can support storage devices that use SCSI BO
   now just have to actually get a physical drive and reformat it so we can test on bare metal
 
 - TODO
+  - ACPI power off
   - route serial io through interrupts
   - je optimizations
     - reduce alloc in print
@@ -25,6 +26,7 @@ got some basic USB drivers working, can support storage devices that use SCSI BO
     - rewrite compiler + assembler in jank
   - networking, able to make http requests to the outside world
   - USB drivers
+    - support PSIC custom speed mappings
     - error handling
     - USB hubs
       - pretty must just ability to handle complex USB device topology
