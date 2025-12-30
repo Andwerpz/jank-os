@@ -1,0 +1,7 @@
+[__GLOBAL_FIRST__] u16 INTEL_VEND   = $u16 0x8086;
+[__GLOBAL_FIRST__] u16 E1000_DEV    = $u16 0x100E;
+
+void init_e1000(u64 addr) {
+    println("start init intel e1000 nic");
+    return;
+} 
