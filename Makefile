@@ -24,7 +24,8 @@ boot: drive user
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-device ich9-ahci,id=ahci \
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
-		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 
+		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
+		-netdev user,id=net0 -device e1000,netdev=net0,mac=52:54:00:12:34:56
 
 .PHONY: boot_usb
 boot_usb: drive user
