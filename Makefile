@@ -24,8 +24,7 @@ boot: drive user
 		-device ich9-ahci,id=ahci \
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
 		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
-		-drive file=usb.img,if=none,id=usbdisk,format=raw \
-		-device usb-storage,bus=xhci.0,drive=usbdisk
+		-netdev user,id=net0 -device e1000,netdev=net0,mac=52:54:00:12:34:56
 
 .PHONY: boot_usb
 boot_usb: drive user
