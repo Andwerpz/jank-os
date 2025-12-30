@@ -124,7 +124,7 @@ struct USB_device {
     i32* child_present;     // signals whether a child is present at some port index
 
     i32 configured;
-    u64 port;               // port index on the parent hub
+    u32 port;               // port index on the parent hub
     u32 slot;               // xHCI slot index of this device
     u64 ep0_max_packet_size;
     string desc_str;        // string describing this device
@@ -435,7 +435,7 @@ string usb_get_string_descriptor(USB_device* dev, u32 index, u32 lang) {
 //initializes the port and creates a new USB_device struct at the first available slot
 //does not enable any configurations, just indexes the device
 // TODO need to do stuff differently if parent is not the root
-USB_device* usb_index_device(USB_device* parent, u64 port) {
+USB_device* usb_index_device(USB_device* parent, u32 port) {
     assert(parent == USB_ROOT_DEVICE, "usb_index_device() : not handling hubs for now");
     assert(parent->children != nullptr, "usb_index_device() : parent children array is nullptr");
     assert(xhci_port_is_device_connected(port), "usb_index_device() : no device to index");
@@ -680,7 +680,7 @@ void usb_dealloc_device(USB_device* dev) {
 
     USB_device* parent = dev->parent;
     if(parent != nullptr) {
-        u64 port = dev->port;
+        u32 port = dev->port;
         assert(parent->children[port] == dev, "usb_dealloc_device() : parent->child mismatch");
         assert(parent->child_present[port], "usb_dealloc_device() : child should be present");
         
@@ -729,10 +729,12 @@ void init_usb() {
     USB_ROOT_DEVICE->desc_str = "USB Root";
 
     //do root ports sweep
-    for(u64 i = 0x1; i <= XHCI_MAX_PORTS; i++) {
+    println("Root ports sweep : ", XHCI_MAX_PORTS);
+    for(u32 i = $u32 0x1; i <= $u32 XHCI_MAX_PORTS; i++) {
         //check if anything is connected here
         if(!xhci_port_is_device_connected(i)) {
             //nothing connected
+            println("Nothing on port : ", i);
             continue;
         }   
         println("Found something on port : ", i);

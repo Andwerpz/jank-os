@@ -165,6 +165,11 @@ pte_t pt_walk(pagetable_t pt, void* vaddr, i32& level) {
     return pte;
 }
 
+pte_t pt_get_leaf_pte(pagetable_t pt, void* vaddr) {
+    i32 level = 0;
+    return pt_walk(pt, $void* (($u64 vaddr) & ~0xFFF), level);
+}
+
 i32 pt_is_vaddr_mapped(pagetable_t pt, void* vaddr) {
     i32 level = 0;
     pte_t pte = pt_walk(pt, vaddr, level, 0, $u64 0, $u64 0);
