@@ -7,13 +7,13 @@
 [__GLOBAL_FIRST__] u8 EEPROM_EXISTS = $u8 0;
 [__GLOBAL_FIRST__] u64 MMIO_BASE = 0x0;
 
-[__GLOBAL_FIRST__] u64 E1000_NUM_RX_DESC = $u64 32;
-[__GLOBAL_FIRST__] e1000_rx_desc* rx_descs;
-[__GLOBAL_FIRST__] u16 rx_cur = $u16 0;
+[__GLOBAL_FIRST__] u64 E1000_NUM_RDESC = $u64 32;
+[__GLOBAL_FIRST__] E1000_RDESC* RDESC_RING;
+[__GLOBAL_FIRST__] u16 CURR_RDESC = $u16 0;
 
 [__GLOBAL_FIRST__] u64 E1000_NUM_TX_DESC = $u64 32;
-[__GLOBAL_FIRST__] e1000_tx_desc* tx_descs;
-[__GLOBAL_FIRST__] u16 tx_cur = $u16 0;
+[__GLOBAL_FIRST__] E1000_TDESC* TDESC_RING;
+[__GLOBAL_FIRST__] u16 CURR_TDESC = $u16 0;
 
 // registers
 // table 13-2 contains the list of registers
@@ -86,7 +86,8 @@
 // TDT bits
 [__GLOBAL_FIRST__] u32 TDT_TDT = $u32 0xFFFF; // Transmit Descriptor Tail.
 
-struct e1000_rx_desc {
+// recieve descriptor (3.2.3)
+struct E1000_RDESC {
     u64 addr;
     u16 length;
     u16 checksum;
@@ -95,7 +96,10 @@ struct e1000_rx_desc {
     u16 special;
 }
 
-struct e1000_tx_desc {
+[__GLOBAL_FIRST__] u8 RDESC_STATUS_DD = $u8 0x1; // Descriptor Done, Indicates whether hardware is done with the descriptor. When set along with EOP, the received packet is complete in main memory.
+
+// transmit descriptor (3.3.3)
+struct E1000_TDESC {
     u64 addr;
     u16 length;
     u8  cso;
@@ -105,15 +109,32 @@ struct e1000_tx_desc {
     u16 special;
 }
 
-void init_e1000(u64 addr) {
-    println("init_e1000() : begin init nic");
+[__GLOBAL_FIRST__] u8 TDESC_CMD_EOP = $u8 0x1; // End Of Packet, When set, indicates the last descriptor making up the packet. One or many descriptors can be used to form a packet.
+[__GLOBAL_FIRST__] u8 TDESC_CMD_IFCS = $u8 0x2; // Insert FCS, Controls the insertion of the FCS/CRC field in normal Ethernet packets. IFCS is valid only when EOP is set.
+
+void e1000_init(u64 addr) {
+    println("e1000_init() : beginning initializing NIC");
+
+    e1000_mmio(addr);
+    e1000_get_mac_address();
+    e1000_startup();
+    e1000_init_rx();
+    e1000_init_tx();
+
+    println("e1000_init() : finished initializing NIC");
+
+    test_nic();
+}
+
+void e1000_mmio(u64 addr) {
+    println("e1000_mmio() : beginning memory map");
 
     PCIHeader0* pci_hdr = $PCIHeader0* addr;
 
     u64 BAR0 = $u64 pci_hdr->BAR0;
     u64 BAR1 = $u64 pci_hdr->BAR1;
     
-    assert((BAR0 & 0x1) == 0x0, "init_e1000() : BAR0 is not a memory space");
+    assert((BAR0 & 0x1) == 0x0, "e1000_mmio() : BAR0 is not a memory space");
 
     u64 mmio_base_addr = 0x0;
     u64 mmio_size = 0x0;
@@ -121,7 +142,7 @@ void init_e1000(u64 addr) {
     u64 type = (BAR0 & 0x6) >> 0x1;
     if(type == 0x0) {
         // 32 bit
-        println("init_e1000() : detected 32 bit memory register base address");
+        println("e1000_mmio() : detected 32 bit memory register base address");
         mmio_base_addr = $u64 (BAR0 & 0xFFFFFFF0);
 
         // get size
@@ -133,7 +154,7 @@ void init_e1000(u64 addr) {
         mmio_size = $u64 mask + 0x1;
     } else if(type == 0x2) {
         // 64 bit
-        println("init_e1000() : detected 64 bit memory register base address");
+        println("e1000_mmio() : detected 64 bit memory register base address");
         u64 lower = $u64 (BAR0 & 0xFFFFFFF0);
         u64 upper = BAR1 << $u64 32;
         mmio_base_addr = upper | lower;
@@ -150,7 +171,7 @@ void init_e1000(u64 addr) {
         u64 mask = (mask_upper << $u64 32) | (mask_lower & 0xFFFFFFF0);
         mmio_size = ~mask + 0x1;
     } else {
-        panic("init_e1000() : unknown memory register base address space size");
+        panic("e1000_mmio() : unknown memory register base address space size");
     }
 
     // identity map
@@ -159,17 +180,32 @@ void init_e1000(u64 addr) {
         pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
     }
     MMIO_BASE = mmio_base_addr;
-    println("init_e1000() : memory mapping complete");
+
+    // command register modifications
+    u16 command = pci_hdr->command;
+    command |= $u16 0x2; // Memory Access Enable
+    command |= $u16 0x4; // Enable Mastering
+    pci_hdr->command = command;
+
+    println("e1000_mmio() : finished memory map");
+}
+
+void e1000_get_mac_address() {
+    println("e1000_get_mac_address() : attempting to read MAC from NIC EEPROM");
 
     // check if eeprom exists
-    eeprom_check();
+    e1000_eeprom_check();
+    if(!EEPROM_EXISTS) {
+        // handle this later?
+        panic("e1000_get_mac_address() : no EEPROM detected");
+    }
 
     // read EEPROM for MAC address
     MAC = $u8* malloc(sizeof(u8) * $u64 6);
     u16 temp = $u16 0x0;
     i32 mac_idx = 0;
     for(i32 i = 0; i < 3; i++) {
-        temp = eeprom_read($u8 i);
+        temp = e1000_eeprom_read($u8 i);
         MAC[mac_idx++] = $u8 (temp & $u16 0xFF);
         MAC[mac_idx++] = $u8 (temp >> $u16 8);
     }
@@ -182,6 +218,10 @@ void init_e1000(u64 addr) {
     }
     print("]");
     println("");
+}
+
+void e1000_startup() {
+    println("e1000_startup() : beginning general intialization");
 
     // general configuration (14.3 in specs)
     println("init_e1000() : general configuration begin");
@@ -219,25 +259,11 @@ void init_e1000(u64 addr) {
     u32* ims_ptr = $u32* (MMIO_BASE + $u64 REG_IMS);
     // DO THIS LATER!!!1!!
 
-    println("init_e1000() : general configuration finish");
-
-    // command register modifications
-    u16 command = pci_hdr->command;
-    command |= $u16 0x2; // Memory Access Enable
-    command |= $u16 0x4; // Enable Mastering
-    pci_hdr->command = command;
-    println("init_e1000() : command register bits set");
-
-    // init rx and tx
-    init_e1000_rx();
-    init_e1000_tx();
-
-    println("init_e1000() : finish init nic");
-    return;
+    println("e1000_startup() : finished general intialization");
 }
 
-void eeprom_check() {
-    println("eeprom_check() : checking EEPROM");
+void e1000_eeprom_check() {
+    println("e1000_eeprom_check() : checking NIC EEPROM");
     u32* eerd_ptr = $u32* (MMIO_BASE + $u64 REG_EERD + $u64 EERD_START);
     *eerd_ptr = $u32 0x1; // set start bit
     for(i32 i = 0; i < 10000; i++) {
@@ -248,15 +274,15 @@ void eeprom_check() {
     }
 
     if(EEPROM_EXISTS) {
-        println("eeprom_check() : EEPROM found");
+        println("e1000_eeprom_check() : EEPROM found");
     } else {
-        println("eeprom_check() : EEPROM not found");
+        println("e1000_eeprom_check() : EEPROM not found");
     }
 
     return;
 }
 
-u16 eeprom_read(u8 addr) {
+u16 e1000_eeprom_read(u8 addr) {
     if(!EEPROM_EXISTS) {
         return $u16 0x0;
     }
@@ -278,38 +304,38 @@ u16 eeprom_read(u8 addr) {
     return data;
 }
 
-void init_e1000_rx() {
-    println("init_e1000_rx() : begin init rx");
+void e1000_init_rx() {
+    println("e1000_init_rx() : beginning RX initialization");
     
     // allocate ring memory
     void* ring_base = palloc();
     memset(ring_base, 0, PAGE_SIZE);
-    rx_descs = $e1000_rx_desc* ring_base;
+    RDESC_RING = $E1000_RDESC* ring_base;
 
     // fill ring with buffer addresses
-    for(u64 i = 0x0; i < E1000_NUM_RX_DESC; i++) {
+    for(u64 i = 0x0; i < E1000_NUM_RDESC; i++) {
         void* buffer_page = palloc();
         memset(buffer_page, 0, PAGE_SIZE);
 
-        rx_descs[i].addr = $u64 buffer_page;
-        rx_descs[i].status = $u8 0;
+        RDESC_RING[i].addr = $u64 buffer_page;
+        RDESC_RING[i].status = $u8 0;
     }
 
     // write ring address
     u32* rdbal_ptr = $u32* (MMIO_BASE + $u64 REG_RDBAL);
-    *rdbal_ptr = $u32 ($u64 rx_descs);
+    *rdbal_ptr = $u32 ($u64 RDESC_RING);
     u32* rdbah_ptr = $u32* (MMIO_BASE + $u64 REG_RDBAH);
-    *rdbah_ptr = $u32 (($u64 rx_descs) >> $u64 32);
+    *rdbah_ptr = $u32 (($u64 RDESC_RING) >> $u64 32);
 
     // write ring length
     u32* rdlen_ptr = $u32* (MMIO_BASE + $u64 REG_RDLEN);
-    *rdlen_ptr = $u32 (sizeof(e1000_rx_desc) * E1000_NUM_RX_DESC);
+    *rdlen_ptr = $u32 (sizeof(E1000_RDESC) * E1000_NUM_RDESC);
 
     // write head and tail
     u32* rdh_ptr = $u32* (MMIO_BASE + $u64 REG_RDH);
     *rdh_ptr = RDH_RDH & $u32 0;
     u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
-    *rdt_ptr = RDT_RDT & $u32 (E1000_NUM_RX_DESC - 0x1);
+    *rdt_ptr = RDT_RDT & $u32 (E1000_NUM_RDESC - 0x1);
 
     // enable receiver
     u32* rctl_ptr = $u32* (MMIO_BASE + $u64 REG_RCTL);
@@ -317,34 +343,33 @@ void init_e1000_rx() {
     rctl &= ~(RCTL_BSIZE | RCTL_BSEX);
     *rctl_ptr = rctl;
 
-    println("init_e1000_rx() : finish init rx");
-    return;
+    println("e1000_init_rx() : finished RX initialization");
 }
 
-void init_e1000_tx() {
-    println("init_e1000_tx() : begin init tx");
+void e1000_init_tx() {
+    println("e1000_init_tx() : beginning TX initialization");
 
     // allocate ring memory
     void* ring_base = palloc();
     memset(ring_base, 0, PAGE_SIZE);
-    tx_descs = $e1000_tx_desc* ring_base;
+    TDESC_RING = $E1000_TDESC* ring_base;
 
     // fill ring with buffer addresses
     for(u64 i = 0x0; i < E1000_NUM_TX_DESC; i++) {
-        tx_descs[i].addr = $u64 0;
-        tx_descs[i].cmd = $u8 0;
-        tx_descs[i].status = $u8 1;
+        TDESC_RING[i].addr = $u64 0;
+        TDESC_RING[i].cmd = $u8 0;
+        TDESC_RING[i].status = $u8 1;
     }
 
     // write ring address
     u32* tdbal_ptr = $u32* (MMIO_BASE + $u64 REG_TDBAL);
-    *tdbal_ptr = $u32 ($u64 tx_descs);
+    *tdbal_ptr = $u32 ($u64 TDESC_RING);
     u32* tdbah_ptr = $u32* (MMIO_BASE + $u64 REG_TDBAH);
-    *tdbah_ptr = $u32 (($u64 tx_descs) >> $u64 32);
+    *tdbah_ptr = $u32 (($u64 TDESC_RING) >> $u64 32);
 
     // write ring length
     u32* tdlen_ptr = $u32* (MMIO_BASE + $u64 REG_TDLEN);
-    *tdlen_ptr = $u32 (sizeof(e1000_tx_desc) * E1000_NUM_TX_DESC);
+    *tdlen_ptr = $u32 (sizeof(E1000_TDESC) * E1000_NUM_TX_DESC);
 
     // write head and tail
     u32* tdh_ptr = $u32* (MMIO_BASE + $u64 REG_TDH);
@@ -357,6 +382,108 @@ void init_e1000_tx() {
     u32 tctl = (TCTL_EN | TCTL_PSP);
     *tctl_ptr = tctl;
 
-    println("init_e1000_tx() : finish init tx");
-    return;
+    println("e1000_init_tx() : finished TX initialization");
+}
+
+// sending a packet. pointer to data needs to be a physical address (palloc'd)
+void e1000_send_packet(void* data, u16 len) {
+    // get tail index from hardware
+    u32* tdt_ptr = $u32* (MMIO_BASE + $u64 REG_TDT);
+    u32 tx_idx = *tdt_ptr & TDT_TDT;
+
+    // fill descriptor
+    TDESC_RING[tx_idx].addr = $u64 data;
+    TDESC_RING[tx_idx].length = len;
+
+    // set command bits
+    TDESC_RING[tx_idx].cmd = (TDESC_CMD_EOP | TDESC_CMD_IFCS);
+
+    // clear status
+    TDESC_RING[tx_idx].status = $u8 0;
+
+    // move the tail
+    u32 next_idx = (tx_idx + $u32 1) % $u32 E1000_NUM_TX_DESC;
+    *tdt_ptr = next_idx;
+}
+
+void e1000_recieve_poll() {
+    u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
+
+    while(1) {
+        u8 status = RDESC_RING[CURR_RDESC].status;
+
+        if((status & RDESC_STATUS_DD) == $u8 0) {
+            break;
+        }
+
+        u16 len = RDESC_RING[CURR_RDESC].length;
+        u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
+
+        println("e1000_recieve_poll() : packet recieved");
+
+        RDESC_RING[CURR_RDESC].status = $u8 0;
+
+        *rdt_ptr = $u32 CURR_RDESC;
+
+        CURR_RDESC = (CURR_RDESC + $u16 1) % $u16 E1000_NUM_RDESC;
+    }
+}
+
+
+// =======================================================================================
+// =======================================================================================
+// =======================================================================================
+// =======================================================================================
+// =======================================================================================
+
+
+
+void test_nic() {
+
+    u8* test_packet = $u8* palloc();
+    memset($void* test_packet, 0, $u64 64);
+
+    // ---------------- ETH HEADER ----------------
+    // Destination: FF:FF:FF:FF:FF:FF (Broadcast)
+    for(i32 i=0; i < 6; i++) test_packet[i] = $u8 0xFF;
+    
+    // Source: YOUR MAC (From global variable MAC)
+    for(i32 i=0; i < 6; i++) test_packet[6+i] = MAC[i];
+    
+    // EtherType: 0x0806 (ARP)
+    test_packet[12] = $u8 0x08;
+    test_packet[13] = $u8 0x06;
+
+    // ---------------- ARP PAYLOAD ----------------
+    // Hardware Type: 1 (Ethernet)
+    test_packet[14] = $u8 0x00; test_packet[15] = $u8 0x01;
+    // Protocol Type: 0x0800 (IPv4)
+    test_packet[16] = $u8 0x08; test_packet[17] = $u8 0x00;
+    // Hardware Size: 6, Protocol Size: 4
+    test_packet[18] = $u8 0x06; test_packet[19] = $u8 0x04;
+    // Opcode: 1 (Request)
+    test_packet[20] = $u8 0x00; test_packet[21] = $u8 0x01;
+
+    // Sender MAC: YOUR MAC
+    for(i32 i=0; i < 6; i++) test_packet[22+i] = MAC[i];
+    
+    // Sender IP: 0.0.0.0 (We don't have one yet)
+    test_packet[28] = $u8 0x00; test_packet[29] = $u8 0x00; 
+    test_packet[30] = $u8 0x00; test_packet[31] = $u8 0x00;
+
+    // Target MAC: 00:00:00:00:00:00 (Ignored for request)
+    for(i32 i=0; i < 6; i++) test_packet[32+i] = $u8 0x00;
+
+    // Target IP: 10.0.2.2 (QEMU Gateway)
+    // This specific IP forces QEMU to reply with its MAC address
+    test_packet[38] = $u8 10;
+    test_packet[39] = $u8 0;
+    test_packet[40] = $u8 2;
+    test_packet[41] = $u8 2;
+
+    // ---------------- SEND ----------------
+    println("Sending ARP Request...");
+    e1000_send_packet($void* test_packet, $u16 64);
+
+    while(1) e1000_recieve_poll();
 }
