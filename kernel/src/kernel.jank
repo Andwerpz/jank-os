@@ -19,6 +19,7 @@
 #include "idt.jank";
 #include "scheduler.jank";
 #include "pic.jank";
+#include "pit.jank";
 #include "file.jank";
 #include "process.jank";
 #include "ext2fs.jank";
@@ -234,6 +235,7 @@ void blockdev_mount_ext2() {
 }
 
 i32 main() {
+    init_pit();
     init_kb();
     init_acpi();
     init_ps2();
