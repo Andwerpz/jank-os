@@ -3,9 +3,11 @@
 
 [__GLOBAL_FIRST__] u16 INTEL_VEND = $u16 0x8086;
 [__GLOBAL_FIRST__] u16 E1000_DEV = $u16 0x100E;
+
 [__GLOBAL_FIRST__] u8* MAC;
 [__GLOBAL_FIRST__] u8 EEPROM_EXISTS = $u8 0;
 [__GLOBAL_FIRST__] u64 MMIO_BASE = 0x0;
+[__GLOBAL_FIRST__] u8 E1000_IRQ = $u8 0;
 
 [__GLOBAL_FIRST__] u64 E1000_NUM_RDESC = $u64 32;
 [__GLOBAL_FIRST__] E1000_RDESC* RDESC_RING;
@@ -115,7 +117,7 @@ struct E1000_TDESC {
 void e1000_init(u64 addr) {
     println("e1000_init() : beginning initializing NIC");
 
-    e1000_mmio(addr);
+    e1000_pci_setup(addr);
     e1000_get_mac_address();
     e1000_startup();
     e1000_init_rx();
@@ -126,15 +128,15 @@ void e1000_init(u64 addr) {
     test_nic();
 }
 
-void e1000_mmio(u64 addr) {
-    println("e1000_mmio() : beginning memory map");
+void e1000_pci_setup(u64 addr) {
+    println("e1000_pci_setup() : finished PCI setup");
 
     PCIHeader0* pci_hdr = $PCIHeader0* addr;
 
     u64 BAR0 = $u64 pci_hdr->BAR0;
     u64 BAR1 = $u64 pci_hdr->BAR1;
     
-    assert((BAR0 & 0x1) == 0x0, "e1000_mmio() : BAR0 is not a memory space");
+    assert((BAR0 & 0x1) == 0x0, "e1000_pci_setup() : BAR0 is not a memory space");
 
     u64 mmio_base_addr = 0x0;
     u64 mmio_size = 0x0;
@@ -142,7 +144,7 @@ void e1000_mmio(u64 addr) {
     u64 type = (BAR0 & 0x6) >> 0x1;
     if(type == 0x0) {
         // 32 bit
-        println("e1000_mmio() : detected 32 bit memory register base address");
+        println("e1000_pci_setup() : detected 32 bit memory register base address");
         mmio_base_addr = $u64 (BAR0 & 0xFFFFFFF0);
 
         // get size
@@ -154,7 +156,7 @@ void e1000_mmio(u64 addr) {
         mmio_size = $u64 mask + 0x1;
     } else if(type == 0x2) {
         // 64 bit
-        println("e1000_mmio() : detected 64 bit memory register base address");
+        println("e1000_pci_setup() : detected 64 bit memory register base address");
         u64 lower = $u64 (BAR0 & 0xFFFFFFF0);
         u64 upper = BAR1 << $u64 32;
         mmio_base_addr = upper | lower;
@@ -171,7 +173,7 @@ void e1000_mmio(u64 addr) {
         u64 mask = (mask_upper << $u64 32) | (mask_lower & 0xFFFFFFF0);
         mmio_size = ~mask + 0x1;
     } else {
-        panic("e1000_mmio() : unknown memory register base address space size");
+        panic("e1000_pci_setup() : unknown memory register base address space size");
     }
 
     // identity map
@@ -187,7 +189,14 @@ void e1000_mmio(u64 addr) {
     command |= $u16 0x4; // Enable Mastering
     pci_hdr->command = command;
 
-    println("e1000_mmio() : finished memory map");
+    // read irq line, no safety checks here
+    E1000_IRQ = pci_hdr->interrupt_line;
+    print("e1000_pci_setup() : using IRQ: ");
+    print_hex(E1000_IRQ);
+    println("");
+    IRQ_clear_mask(E1000_IRQ);
+
+    println("e1000_pci_setup() : finished PCI setup");
 }
 
 void e1000_get_mac_address() {
@@ -386,6 +395,8 @@ void e1000_init_tx() {
 }
 
 // sending a packet. pointer to data needs to be a physical address (palloc'd)
+// hardware moves the head and software writes to tail
+// hardware will act when head != tail, otherwise it sleeps
 void e1000_send_packet(void* data, u16 len) {
     // get tail index from hardware
     u32* tdt_ptr = $u32* (MMIO_BASE + $u64 REG_TDT);
@@ -485,5 +496,5 @@ void test_nic() {
     println("Sending ARP Request...");
     e1000_send_packet($void* test_packet, $u16 64);
 
-    while(1) e1000_recieve_poll();
+    // while(1) e1000_recieve_poll();
 }
