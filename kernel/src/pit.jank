@@ -1,0 +1,19 @@
+// https://wiki.osdev.org/Programmable_Interval_Timer
+// PIT (Programmable Interval Timer)
+// oscillates at roughly 1.193182 MHz
+// has 3 output channels, the useful one is channel 0 for generating timer interrupts. 
+// channel 0 is connected to PIC IRQ 0
+
+[__GLOBAL_FIRST__] u16 PIT_CHANNEL0         = $u16 0x0040;
+[__GLOBAL_FIRST__] u16 PIT_COMMAND          = $u16 0x0043;
+
+//setup PIT
+void init_pit() {
+    u64 divisor = $u64 (1193182 / 100); // 100 Hz
+
+    //channel 0, access mode: lobyte/hibyte, mode 3 (square wave)
+    outb(PIT_COMMAND, $u8 0b00110110);
+
+    outb(PIT_CHANNEL0, $u8 (divisor & 0xff));           //low byte
+    outb(PIT_CHANNEL0, $u8 ((divisor >> 0x8) & 0xff));  //high byte
+}
