@@ -1,2 +1,4 @@
 - get basic functionality for e1000
+- test rx and tx, polling
+- configure Interrupt Mask for later...
 - make generic network device
