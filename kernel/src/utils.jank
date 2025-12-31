@@ -232,6 +232,23 @@ u64 cpu_to_be(u64 x) {
     return x;
 }
 
+void cpu_cache_flush(void* addr) {
+    asm!("mov {addr}, %rax");
+    asm!("clflush (%rax)");
+}
+
+//flushes size bytes of memory in virtual address space starting from addr from the CPU cache
+void cpu_cache_flush(void* addr, u64 size) {
+    // iterate through the range in 64-byte chunks (standard cache line size)
+    // can use CPUID leaf 1 to get the exact line size
+    for(u64 p = 0x0; p < size; p += $u64 64) {
+        cpu_cache_flush($void* (p + $u64 addr));
+    }
+    
+    // ensure flushes are finished before any store
+    asm!("mfence");
+}
+
 
 void print(u8 c) {
     // write_serial(c);
