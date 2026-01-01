@@ -485,7 +485,6 @@ void init_mcfg(MCFG* mcfg) {
                         else if(progif == $u8 0x00) {
                             println("found UHCI controller");
                         }
-                        init_e1000(addr);
                     }
                 }
             }
