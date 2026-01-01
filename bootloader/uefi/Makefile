@@ -76,9 +76,9 @@ $(SO): $(OBJ)
 	$(LD) $(LDFLAGS) $(CRT0) $(OBJ) -o $@ -lgnuefi -lefi
 
 $(EFI): $(SO)
-	$(OBJCOPY) -j .text -j .sdata -j .data -j .dynamic -j .dynsym \
-	           -j .rel -j .rela -j .reloc \
-	           --target=efi-app-$(ARCH) $< $@
+	$(OBJCOPY) -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym \
+           	-j .rel -j .rela -j .reloc \
+           	--target=efi-app-$(ARCH) $< $@
 
 clean:
 	rm -rf $(BUILD_DIR)

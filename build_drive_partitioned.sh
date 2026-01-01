@@ -100,7 +100,7 @@ echo "[*] Formatting p1 as FAT32"
 sudo mkfs.vfat -F 32 -n EFI "$PART1" >/dev/null
 
 echo "[*] Formatting p2 as ext2 (rev 0, 1 KiB blocks)"
-sudo mkfs.ext2 -F -b 1024 -r 0 "$PART2" >/dev/null
+sudo mkfs.ext2 -F -b 1024 -E revision=0 "$PART2" >/dev/null
 
 echo "[*] Preparing mountpoints under $MNT"
 sudo mkdir -p "$MNT/esp" "$MNT/root"

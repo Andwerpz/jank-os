@@ -473,7 +473,7 @@ static inline __attribute__((noreturn)) void jump_to_kernel() {
     __builtin_unreachable();
 }
 
-EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
+EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     InitializeLib(ImageHandle, SystemTable);
 
     Print(L"Hello from GNU-EFI!\r\n");
@@ -595,7 +595,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     }
 
     // use new pagetables
-    load_cr3(pml4);
+    load_cr3((UINT64) pml4);
 
     serial_puts("now using new pagetables\n");
 

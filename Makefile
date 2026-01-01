@@ -57,6 +57,4 @@ test:
 	make; \
 	./main build-tests; \
 	echo "Returning to repo root"; \
-	cd ../../../; \
-	echo "Booting OS"; \
-	$(MAKE) boot; \
+	cd ../../../; 
