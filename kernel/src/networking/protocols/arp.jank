@@ -1,0 +1,169 @@
+[__GLOBAL_FIRST__] u16 ARP_HW_TYPE_ETHERNET     = $u16 0x0001;
+[__GLOBAL_FIRST__] u16 ARP_PROTO_TYPE_IPV4      = $u16 0x0800;
+[__GLOBAL_FIRST__] u16 ARP_OPCODE_REQUEST       = $u16 0x0001;
+[__GLOBAL_FIRST__] u16 ARP_OPCODE_REPLY         = $u16 0x0002;
+
+struct ARPHeader {
+    u16     hw_type;        // Hardware Type
+    u16     proto_type;     // Protocol Type
+    u8      hw_len;         // Hardware Length
+    u8      proto_len;      // Protocol Length
+    u16     opcode;         // Operation
+    u8[6]   sender_mac;     // Sender Hardware Address
+    u8[4]   sender_ip;      // Sender Protocol Address
+    u8[6]   target_mac;     // Target Hardware Address
+    u8[4]   target_ip;      // Target Protocol Address
+}
+
+void arp_handle(ARPHeader* arp) {
+    u16 opcode = be_to_cpu(arp->opcode);
+
+    if(opcode == ARP_OPCODE_REPLY) {
+        println("arp_handle() : received ARP reply");
+        
+        print("Sender IP: ");
+        print($u64 arp->sender_ip[0]); 
+        print(".");
+        print($u64 arp->sender_ip[1]); 
+        print(".");
+        print($u64 arp->sender_ip[2]); 
+        print(".");
+        print($u64 arp->sender_ip[3]); 
+        
+        print(" is at MAC: ");
+        for(i32 i=0; i<6; i++) {
+            print_hex(arp->sender_mac[i]);
+            if(i<5) print(":");
+        }
+        println("");
+    } else if(opcode == ARP_OPCODE_REQUEST) {
+        println("arp_handle() : received ARP request");
+        if( arp->target_ip[0] == IPV4_ADDR[0] &&
+            arp->target_ip[1] == IPV4_ADDR[1] &&
+            arp->target_ip[2] == IPV4_ADDR[2] &&
+            arp->target_ip[3] == IPV4_ADDR[3]
+        ) {
+            println("arp_handle() : target ip matched with host, sending reply");
+
+            // im going to palloc this because it requires a physical address
+            // they dont get freed after lol, need to fix this
+            // void* buffer = palloc();
+            // EthernetHeader* eth_resp = $EthernetHeader* buffer;
+            // ARPHeader* arp_resp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
+            
+            // memcpy(eth_resp->dst, arp->sender_mac, 6);
+            // memcpy(eth_resp->src, MAC, 6);
+
+            // eth_resp->type = cpu_to_be(ETHERNET_TYPE_IPV4);
+            
+            // arp_resp->hw_type = cpu_to_be(ARP_HW_TYPE_ETHERNET);
+            // arp_resp->proto_type = cpu_to_be(ARP_PROTO_TYPE_IPV4);
+            // arp_resp->hw_len = $u8 6;
+            // arp_resp->proto_len = $u8 4;
+            // arp_resp->opcode = cpu_to_be(ARP_OPCODE_REPLY);
+
+            // memcpy(arp_resp->sender_mac, MAC, 6);
+            // memcpy(arp_resp->sender_ip, IPV4_ADDR, 4);
+
+            // memcpy(arp_resp->target_mac, arp->sender_mac, 6);
+            // memcpy(arp_resp->target_ip, arp->sender_ip, 4);
+
+            // e1000_send_packet(buffer, 42);
+
+            // free(response_buffer);
+        } else {
+            println("arp_handle() : target ip does not match with host, ignoring");
+        }
+
+
+    } else {
+
+    }
+}
+
+void send_arp_request(u8* target_ip) {
+    println("send_arp_request() : sending arp packet");
+
+    void* buffer = palloc();
+    memset(buffer, 0, $u64 64);
+
+    EthernetHeader* eth = $EthernetHeader* buffer;
+    ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
+
+    // set dst mac to FF:FF:FF:FF:FF:FF (broadcast)
+    for(i32 i = 0; i < 6; i++) eth->dst[i] = $u8 0xFF;
+
+    // set src mac
+    for(i32 i=0; i < 6; i++) eth->src[i] = MAC[i];
+
+    // set ethertype
+    eth->type = cpu_to_be(ETHERNET_TYPE_ARP);
+
+    // arp header
+    arp->hw_type = cpu_to_be(ARP_HW_TYPE_ETHERNET);
+    arp->proto_type = cpu_to_be(ARP_PROTO_TYPE_IPV4);
+    arp->hw_len = $u8 6;
+    arp->proto_len = $u8 4;
+    arp->opcode = cpu_to_be(ARP_OPCODE_REQUEST);
+
+    // set self as sender
+    for(i32 i = 0; i < 6; i++) arp->sender_mac[i] = MAC[i];
+    for(i32 i = 0; i < 4; i++) arp->sender_ip[i] = IPV4_ADDR[i];
+
+    // set target, mac is unknown (00:00:00:00:00:00)
+    for(i32 i = 0; i < 6; i++) arp->target_mac[i] = $u8 0;
+    for(i32 i = 0; i < 4; i++) arp->target_ip[i] = target_ip[i];
+
+    // send
+    e1000_send_packet(buffer, $u16 42);
+}
+
+
+
+//     u8* test_packet = $u8* palloc();
+//     memset($void* test_packet, 0, $u64 64);
+
+//     // ---------------- ETH HEADER ----------------
+//     // Destination: FF:FF:FF:FF:FF:FF (Broadcast)
+//     for(i32 i=0; i < 6; i++) test_packet[i] = $u8 0xFF;
+    
+//     // Source: YOUR MAC (From global variable MAC)
+//     for(i32 i=0; i < 6; i++) test_packet[6+i] = MAC[i];
+    
+//     // EtherType: 0x0806 (ARP)
+//     test_packet[12] = $u8 0x08;
+//     test_packet[13] = $u8 0x06;
+
+//     // ---------------- ARP PAYLOAD ----------------
+//     // Hardware Type: 1 (Ethernet)
+//     test_packet[14] = $u8 0x00; test_packet[15] = $u8 0x01;
+//     // Protocol Type: 0x0800 (IPv4)
+//     test_packet[16] = $u8 0x08; test_packet[17] = $u8 0x00;
+//     // Hardware Size: 6, Protocol Size: 4
+//     test_packet[18] = $u8 0x06; test_packet[19] = $u8 0x04;
+//     // Opcode: 1 (Request)
+//     test_packet[20] = $u8 0x00; test_packet[21] = $u8 0x01;
+
+//     // Sender MAC: YOUR MAC
+//     for(i32 i=0; i < 6; i++) test_packet[22+i] = MAC[i];
+    
+//     // Sender IP: 0.0.0.0 (We don't have one yet)
+//     test_packet[28] = $u8 0x00; test_packet[29] = $u8 0x00; 
+//     test_packet[30] = $u8 0x00; test_packet[31] = $u8 0x00;
+
+//     // Target MAC: 00:00:00:00:00:00 (Ignored for request)
+//     for(i32 i=0; i < 6; i++) test_packet[32+i] = $u8 0x00;
+
+//     // Target IP: 10.0.2.2 (QEMU Gateway)
+//     // This specific IP forces QEMU to reply with its MAC address
+//     test_packet[38] = $u8 10;
+//     test_packet[39] = $u8 0;
+//     test_packet[40] = $u8 2;
+//     test_packet[41] = $u8 2;
+
+//     // ---------------- SEND ----------------
+//     println("Sending ARP Request...");
+//     e1000_send_packet($void* test_packet, $u16 64);
+
+//     e1000_recieve_poll();
+// }
