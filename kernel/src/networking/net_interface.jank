@@ -1,0 +1,11 @@
+vector<NetInterface> network_devices;
+
+struct NetInterface {
+    u8* name;
+    u8[6] mac_address;
+    u32 ip_address;
+    u32 subnet_mask;
+    u32 gateway_ip;
+
+    // function pointer here?
+}
