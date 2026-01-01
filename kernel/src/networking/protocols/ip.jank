@@ -1,0 +1,75 @@
+// https://en.wikipedia.org/wiki/IPv4#Header
+
+struct IPv4Header {
+    u8  version_ihl;        // Version: 4 bits + Internet Header Length (IHL): 4 bits
+    u8  tos;                // Differentiated Services Code Point (DSCP): 6 bits + Explicit Congestion Notification (ECN): 2 bits
+    u16 total_length;       // Total Length: 16 bits
+    u16 id;                 // Identification: 16 bits
+    u16 flags_fragment;     // Flags: 3 bits + Fragment Offset: 13 bits
+    u8  ttl;                // Time to live (TTL): 8 bits
+    u8  protocol;           // Protocol: 8 bits
+    u16 header_checksum;    // Header Checksum: 16 bits
+    u8[4] src_ip;           // Source address: 32 bits
+    u8[4] dst_ip;           // Destination address: 32 bits
+}
+
+[__GLOBAL_FIRST__] u8 IPv4_VALID_VERSION = $u8 4;
+
+[__GLOBAL_FIRST__] u8 IPv4_PROTOCOL_ICMP = $u8 1;
+[__GLOBAL_FIRST__] u8 IPv4_PROTOCOL_TCP = $u8 6;
+[__GLOBAL_FIRST__] u8 IPv4_PROTOCOL_UDP = $u8 17;
+
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_VERSION_MASK = $u8 0xF0;
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_IHL_MASK = $u8 0x0F;
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_DSCP_MASK = $u8 0xFC;
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_ECN_MASK = $u8 0x03;
+[__GLOBAL_FIRST__] u16 IPv4_HEADER_FLAGS_MASK = $u16 0xE000;
+[__GLOBAL_FIRST__] u16 IPv4_HEADER_FRAGMENT_OFFSET_MASK = $u16 0x1FFF;
+
+void ipv4_handle(void* data, u64 len) {
+    if(len < sizeof(IPv4Header)) return;
+
+    IPv4Header* ip = $IPv4Header* data;
+    u8 version = (ip->version_ihl & IPv4_HEADER_VERSION_MASK) >> $u8 4;
+    if(version != IPv4_VALID_VERSION) {
+        println("ipv4_handle() : invalid version in header");
+        return;
+    }
+    
+    // for now i only support length 20 headers, no support for options...
+    u8 ihl = ip->version_ihl & IPv4_HEADER_IHL_MASK;
+    if(ihl * $u8 5 != $u8 20) {
+        println("ipv4_handle() : invalid ihl, header length not supported");
+        return;
+    }
+
+    u16 calc = calculate_ipv4_header_checksum(data);
+    if(calc != $u16 0) {
+        println("ipv4_handle() : checksum failed");
+        return;
+    }
+
+    if(
+        ip->dst_ip[0] != IPV4_ADDR[0] ||
+        ip->dst_ip[1] != IPV4_ADDR[1] ||
+        ip->dst_ip[2] != IPV4_ADDR[2] ||
+        ip->dst_ip[3] != IPV4_ADDR[3]
+    ) {
+        
+    }
+}
+
+u16 calculate_ipv4_header_checksum(void* header) {
+    u32 sum = $u32 0;
+    u16* data = $u16* header;
+
+    for(u64 i = 0x0; i < sizeof(IPv4Header) / $u64 2; i++) {
+        sum += $u32 data[i];
+    }
+
+    while(sum >> $u32 16) {
+        sum = (sum & $u32 0xFFFF) + (sum >> $u32 16);
+    }
+
+    return ~($u16 sum);
+}
