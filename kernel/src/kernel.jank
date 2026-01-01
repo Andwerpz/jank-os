@@ -37,7 +37,9 @@
 #include "usb/usb.jank";
 #include "usb/bot.jank";
 #include "usb/scsi.jank";
-#include "networking/e1000.jank";
+#include "networking/protocols/ethernet.jank";
+#include "networking/protocols/arp.jank";
+#include "networking/nic/e1000.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
