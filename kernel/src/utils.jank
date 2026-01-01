@@ -251,8 +251,8 @@ void cpu_cache_flush(void* addr, u64 size) {
 
 
 void print(u8 c) {
-    // write_serial(c);
-    vga_debug_draw_char(c);
+    write_serial(c);
+    // vga_debug_draw_char(c);
 } 
 
 void print(u8* str) {

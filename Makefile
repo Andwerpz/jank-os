@@ -8,6 +8,9 @@ drive:
 user:
 	make -C ./user
 
+# flag to tell qemu to print interrupts
+# -d int
+
 # create and boot from drive
 .PHONY: boot
 boot: drive user
@@ -17,7 +20,6 @@ boot: drive user
 		-machine q35 \
 		-m 2G \
 		-no-reboot \
-		-d int \
 		-serial stdio \
 		-device qemu-xhci,id=xhci \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
