@@ -385,7 +385,10 @@ void e1000_init_tx() {
 
     // fill ring with buffer addresses
     for(u64 i = 0x0; i < E1000_NUM_TX_DESC; i++) {
-        TDESC_RING[i].addr = $u64 0;
+        void* buffer_page = palloc();
+        memset(buffer_page, 0, PAGE_SIZE);
+
+        TDESC_RING[i].addr = $u64 buffer_page;
         TDESC_RING[i].cmd = $u8 0;
         TDESC_RING[i].status = $u8 1;
     }
@@ -414,7 +417,6 @@ void e1000_init_tx() {
     println("e1000_init_tx() : finished TX initialization");
 }
 
-// sending a packet. pointer to data needs to be a physical address (palloc'd)
 // hardware moves the head and software writes to tail
 // hardware will act when head != tail, otherwise it sleeps
 void e1000_send_packet(void* data, u16 len) {
@@ -423,7 +425,7 @@ void e1000_send_packet(void* data, u16 len) {
     u32 tx_idx = *tdt_ptr & TDT_TDT;
 
     // fill descriptor
-    TDESC_RING[tx_idx].addr = $u64 data;
+    memcpy($void* TDESC_RING[tx_idx].addr, data, $u64 len);
     TDESC_RING[tx_idx].length = len;
 
     // set command bits
