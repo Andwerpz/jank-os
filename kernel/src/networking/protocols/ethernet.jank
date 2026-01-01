@@ -22,7 +22,8 @@ void ethernet_handle_packet(u8* buffer, u16 length) {
         arp_handle(arp);
 
     } else if(type == ETHERNET_TYPE_IPV4) {
-        println("ethernet_handle_packet() : recieved IPv4 packet");
+        IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
+        ipv4_handle(ip);
 
     } else {
         print("ethernet_handle_packet() : unknown packet type: ");

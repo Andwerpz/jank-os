@@ -26,10 +26,7 @@ struct IPv4Header {
 [__GLOBAL_FIRST__] u16 IPv4_HEADER_FLAGS_MASK = $u16 0xE000;
 [__GLOBAL_FIRST__] u16 IPv4_HEADER_FRAGMENT_OFFSET_MASK = $u16 0x1FFF;
 
-void ipv4_handle(void* data, u64 len) {
-    if(len < sizeof(IPv4Header)) return;
-
-    IPv4Header* ip = $IPv4Header* data;
+void ipv4_handle(IPv4Header* ip) {
     u8 version = (ip->version_ihl & IPv4_HEADER_VERSION_MASK) >> $u8 4;
     if(version != IPv4_VALID_VERSION) {
         println("ipv4_handle() : invalid version in header");
@@ -43,7 +40,7 @@ void ipv4_handle(void* data, u64 len) {
         return;
     }
 
-    u16 calc = calculate_ipv4_header_checksum(data);
+    u16 calc = calculate_ipv4_header_checksum(ip);
     if(calc != $u16 0) {
         println("ipv4_handle() : checksum failed");
         return;
@@ -59,9 +56,9 @@ void ipv4_handle(void* data, u64 len) {
     }
 }
 
-u16 calculate_ipv4_header_checksum(void* header) {
+u16 calculate_ipv4_header_checksum(IPv4Header* ip) {
     u32 sum = $u32 0;
-    u16* data = $u16* header;
+    u16* data = $u16* ip;
 
     for(u64 i = 0x0; i < sizeof(IPv4Header) / $u64 2; i++) {
         sum += $u32 data[i];
