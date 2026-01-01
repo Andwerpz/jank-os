@@ -229,7 +229,7 @@ void blockdev_mount_ext2() {
             free($void* fs, sizeof(ext2_fs));
         }
     }
-    panic("failed to find ext2 filesystem");
+    panic("blockdev_mount_ext2() : failed to find ext2 filesystem");
 }
 
 i32 main() {

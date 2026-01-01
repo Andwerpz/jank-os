@@ -77,6 +77,15 @@ void hexdump(T* _buf, u64 amt_bytes) {
     if(amt_bytes % 0x10) cout << "\n";
 }
 
+template<T>
+void bitdump(T x) {
+    print("0b");
+    for(u64 i = sizeof(T) * 0x8 - 0x1; ; i--) {
+        print($i32 (($u64 x >> i) & 0x1));
+        if(i == 0x0) break;
+    }
+}
+
 //assumes that the lowest significant bits in each byte come first
 i32 bitmap_get_bit(void* bitmap, u64 index) {
     return $i32 ((($u8* bitmap)[index / $u64 8] >> $u8 (index % $u64 8)) & $u8 1);
@@ -223,37 +232,60 @@ u64 cpu_to_be(u64 x) {
     return x;
 }
 
+void cpu_cache_flush(void* addr) {
+    asm!("mov {addr}, %rax");
+    asm!("clflush (%rax)");
+}
+
+//flushes size bytes of memory in virtual address space starting from addr from the CPU cache
+void cpu_cache_flush(void* addr, u64 size) {
+    // iterate through the range in 64-byte chunks (standard cache line size)
+    // can use CPUID leaf 1 to get the exact line size
+    for(u64 p = 0x0; p < size; p += $u64 64) {
+        cpu_cache_flush($void* (p + $u64 addr));
+    }
+    
+    // ensure flushes are finished before any store
+    asm!("mfence");
+}
+
 
 void print(u8 c) {
-    serial_print(c);
+    // write_serial(c);
+    vga_debug_draw_char(c);
 } 
 
 void print(u8* str) {
-    serial_print(str);
+    while(*str != $u8 0) {
+        print(*str);
+        str = $u8* ($u64 str + $u64 1);
+    }
 }
 
 void print(string s) {
-    serial_print(s);
+    for(u64 i = 0x0; i < s.size(); i++){
+        print(s[i]);
+    }
 }
 
 void print(u64 x) {
-    serial_print(x);
+    print(to_string(x));
 }
 
 void print(u32 x){
-    serial_print(x);
+    print(to_string(x));
 }
 
 void print(u16 x) {
-    serial_print(x);
+    print(to_string(x));
 }
 
 void print(i64 x) {
-    serial_print(x);
+    print(to_string(x));
 }
 
 void print(i32 x) {
-    serial_print(x);
+    print(to_string(x));
 }
 
 template<T>
@@ -272,6 +304,10 @@ void print(T* ptr) {
         }
         print(c);
     }
+}
+
+void println() {
+    print("\n");
 }
 
 template<T>

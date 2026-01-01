@@ -447,7 +447,7 @@ void init_mcfg(MCFG* mcfg) {
     MCFGEntry* ents = $MCFGEntry* ($u64 mcfg + total_off);
     for(u64 i = 0x0; i < nr_ent; i++) {
         MCFGEntry* ent = @(ents[i]);
-        for(u64 bus = $u64 ent->bus_start; bus < $u64 ent->bus_end; bus++) {
+        for(u64 bus = $u64 ent->bus_start; bus <= $u64 ent->bus_end; bus++) {
             for(u64 slot = 0x0; slot < $u64 32; slot++) {
                 for(u64 func = 0x0; func < $u64 8; func++) {
                     u64 addr = ((bus * $u64 256) + (slot * $u64 8) + func) * PAGE_SIZE + ent->base_address;
@@ -463,9 +463,20 @@ void init_mcfg(MCFG* mcfg) {
                     u8 subclass = ($u8* addr)[0x0A];
                     u8 progif   = ($u8* addr)[0x09];
 
-                    if (class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
-                        // found xHCI controller
-                        init_xhci(addr);
+                    if(class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
+                        if(progif == $u8 0x30) {
+                            // found xHCI controller
+                            init_xhci(addr);
+                        }
+                        else if(progif == $u8 0x20) {
+                            println("found EHCI controller");
+                        }
+                        else if(progif == $u8 0x10) {
+                            println("found OHCI controller");
+                        }
+                        else if(progif == $u8 0x00) {
+                            println("found UHCI controller");
+                        }
                     }
                 }
             }

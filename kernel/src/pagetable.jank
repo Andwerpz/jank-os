@@ -165,6 +165,11 @@ pte_t pt_walk(pagetable_t pt, void* vaddr, i32& level) {
     return pte;
 }
 
+pte_t pt_get_leaf_pte(pagetable_t pt, void* vaddr) {
+    i32 level = 0;
+    return pt_walk(pt, $void* (($u64 vaddr) & ~0xFFF), level);
+}
+
 i32 pt_is_vaddr_mapped(pagetable_t pt, void* vaddr) {
     i32 level = 0;
     pte_t pte = pt_walk(pt, vaddr, level, 0, $u64 0, $u64 0);
@@ -260,9 +265,9 @@ void* pt_translate(pagetable_t pt, void* vaddr, u64& out_perm_flags) {
     pte_t pte = pt_walk(pt, vaddr, level);
     out_perm_flags = pte_get_permission_flags(pte);
     assert(level < 3, "pt_translate() : resulting level should be one of 0, 1, 2");
-    if(level == 2)      return $void* (($u64 pte_get_addr(pte) << $u64 18) + ($u64 vaddr & 0x3fffffff));
-    else if(level == 1) return $void* (($u64 pte_get_addr(pte) << $u64  9) + ($u64 vaddr & 0x001fffff));
-    else if(level == 0) return $void* (($u64 pte_get_addr(pte) << $u64  0) + ($u64 vaddr & 0x00000fff));
+    if(level == 2)      return $void* ($u64 pte_get_addr(pte) + ($u64 vaddr & 0x3fffffff)); // 1GB hugepg
+    else if(level == 1) return $void* ($u64 pte_get_addr(pte) + ($u64 vaddr & 0x001fffff)); // 2MB hugepg
+    else if(level == 0) return $void* ($u64 pte_get_addr(pte) + ($u64 vaddr & 0x00000fff)); // 4KB page
     panic("pt_translate() : unexpected level");
     return nullptr;
 }

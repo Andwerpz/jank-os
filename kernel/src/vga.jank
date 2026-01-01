@@ -22,6 +22,29 @@ struct psf_header {
     u8 glyphs;  //glyph starting byte
 }
 
+[__GLOBAL_FIRST__] u64 VGA_DEBUG_CURSOR_COL = 0x0;
+[__GLOBAL_FIRST__] u64 VGA_DEBUG_CURSOR_ROW = 0x0;
+void vga_debug_draw_char(u8 c) {
+    psf_header* font = $psf_header* @_binary_font_psf_start;
+    if(c == '\n') {
+        VGA_DEBUG_CURSOR_COL = 0x0;
+        VGA_DEBUG_CURSOR_ROW ++;
+        VGA_DEBUG_CURSOR_ROW %= (FB_HEIGHT / ($u64 font->height));
+
+        for(u64 i = 0x0; i < $u64 font->height; i++) {
+            u64 y = i + VGA_DEBUG_CURSOR_ROW * $u64 font->height;
+            for(u64 j = 0x0; j < $u64 FB_WIDTH; j++) {
+                vga_draw_pixel(j, y, COLOR_BLACK);
+            }
+        }
+    }
+    else {  
+        vga_draw_char(VGA_DEBUG_CURSOR_COL * $u64 font->width, VGA_DEBUG_CURSOR_ROW * $u64 font->height, c, COLOR_BLACK, COLOR_WHITE);
+        VGA_DEBUG_CURSOR_COL ++;
+    }
+}
+
+
 void vga_draw_pixel(u64 x, u64 y, u32 color) {
     FB_ADDR[FB_SCANLINE * y + x] = color;
 }
@@ -50,6 +73,29 @@ void vga_draw_char(u64 x, u64 y, u8 c, u32 bg_col, u32 fg_col) {
 void vga_clear_screen(u32 color) {
     u64 n = FB_HEIGHT * FB_SCANLINE;
     for(u64 i = 0x0; i < n; i++) FB_ADDR[i] = color;
+}
+
+void vga_shift_down(u64 lines) {
+    assert(lines <= FB_HEIGHT, "vga_shift_down() : shift too large");
+
+    //do shift
+    {
+        u64 dy = lines;                     
+        u64 shamt_px = dy * FB_SCANLINE;        
+
+        u64 total_px = FB_SCANLINE * FB_HEIGHT;
+        u64 copy_px  = total_px - shamt_px;
+
+        u8* dst = $u8* @FB_ADDR[shamt_px];
+        u8* src = $u8* FB_ADDR;
+
+        memmove($void* dst, $void* src, copy_px * sizeof(u32)); 
+    }
+
+    //set top lines
+    for(u64 i = 0x0; i < lines; i++) {
+        for(u64 j = 0x0; j < FB_SCANLINE; j++) FB_ADDR[i * FB_SCANLINE + j] = COLOR_BLACK;
+    }
 }
 
 //shifts whatever is currently drawn up by some amount of lines
