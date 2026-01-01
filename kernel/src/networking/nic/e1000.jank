@@ -5,6 +5,10 @@
 [__GLOBAL_FIRST__] u16 E1000_DEV = $u16 0x100E;
 
 [__GLOBAL_FIRST__] u8* MAC;
+[__GLOBAL_FIRST__] u8* IPV4_ADDR;
+[__GLOBAL_FIRST__] u8* IPV4_SUBNET_MASK;
+[__GLOBAL_FIRST__] u8* IPV4_GATEWAY;
+
 [__GLOBAL_FIRST__] u8 EEPROM_EXISTS = $u8 0;
 [__GLOBAL_FIRST__] u64 MMIO_BASE = 0x0;
 [__GLOBAL_FIRST__] u8 E1000_IRQ = $u8 0;
@@ -125,7 +129,23 @@ void e1000_init(u64 addr) {
 
     println("e1000_init() : finished initializing NIC");
 
-    test_nic();
+    {
+        // testing
+        IPV4_ADDR = $u8* malloc(sizeof(u8) * $u64 4);
+        IPV4_ADDR[0] = $u8 10;
+        IPV4_ADDR[1] = $u8 0;
+        IPV4_ADDR[2] = $u8 2;
+        IPV4_ADDR[3] = $u8 15;
+
+        IPV4_GATEWAY = $u8* malloc(sizeof(u8) * $u64 4);
+        IPV4_GATEWAY[0] = $u8 10;
+        IPV4_GATEWAY[1] = $u8 0;
+        IPV4_GATEWAY[2] = $u8 2;
+        IPV4_GATEWAY[3] = $u8 2;
+        
+        send_arp_request(IPV4_GATEWAY);
+        e1000_recieve_poll();
+    }
 }
 
 void e1000_pci_setup(u64 addr) {
@@ -423,78 +443,16 @@ void e1000_recieve_poll() {
     while(1) {
         u8 status = RDESC_RING[CURR_RDESC].status;
 
-        if((status & RDESC_STATUS_DD) == $u8 0) {
-            break;
+        if((status & RDESC_STATUS_DD) != $u8 0) {
+            u16 len = RDESC_RING[CURR_RDESC].length;
+            u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
+
+            println("e1000_recieve_poll() : packet recieved");
+            ethernet_handle_packet(buffer, len);
+
+            RDESC_RING[CURR_RDESC].status = $u8 0;
+            *rdt_ptr = $u32 CURR_RDESC;
+            CURR_RDESC = (CURR_RDESC + $u16 1) % $u16 E1000_NUM_RDESC;
         }
-
-        u16 len = RDESC_RING[CURR_RDESC].length;
-        u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
-
-        println("e1000_recieve_poll() : packet recieved");
-
-        RDESC_RING[CURR_RDESC].status = $u8 0;
-
-        *rdt_ptr = $u32 CURR_RDESC;
-
-        CURR_RDESC = (CURR_RDESC + $u16 1) % $u16 E1000_NUM_RDESC;
     }
-}
-
-
-// =======================================================================================
-// =======================================================================================
-// =======================================================================================
-// =======================================================================================
-// =======================================================================================
-
-
-
-void test_nic() {
-
-    u8* test_packet = $u8* palloc();
-    memset($void* test_packet, 0, $u64 64);
-
-    // ---------------- ETH HEADER ----------------
-    // Destination: FF:FF:FF:FF:FF:FF (Broadcast)
-    for(i32 i=0; i < 6; i++) test_packet[i] = $u8 0xFF;
-    
-    // Source: YOUR MAC (From global variable MAC)
-    for(i32 i=0; i < 6; i++) test_packet[6+i] = MAC[i];
-    
-    // EtherType: 0x0806 (ARP)
-    test_packet[12] = $u8 0x08;
-    test_packet[13] = $u8 0x06;
-
-    // ---------------- ARP PAYLOAD ----------------
-    // Hardware Type: 1 (Ethernet)
-    test_packet[14] = $u8 0x00; test_packet[15] = $u8 0x01;
-    // Protocol Type: 0x0800 (IPv4)
-    test_packet[16] = $u8 0x08; test_packet[17] = $u8 0x00;
-    // Hardware Size: 6, Protocol Size: 4
-    test_packet[18] = $u8 0x06; test_packet[19] = $u8 0x04;
-    // Opcode: 1 (Request)
-    test_packet[20] = $u8 0x00; test_packet[21] = $u8 0x01;
-
-    // Sender MAC: YOUR MAC
-    for(i32 i=0; i < 6; i++) test_packet[22+i] = MAC[i];
-    
-    // Sender IP: 0.0.0.0 (We don't have one yet)
-    test_packet[28] = $u8 0x00; test_packet[29] = $u8 0x00; 
-    test_packet[30] = $u8 0x00; test_packet[31] = $u8 0x00;
-
-    // Target MAC: 00:00:00:00:00:00 (Ignored for request)
-    for(i32 i=0; i < 6; i++) test_packet[32+i] = $u8 0x00;
-
-    // Target IP: 10.0.2.2 (QEMU Gateway)
-    // This specific IP forces QEMU to reply with its MAC address
-    test_packet[38] = $u8 10;
-    test_packet[39] = $u8 0;
-    test_packet[40] = $u8 2;
-    test_packet[41] = $u8 2;
-
-    // ---------------- SEND ----------------
-    println("Sending ARP Request...");
-    e1000_send_packet($void* test_packet, $u16 64);
-
-    // while(1) e1000_recieve_poll();
 }
