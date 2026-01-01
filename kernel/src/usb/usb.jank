@@ -749,6 +749,8 @@ void init_usb() {
     println("USB Device Tree : ");
     usb_print_devtree();
 
+    panic("stop here for now");
+
     println("done init usb");
 }
 
