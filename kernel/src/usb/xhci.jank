@@ -255,6 +255,8 @@ struct xHCI_INTRS {
 [__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_RING_OVERRUN                = $u32 15;
 [__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_VF_EVENT_RING_FULL_ERROR    = $u32 16;  
 [__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_PARAMETER_ERROR             = $u32 17;  // a context paramter is invalid
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_BANDWIDTH_OVERRUN_ERROR     = $u32 18;
+[__GLOBAL_FIRST__] u32 XHCI_COMPLETION_CODE_CONTEXT_STATE_ERROR         = $u32 19;
 
 // TRB control bits
 [__GLOBAL_FIRST__] u32 XHCI_TRB_C           = $u32 0b0000000000000001;              // cycle : determines if this TRB is new or stale for this lap
@@ -566,6 +568,9 @@ void xhci_handle_event(xHCI_TRB* ev_trb) {
 }
 
 //polls events on an interrupter until it sees an event that has a matching type and TRB ptr
+// TODO
+//returns 0 if it finds the matching TRB
+//returns 1 if it times out
 void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB* out_trb) {
     vector<xHCI_TRB> events;
     xHCI_TRB* buf = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
@@ -592,6 +597,8 @@ void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB
                 else println("no event exists of the same type");
 
                 xhci_dump_device_ctx32($u32 1);
+
+                panic("xhci_poll_events_until() : timeout");
             }
         }
 
@@ -1267,8 +1274,8 @@ void xhci_exec_command(xHCI_TRB* cmd, xHCI_TRB* out_trb) {
     u64 trb_ptr = xhci_write_command(cmd);
     xhci_ring_command_doorbell();
 
-    println("xhci_exec_command() : dump command ring after writing");
-    xhci_dump_command_ring();
+    // println("xhci_exec_command() : dump command ring after writing");
+    // xhci_dump_command_ring();
     
     //poll until we get command completion TRB
     println("xhci_exec_command() : type : ", xhci_trb_type(cmd));
@@ -1445,33 +1452,36 @@ void xhci_build_initial_input_ctx32(
 u32 xhci_initialize_port(u32 port_id) {
     assert($u32 0x1 <= port_id && port_id <= $u32 XHCI_MAX_PORTS, "xhci_initialize_port() : port_id out of range");
     assert((XHCI_CAP_REGS->HCCPARAMS1 & XHCI_HCCPARAMS1_CSZ) == $u32 0, "init_usb() : only support 32-byte context structs");
-
-    println("xhci_initialize_port() : HCCPARAMS1 : ", $void* $u64 (XHCI_CAP_REGS->HCCPARAMS1));
-
-    //reset port
-    xhci_reset_port(port_id);
-
-    //alloc a slot
-    u32 protocol_slot_type = xhci_get_port_slot_type(port_id);
-    println("xhci_initialize_port() : port slot type : ", protocol_slot_type);
-    u32 slot = xhci_alloc_slot(protocol_slot_type);
-
-    //build initial input context
-    void* buf = palloc();
     xHCI_port_regs* port = xhci_get_port(port_id);
     u32 port_speed = $u32 ((port->PORTSC >> $u32 10) & $u32 0xF);
+    void* buf = palloc();
+
     u32 ep0_mps;
     if(port_speed == $u32 1) ep0_mps = $u32 8;          // low speed
     else if(port_speed == $u32 2) ep0_mps = $u32 8;     // full speed
     else if(port_speed == $u32 3) ep0_mps = $u32 64;    // high speed
     else if(port_speed >= $u32 4) ep0_mps = $u32 512;   // super speed
     else panic("xhci_initialize_port() : unexpected port speed");
+
+    println("xhci_initialize_port() : HCCPARAMS1 : ", $void* $u64 (XHCI_CAP_REGS->HCCPARAMS1));
+
+    //reset port
+    println("xhci_initialize_port() : resetting port");
+    xhci_reset_port(port_id);
+
+    //alloc a slot
+    println("xhci_initialize_port() : allocating a slot");
+    u32 protocol_slot_type = xhci_get_port_slot_type(port_id);
+    println("xhci_initialize_port() : port slot type : ", protocol_slot_type);
+    u32 slot = xhci_alloc_slot(protocol_slot_type);
+
+    //build initial input context
     xhci_build_initial_input_ctx32(buf, $u32 port_id, XHCI_INTR0, $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), ep0_mps);
 
     //flush input context
     cpu_cache_flush(buf, PAGE_SIZE);
 
-    if(1) {
+    if(0) {
         println("xhci_initialize_port() : no-op command");
         xhci_no_op_command();
 
@@ -1524,13 +1534,16 @@ u32 xhci_initialize_port(u32 port_id) {
         //build (final) initial input context, re-init slot
         xhci_init_slot(slot);
         xhci_build_initial_input_ctx32(buf, $u32 port_id, $u32 0, $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), ep0_mps);
-
-        //address device, BSR = 0
-        println("xhci_initialize_port() : addressing device BSR = 0");
-        xhci_address_device(slot, 0, $u64 buf);
     }
 
     //address device, BSR = 0
+    println("xhci_initialize_port() : addressing device BSR = 0");
+    println("xhci_initialize_port() : addressing port : ", port_id);
+    println("xhci_initialize_port() : port speed : ", $u64 port_speed);
+    println("xhci_initialize_port() : buf addr : ", buf);
+    println("xhci_initialize_port() : buf phys addr : ", pt_translate(pt_get_current(), buf));
+    println("xhci_initialize_port() : PORTSC : ", $void* $u64 port->PORTSC);
+    println("xhci_initialize_port() : PORTSC.PLS : ", (port->PORTSC & XHCI_PORTSC_PLS) >> $u32 5);
     xhci_address_device(slot, 0, $u64 buf);
 
     pfree(buf);
@@ -1909,11 +1922,13 @@ void xhci_dump_trb_ring(xHCI_TRB* ring, u64 ring_sz) {
 }
 
 void xhci_dump_command_ring() {
+    println("DUMPING COMMAND RING : ");
     xhci_dump_trb_ring(XHCI_COMMAND_RING, XHCI_TRB_RING_SIZE);
 }
 
 void xhci_dump_transfer_ring(u32 slot, u32 endpoint) {
     xHCI_TRB* ring = xhci_get_slot_transfer_ring(slot, endpoint);
     u64 ring_sz = XHCI_TRB_RING_SIZE;
+    println("DUMPING TRANSFER RING : ", slot, " ", endpoint);
     xhci_dump_trb_ring(ring, ring_sz);
 }
