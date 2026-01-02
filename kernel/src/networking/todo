@@ -6,6 +6,7 @@ NOW
 - TCP (make andrew do this cause im no good)
 
 LATER
+- how i handle buffers for the tx rx, rn i just pre alloc the buffers and keep using them, i should copy phys hardware buffer to a malloc'd buffer and set the hardware flag so that it can keep recieving?
 - configure Interrupt Mask for later...
 - make generic network device
 - make that arp entry lookup not suck
