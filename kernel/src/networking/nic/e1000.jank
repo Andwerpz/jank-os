@@ -457,8 +457,8 @@ void e1000_recieve_poll() {
 
         curr_time = hpet_get_ns();
         if(CURRENT_INTERFACE->ip_address != $u32 0 && !sent && ((curr_time - init_time) > 0xB2D05E00)) {
-            // icmp_send_request(CURRENT_INTERFACE->gateway_ip, $u16 1, $u16 1);
             u32 test_ip = $u32 (1 << 24 | 1 << 16 | 1 << 8 | 1 << 0);
+            // u32 test_ip = CURRENT_INTERFACE->gateway_ip;
             icmp_send_request(test_ip, $u16 1, $u16 1);
             init_time = curr_time;
             // sent = 1;

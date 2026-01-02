@@ -92,7 +92,6 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     println("");
 
     u64 ipv4_packet_len = sizeof(IPv4Header) + $u64 payload_len;
-
     u64 ethernet_frame_len = sizeof(EthernetHeader) + ipv4_packet_len;
 
     void* buffer = malloc(ethernet_frame_len);
@@ -120,24 +119,32 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     eth->type = cpu_to_be(ETHERNET_TYPE_IPV4);
     set_mac(eth->src, CURRENT_INTERFACE->mac_address);
 
-    // subnet checking somewhere maybe?
-    // D:
+    // routing
 
-    // set destination MAC
-    if(dst_ip == $u32 0xFFFFFFFF) {
-        // dst ip is a broadcast, change mac to broadcast
+    // check for broadcast
+    if(dst_ip == IPv4_BROADCAST_ADDR) {
+        println("ipv4_send_packet() : destination is broadcast");
+        // dst ip is a broadcast, change mac to broadcast and send
         for(i32 i = 0; i < 6; i++) eth->dst[i] = $u8 0xFF;
-    } else {
-        // dst ip is not broadcast, do an ARP lookup.
-        if(!arp_lookup(dst_ip, eth->dst)) {
-            println("ipv4_send_packet() : destination not in ARP table, packet not sent, sent ARP request instead");
+        CURRENT_INTERFACE->send#(buffer, $u16 ethernet_frame_len);
+        free(buffer, ethernet_frame_len);
+        return;
+    }
 
-            send_arp_request(dst_ip);
+    // checks if ip is local on subnet, if not set next hop to gateway, arp will set eth dst mac to gateway.
+    u32 next_hop = dst_ip;
+    i32 is_local = ((CURRENT_INTERFACE->subnet_mask & dst_ip) == (CURRENT_INTERFACE->subnet_mask & CURRENT_INTERFACE->ip_address));
+    if(!is_local) {
+        println("ipv4_send_packet() : destination is not in host subnet, sending it to default gateway");
+        next_hop = CURRENT_INTERFACE->gateway_ip;
+    }
 
-            free(buffer, ethernet_frame_len);
-
-            return;
-        }
+    // do an ARP lookup.
+    if(!arp_lookup(next_hop, eth->dst)) {
+        println("ipv4_send_packet() : destination not in ARP table, packet not sent, sent ARP request instead");
+        send_arp_request(next_hop);
+        free(buffer, ethernet_frame_len);
+        return;
     }
 
     CURRENT_INTERFACE->send#(buffer, $u16 ethernet_frame_len);
