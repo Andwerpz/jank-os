@@ -112,7 +112,7 @@ void send_arp_request(u32 target_ip) {
 
     // set self as sender
     set_mac(arp->sender_mac, CURRENT_INTERFACE->mac_address);
-    arp->sender_ip = CURRENT_INTERFACE->ip_address;
+    arp->sender_ip = cpu_to_be(CURRENT_INTERFACE->ip_address);
 
     // set target, mac is unknown (00:00:00:00:00:00)
     for(i32 i = 0; i < 6; i++) arp->target_mac[i] = $u8 0;
