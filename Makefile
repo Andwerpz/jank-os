@@ -29,6 +29,7 @@ boot: drive
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
 		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 
 
+# boot from emulated USB, emulated xHCI
 .PHONY: boot_usb
 boot_usb: drive
 	@mkdir -p build
@@ -45,21 +46,7 @@ boot_usb: drive
 		-drive file=drive.img,if=none,id=usbdisk,format=raw \
 		-device usb-storage,bus=xhci.0,drive=usbdisk,bootindex=0 \
 
-.PHONY: boot_usb_alt
-boot_usb_alt: drive
-	@mkdir -p build
-	@cp /usr/share/OVMF/OVMF_VARS_4M.fd ./build/OVMF_VARS_4M.work.fd
-	sudo -E qemu-system-x86_64 \
-		-machine q35 \
-		-m 2G \
-		-no-reboot \
-		-serial stdio \
-		-device nec-usb-xhci,id=xhci \
-		-device usb-hub,bus=xhci.0,id=hub0 \
-		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
-		-device usb-host,hostdevice=/dev/bus/usb/001/002,bus=xhci.0,bootindex=0 
-
+# boot from physical USB, emulated xHCI 
 .PHONY: boot_phys_usb
 boot_phys_usb:
 	@mkdir -p build
@@ -75,6 +62,7 @@ boot_phys_usb:
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-device usb-host,hostdevice=/dev/bus/usb/001/002,bus=xhci.0,bootindex=0
 
+# boot from physical USB, physical xHCI
 # need to make sure xhci is bound to vfio
 .PHONY: boot_phys_xhci
 boot_phys_xhci: drive
@@ -88,12 +76,7 @@ boot_phys_xhci: drive
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-device vfio-pci,host=0000:00:14.0 \
-		-device vfio-pci,host=0000:00:14.2 \
-		-device ich9-ahci,id=ahci \
-		-drive file=drive.img,if=none,id=bootdisk,format=raw \
-		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
-		-trace "usb*" \
-		-D /tmp/qemu_usb.log
+		-device vfio-pci,host=0000:00:14.2 
 
 
 # real USB passthrough
