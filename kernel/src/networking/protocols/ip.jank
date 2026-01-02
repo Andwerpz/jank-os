@@ -13,6 +13,8 @@ struct IPv4Header {
     u32 dst_ip;             // Destination address: 32 bits
 }
 
+[__GLOBAL_FIRST__] u8 IPv4_DEFAULT_TTL = $u8 64;
+
 [__GLOBAL_FIRST__] u8 IPv4_VALID_VERSION = $u8 4;
 
 [__GLOBAL_FIRST__] u8 IPv4_PROTOCOL_ICMP = $u8 1;
@@ -47,7 +49,8 @@ void ipv4_handle(IPv4Header* ip) {
         return;
     }
 
-    u16 calc = calculate_ipv4_header_checksum(ip);
+    // u16 calc = calculate_ipv4_header_checksum(ip);
+    u16 calc = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
     if(calc != ip->header_checksum) {
         println("ipv4_handle() : checksum failed");
         return;
@@ -58,11 +61,13 @@ void ipv4_handle(IPv4Header* ip) {
         return;
     }
 
-    u8* payload = $u8* ($u64 ip + $u64 header_len);
+    void* payload = $void* ($u64 ip + $u64 header_len);
     u16 payload_size = total_length - header_len;
 
     if(ip->protocol == IPv4_PROTOCOL_ICMP) {
         println("ipv4_handle() : ICMP packet recieved");
+        ICMPHeader* icmp = $ICMPHeader* payload;
+        icmp_handle(icmp, payload_size, ip->src_ip);
     } else if(ip->protocol == IPv4_PROTOCOL_TCP) {
         println("ipv4_handle() : TCP packet recieved");
     } else if(ip->protocol == IPv4_PROTOCOL_UDP) {
@@ -74,21 +79,49 @@ void ipv4_handle(IPv4Header* ip) {
     }
 }
 
-// group header into 16 bit words, sum them all up excluding the checksum field.
-// ones complement sum, then return bitwise NOT of sum.
-u16 calculate_ipv4_header_checksum(IPv4Header* ip) {
-    u16* header = $u16* ip;
-    
-    u32 sum = $u32 0;
-    for(u64 i = 0x0; i < sizeof(IPv4Header) / 0x2; i++) {
-        if(i != $u64 5) sum += $u32 header[i]; // ignore the checksum field.
+void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
+    u64 ipv4_packet_len = sizeof(IPv4Header) + $u64 payload_len;
+
+    u64 ethernet_frame_len = sizeof(EthernetHeader) + ipv4_packet_len;
+
+    void* buffer = malloc(ethernet_frame_len);
+    memset($void* buffer, 0, ethernet_frame_len);
+
+    EthernetHeader* eth = $EthernetHeader* buffer;
+    IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
+    void* dst_payload = $void* ($u64 buffer + sizeof(EthernetHeader) + sizeof(IPv4Header));
+
+    memcpy(dst_payload, payload, $u64 payload_len);
+
+    ip->version_ihl = $u8 0x45; // ip ver 4 and len 5
+    ip->tos = $u8 0;
+    ip->total_length = cpu_to_be($u16 ipv4_packet_len);
+    ip->id = $u16 0;
+    ip->flags_fragment = $u16 0;
+    ip->ttl = IPv4_DEFAULT_TTL;
+    ip->protocol = protocol;
+    ip->src_ip = CURRENT_INTERFACE->ip_address;
+    ip->dst_ip = dst_ip;
+
+    ip->header_checksum = $u16 0;
+    ip->header_checksum = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
+
+    eth->type = cpu_to_be(ETHERNET_TYPE_IPV4);
+    set_mac(eth->src, CURRENT_INTERFACE->mac_address);
+
+    // subnet checking somewhere maybe?
+    // D:
+
+    if(!arp_lookup(dst_ip, eth->dst)) {
+        println("ipv4_send_packet() : destination not in ARP table, packet not sent, sent ARP request instead");
+
+        send_arp_request(dst_ip);
+
+        free(buffer, ethernet_frame_len);
+
+        return;
     }
 
-    while(sum > $u32 0xFFFF) {
-        u32 carry = sum >> $u32 16;
-        sum &= $u32 0xFFFF;
-        sum += carry; 
-    }
-
-    return ~($u16 sum);
+    e1000_send(buffer, $u16 ethernet_frame_len);
+    free(buffer, ethernet_frame_len);
 }

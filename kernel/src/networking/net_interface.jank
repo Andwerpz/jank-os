@@ -68,3 +68,22 @@ void dump_network_interface(NetInterface* net) {
     print_ipv4_addr(net->gateway_ip);
     println("");
 }
+
+// group header into 16 bit words, sum them all up excluding the checksum field.
+// ones complement sum, then return bitwise NOT of sum.
+u16 ones_comp_checksum(void* data, u64 header_size, u64 checksum_index) {
+    u16* header = $u16* data;
+    
+    u32 sum = $u32 0;
+    for(u64 i = 0x0; i < header_size / 0x2; i++) {
+        if(i != checksum_index) sum += $u32 header[i]; // ignore the checksum field.
+    }
+
+    while(sum > $u32 0xFFFF) {
+        u32 carry = sum >> $u32 16;
+        sum &= $u32 0xFFFF;
+        sum += carry; 
+    }
+
+    return ~($u16 sum);
+}
