@@ -58,6 +58,8 @@
 
 [__GLOBAL_FIRST__] u32 XHCI_HCSPARAMS1_MAXSLOTS = $u32 0b0000000011111111;  // maximum device slots the host controller can support
 
+[__GLOBAL_FIRST__] u32 XHCI_HCSPARAMS2_SPR  = $u32 0b0000010000000000 << $u32 16;
+
 [__GLOBAL_FIRST__] u32 XHCI_HCCPARAMS1_AC64 = $u32 0b0000000000000001;      // 64-bit addressing capability
 [__GLOBAL_FIRST__] u32 XHCI_HCCPARAMS1_CSZ  = $u32 0b0000000000000100;      // context size : if this is set, context structs are 64-bytes, otherwise they're 32-bytes. Does not apply to Stream Contexts
 [__GLOBAL_FIRST__] u32 XHCI_HCCPARAMS1_PPC  = $u32 0b0000000000001000;      // port power control : if this is set, ports have power switches. You'll need to manually turn on port power via PORTSC.
@@ -101,7 +103,7 @@ struct xHCI_cap_regs {
 struct xHCI_op_regs {
     u32 USBCMD;             // USB command
     u32 USBSTS;             // USB status
-    u32 PAGESIZE;           // page size
+    u32 PAGESIZE;           // xHCI recognized page size = PAGESIZE * 4096. if your rings are larger than this you may need link TRBs
     u32[2] reserved0;       
     u32 DNCTRL;             // device notification control
     u64 CRCR;               // command ring control register, low 6 bits are flags, upper bits is pointer to command ring
@@ -443,13 +445,16 @@ void xhci_ring_transfer_doorbell(u32 slot, u32 endpoint) {
 
     asm!("mfence"); //ensure any TRB writes before this are flushed
     u32 dci = $u32 endpoint;
+    println("xhci_ring_transfer_doorbell() : ", slot, " ", dci);
     XHCI_DB_REGS[slot] = $u32 (dci & $u32 0xFF);
+    u32 tmp = XHCI_DB_REGS[slot];   // read doorbell back (to flush?)
 }
 
 //notifies xHC that there is some available TRBs to read on the command ring
 void xhci_ring_command_doorbell() {
     asm!("mfence"); //ensure any TRB writes before this are flushed
     XHCI_DB_REGS[0] = $u32 0;
+    u32 tmp = XHCI_DB_REGS[0];  // read doorbell back (to flush?)
     println("CRCR AFTER DOORBELL : ", $void* $u64 XHCI_OP_REGS->CRCR);
     println("USBSTS AFTER DOORBELL : ", $void* $u64 XHCI_OP_REGS->USBSTS);
     println("USBCMD AFTER DOORBELL : ", $void* $u64 XHCI_OP_REGS->USBCMD);
@@ -568,10 +573,9 @@ void xhci_handle_event(xHCI_TRB* ev_trb) {
 }
 
 //polls events on an interrupter until it sees an event that has a matching type and TRB ptr
-// TODO
 //returns 0 if it finds the matching TRB
 //returns 1 if it times out
-void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB* out_trb) {
+i32 xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB* out_trb) {
     vector<xHCI_TRB> events;
     xHCI_TRB* buf = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     while(1) {
@@ -580,7 +584,7 @@ void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB
             // spin
 
             poll_cnt ++;
-            if(poll_cnt == $u64 10000000) {
+            if(poll_cnt == $u64 100000) {
                 println("poll 10M");
                 println("CRCR : ", $void* $u64 XHCI_OP_REGS->CRCR);
                 println("USBSTS : ", $void* $u64 XHCI_OP_REGS->USBSTS);
@@ -598,7 +602,9 @@ void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB
 
                 xhci_dump_device_ctx32($u32 1);
 
-                panic("xhci_poll_events_until() : timeout");
+                return 1;
+
+                // panic("xhci_poll_events_until() : timeout");
             }
         }
 
@@ -622,6 +628,8 @@ void xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB
     for(u64 i = 0x0; i < events.size(); i++) {
         xhci_handle_event(@(events[i]));
     }
+
+    return 0;
 }
 
 //sees if there is an event anywhere in the interrupter with matching type
@@ -734,6 +742,14 @@ void init_xhci(u64 addr) {
     XHCI_COMMAND_PRODUCER_INDEX = 0x0;
     XHCI_TRB_RING_SIZE = PAGE_SIZE / sizeof(xHCI_TRB);  
 
+    //enable busmaster and memory mapped access
+    {
+        u16 cmd = pci_hdr->command; 
+        cmd |= $u16 (1 << 1);   // MSE (memory space enable)
+        cmd |= $u16 (1 << 2);   // BME (bus master enable)
+        pci_hdr->command = cmd;
+    }
+
     //parse PCI capabilities
     if(pci_hdr->status & ($u16 1 << $u16 4)) {
         u64 ptr = $u64 pci_hdr->capabilities_ptr;
@@ -801,14 +817,8 @@ void init_xhci(u64 addr) {
 
         pte_t leaf_pte = pt_get_leaf_pte(pt, vaddr);
         println("Leaf PTE : ", $void* leaf_pte);
-    }
-
-    //set bits in command register
-    {
-        u16 cmd = pci_hdr->command; 
-        cmd |= $u16 (1 << 1);   // MSE (memory space enable)
-        cmd |= $u16 (1 << 2);   // BME (bus master enable)
-        pci_hdr->command = cmd;
+        assert((leaf_pte & PTE_PCD) == PTE_PCD, "init_xhci() : PTE_PCD should be on for MMIO");
+        assert((leaf_pte & PTE_PWT) == PTE_PWT, "init_xhci() : PTE_PWT should be on for MMIO");
     }
 
     //gather xHCI registers
@@ -839,7 +849,59 @@ void init_xhci(u64 addr) {
     //not handling port power for now
     assert((cap_regs->HCCPARAMS1 & XHCI_HCCPARAMS1_PPC) == $u32 0x0, "init_xhci() : not handling port power for now");
 
-    //reset host controller
+    // look through extended capabilities for legacy BIOS handoff
+    // Pre-OS to OS USB handoff
+    println("Looking for xHCI Legacy Support extcap");
+    {
+        u64 ecp_off = ($u64 (cap_regs->HCCPARAMS1 & XHCI_HCCPARAMS1_ECP)) >> 0x10;
+        assert(ecp_off != 0x0, "init_xhci() : expect extended capabilities to exist");
+        ecp_off = (ecp_off << 0x2) + xhci_mmio;
+
+        u32* extcap_regs = $u32* ecp_off;
+        while(1) {
+            u8 cap_id = $u8 (*extcap_regs & XHCI_EXTCAP_CAPID);
+            u64 next_off = $u64 ((*extcap_regs & XHCI_EXTCAP_NEXTOFF) >> $u32 8);
+            u16 data = $u16 (((*extcap_regs & XHCI_EXTCAP_DATA)) >> $u32 16);
+            if(cap_id == XHCI_EXTCAP_LEGACY_SUPPORT) {
+                println("found xHCI Legacy Support extcap");
+
+                // write 1 to OS owning bit
+                u32 val = extcap_regs[0];
+                extcap_regs[0] = val | ($u32 1 << $u32 24);
+
+                // wait for BIOS to set their bit to 0
+                while(extcap_regs[0] & ($u32 1 << $u32 16)) {
+                    // spin
+                }
+                print("extcap_regs[0] : ");
+                bitdump(extcap_regs[0]);
+                println();
+
+                // disable all SMI enables
+                print("extcap_regs[1] : ");
+                bitdump(extcap_regs[1]);
+                println();
+                extcap_regs[1] = $u32 0;
+
+                println("xHCI handoff successful");
+            }
+            //see if there is next one
+            if(next_off == 0x0) {
+                break;
+            }
+
+            //move to next one
+            extcap_regs = $u32* ($u64 extcap_regs + (next_off << 0x2));
+        }
+    }
+
+    //halt controller
+    op_regs->USBCMD &= ~XHCI_USBCMD_RS;
+    while((op_regs->USBSTS & XHCI_USBSTS_HCH) != XHCI_USBSTS_HCH) {
+        // spin
+    }
+
+    //reset controller
     op_regs->USBCMD |= XHCI_USBCMD_HCRST;
     while(op_regs->USBCMD & XHCI_USBCMD_HCRST) {
         // spin
@@ -939,8 +1001,8 @@ void init_xhci(u64 addr) {
         }
 
         //set max device slots in CONFIG
-        u32 max_slots = cap_regs->HCSPARAMS1 & XHCI_HCSPARAMS1_MAXSLOTS;
-        op_regs->CONFIG = (op_regs->CONFIG & ~XHCI_CONFIG_MAXSLOTS) | max_slots;
+        u32 max_slots = (cap_regs->HCSPARAMS1 & XHCI_HCSPARAMS1_MAXSLOTS) >> $u32 0;
+        op_regs->CONFIG = (op_regs->CONFIG & ~XHCI_CONFIG_MAXSLOTS) | (max_slots << $u32 0);
         XHCI_MAX_SLOTS = $u64 max_slots;
         println("xHCI Max Slots : ", max_slots);
 
@@ -975,7 +1037,7 @@ void init_xhci(u64 addr) {
         }
     }
 
-    //parse extended capabilities 
+    //look through rest of extended capabilities
     {
         u64 ecp_off = ($u64 (cap_regs->HCCPARAMS1 & XHCI_HCCPARAMS1_ECP)) >> 0x10;
         assert(ecp_off != 0x0, "init_xhci() : expect extended capabilities to exist");
@@ -995,28 +1057,7 @@ void init_xhci(u64 addr) {
             u16 data = $u16 (((*extcap_regs & XHCI_EXTCAP_DATA)) >> $u32 16);
             println("Found extcap : ", $u64 cap_id);
             if(cap_id == XHCI_EXTCAP_LEGACY_SUPPORT) {
-                println("xHCI Legacy Support");
-                // - Pre-OS to OS USB handoff
-
-                // write 1 to OS owning bit
-                u32 val = extcap_regs[0];
-                extcap_regs[0] = val | ($u32 1 << $u32 24);
-
-                // wait for BIOS to set their bit to 0
-                while(extcap_regs[0] & ($u32 1 << $u32 16)) {
-                    // spin
-                }
-                print("extcap_regs[0] : ");
-                bitdump(extcap_regs[0]);
-                println();
-
-                // disable all SMI enables
-                print("extcap_regs[1] : ");
-                bitdump(extcap_regs[1]);
-                println();
-                extcap_regs[1] = $u32 0;
-
-                println("xHCI handoff successful");
+                // do nothing, already did this earlier
             }
             else if(cap_id == XHCI_EXTCAP_SUPPORTED_PROTOCOL) {
                 println("xHCI Supported Protocols");
@@ -1083,8 +1124,6 @@ void init_xhci(u64 addr) {
 
                     XHCI_PORT_PROTOCOL_SLOT_TYPE_MAP[ind] = protocol_slot_type;
                 }   
-
-                
             }
             else {
                 println("Ignored extcap : ", $u64 cap_id);
@@ -1098,18 +1137,14 @@ void init_xhci(u64 addr) {
             //move to next one
             extcap_regs = $u32* ($u64 extcap_regs + (next_off << 0x2));
         }
-        // panic("stop here for now");
     }
 
-    println("USBSTS before RS : ", $void* $u64 op_regs->USBSTS);
-
     //start host controller
+    assert((op_regs->USBCMD & XHCI_USBCMD_RS) == $u32 0, "init_xhci() : controller should not be running");
     op_regs->USBCMD |= XHCI_USBCMD_RS;
     while(op_regs->USBSTS & XHCI_USBSTS_HCH) {
         // spin
     }
-
-    println("USBSTS after RS : ", $void* $u64 op_regs->USBSTS);
 
     println("xHCI Base Address : ", $void* xhci_mmio);
     println("xHCI MMIO size : ", $void* xhci_mmio_size);
@@ -1187,7 +1222,7 @@ void init_xhci(u64 addr) {
 //sends Address Device command to xHC
 //supplies an initial Input Context for a slot
 //transitions the selected slot from the default to addressed state
-void xhci_address_device(u32 slot_id, i32 set_bsr, u64 input_ctx_addr) {
+i32 xhci_address_device(u32 slot_id, i32 set_bsr, u64 input_ctx_addr) {
     //address device command trb
     xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     memset($void* trb, 0, sizeof(xHCI_TRB));
@@ -1198,14 +1233,21 @@ void xhci_address_device(u32 slot_id, i32 set_bsr, u64 input_ctx_addr) {
     trb->parameter |= input_ctx_addr;
 
     xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    xhci_exec_command(trb, out_trb);
-    assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_address_device() : result of command should be command completion TRB");
+    i32 status = xhci_exec_command(trb, out_trb);
+    u32 trb_type = xhci_trb_type(out_trb);
     u32 completion_code = xhci_event_trb_completion_code(out_trb);
-    println("xhci_address_device() : completion code : ", completion_code);
-    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_address_device() : for now, command must succeed");
+    u32 out_slot_id = (out_trb->control >> $u32 24);
 
     free($void* trb, sizeof(xHCI_TRB));
     free($void* out_trb, sizeof(xHCI_TRB));
+    if(status) return status;
+
+    println("xhci_address_device() : out_slot_id : ", out_slot_id);
+    println("xhci_address_device() : completion code : ", completion_code);
+    assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_address_device() : result of command should be command completion TRB");
+    assert(completion_code == XHCI_COMPLETION_CODE_SUCCESS, "xhci_address_device() : for now, command must succeed");
+
+    return status;
 }
 
 //sends Configure Endpoint command to xHC
@@ -1239,8 +1281,14 @@ u32 xhci_enable_slot(u32 protocol_slot_type) {
 
     xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     xhci_exec_command(trb, out_trb);
+    u32 completion_code = xhci_event_trb_completion_code(out_trb);
+    if(completion_code != XHCI_COMPLETION_CODE_SUCCESS) {
+        println("xhci_enable_slot() : failed");
+        println("protocol_slot_type : ", protocol_slot_type);
+        println("completion code : ", completion_code);
+    }
     assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_enable_slot() : result of command should be command completion TRB");
-    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_enable_slot() : for now, command must succeed");
+    assert(completion_code == XHCI_COMPLETION_CODE_SUCCESS, "xhci_enable_slot() : for now, command must succeed");
 
     //parse slot id
     u32 slot_id = out_trb->control >> $u32 24;
@@ -1269,7 +1317,7 @@ void xhci_no_op_command() {
 //writes the command and polls the event ring until it recieves the corresponding command completion TRB
 //if any other TRBs that are not command completion TRBs are recieved, these get handled after the command completion TRB is recieved
 //handling is deferred as handling an event may require another command to be executed
-void xhci_exec_command(xHCI_TRB* cmd, xHCI_TRB* out_trb) {
+i32 xhci_exec_command(xHCI_TRB* cmd, xHCI_TRB* out_trb) {
     //write command and ring doorbell
     u64 trb_ptr = xhci_write_command(cmd);
     xhci_ring_command_doorbell();
@@ -1280,7 +1328,7 @@ void xhci_exec_command(xHCI_TRB* cmd, xHCI_TRB* out_trb) {
     //poll until we get command completion TRB
     println("xhci_exec_command() : type : ", xhci_trb_type(cmd));
     println("xhci_exec_command() : start polling");
-    xhci_poll_events_until(XHCI_TRB_TYPE_CMD_COMPLETION, trb_ptr, XHCI_INTR0, out_trb);
+    return xhci_poll_events_until(XHCI_TRB_TYPE_CMD_COMPLETION, trb_ptr, XHCI_INTR0, out_trb);
 }   
 
 
@@ -1401,15 +1449,13 @@ i32 xhci_port_is_device_connected(u32 port_id) {
 void xhci_build_initial_input_ctx32(
     void* buf,                  // should be physical buf, at least 33 * 32 = 1056 bytes
     u32 port_id,                // 1-indexed
+    u32 port_speed,             // from PORTSC
     u32 interrupter_target,     // should be 0 for now
     u64 ep0_ring_phys,          // physical address to EP0 transfer ring
     u32 ep0_mps                 // should be 8 for USB2, 512 for USB3           
 ) { 
     assert($u32 0x1 <= port_id, "xhci_build_initial_input_ctx32() : ports are 1-indexed");
     assert(interrupter_target == XHCI_INTR0, "xhci_build_initial_input_ctx32() : only have interrupter 0 setup for now");
-    
-    xHCI_port_regs* port = xhci_get_port(port_id);
-    u32 port_speed = (port->PORTSC >> $u32 10) & $u32 0xF;
 
     println("xhci_build_initial_input_ctx32() : interrupter : ", interrupter_target);
     println("xhci_build_initial_input_ctx32() : port_id : ", port_id);
@@ -1417,6 +1463,8 @@ void xhci_build_initial_input_ctx32(
     println("xhci_build_initial_input_ctx32() : ep0_mps : ", ep0_mps);
     println("xhci_build_initial_input_ctx32() : ep0_ring_phys : ", $void* ep0_ring_phys);
     println("xhci_build_initial_input_ctx32() : ep0_ring_phys phys addr : ", pt_translate(pt_get_current(), $void* ep0_ring_phys));
+    println("xhci_build_initial_input_ctx32() : endpoint type : ", XHCI_ENDPOINT_TYPE_CONTROL_BI);
+    println("xhci_build_initial_input_ctx32() : deque cycle state : ", XHCI_ENDPOINT_CTX_DCS);
 
     //clear buf
     memset(buf, 0, $u64 32 * $u64 33);
@@ -1436,9 +1484,9 @@ void xhci_build_initial_input_ctx32(
 
     // - EP0 Context -
     xHCI_endpoint_ctx32* ep0 = $xHCI_endpoint_ctx32* ($u64 buf + $u64 64);
-    ep0->ep_info1 |= $u32 3 << $u32 1;                          //max allowed consecutive errors = 3
-    ep0->ep_info1 |= XHCI_ENDPOINT_TYPE_CONTROL_BI << $u32 3;   //endpoint type
-    ep0->ep_info1 |= ep0_mps << $u32 16;                        //max packet size
+    ep0->ep_info1 |= $u32 3 << $u32 1;                                      //max allowed consecutive errors = 3
+    ep0->ep_info1 |= (XHCI_ENDPOINT_TYPE_CONTROL_BI & $u32 0x7) << $u32 3;  //endpoint type
+    ep0->ep_info1 |= (ep0_mps & $u32 0xFFFF) << $u32 16;                    //max packet size
 
     assert((ep0_ring_phys & ~XHCI_ENDPOINT_CTX_DEQUE_PTR) == 0x0, "xhci_build_initial_input_ctx32() : deque pointer setting reserved bits");
     ep0->deque_ptr |= ep0_ring_phys;                            //deque physical address
@@ -1453,15 +1501,7 @@ u32 xhci_initialize_port(u32 port_id) {
     assert($u32 0x1 <= port_id && port_id <= $u32 XHCI_MAX_PORTS, "xhci_initialize_port() : port_id out of range");
     assert((XHCI_CAP_REGS->HCCPARAMS1 & XHCI_HCCPARAMS1_CSZ) == $u32 0, "init_usb() : only support 32-byte context structs");
     xHCI_port_regs* port = xhci_get_port(port_id);
-    u32 port_speed = $u32 ((port->PORTSC >> $u32 10) & $u32 0xF);
     void* buf = palloc();
-
-    u32 ep0_mps;
-    if(port_speed == $u32 1) ep0_mps = $u32 8;          // low speed
-    else if(port_speed == $u32 2) ep0_mps = $u32 8;     // full speed
-    else if(port_speed == $u32 3) ep0_mps = $u32 64;    // high speed
-    else if(port_speed >= $u32 4) ep0_mps = $u32 512;   // super speed
-    else panic("xhci_initialize_port() : unexpected port speed");
 
     println("xhci_initialize_port() : HCCPARAMS1 : ", $void* $u64 (XHCI_CAP_REGS->HCCPARAMS1));
 
@@ -1469,24 +1509,76 @@ u32 xhci_initialize_port(u32 port_id) {
     println("xhci_initialize_port() : resetting port");
     xhci_reset_port(port_id);
 
+    //read port speed (only valid after port reset)
+    u32 port_speed = $u32 ((port->PORTSC >> $u32 10) & $u32 0xF);
+    u32 ep0_mps;
+    if(port_speed == $u32 2) ep0_mps = $u32 8;          // low speed
+    else if(port_speed == $u32 1) ep0_mps = $u32 8;     // full speed
+    else if(port_speed == $u32 3) ep0_mps = $u32 64;    // high speed
+    else if(port_speed == $u32 4) ep0_mps = $u32 512;   // super speed
+    else if(port_speed == $u32 5) ep0_mps = $u32 512;   // super speed plus
+    else panic("xhci_initialize_port() : unexpected port speed");
+
     //alloc a slot
     println("xhci_initialize_port() : allocating a slot");
     u32 protocol_slot_type = xhci_get_port_slot_type(port_id);
     println("xhci_initialize_port() : port slot type : ", protocol_slot_type);
     u32 slot = xhci_alloc_slot(protocol_slot_type);
 
+    if(0) {
+        i32 worked = 0;
+        for(u64 i = 0x8; i <= $u64 64; i++) {
+            //set mps
+            ep0_mps = $u32 i;
+
+            //build initial input context
+            xhci_build_initial_input_ctx32(
+                buf, 
+                $u32 port_id, 
+                port_speed,
+                XHCI_INTR0, 
+                $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), 
+                ep0_mps
+            );
+            xhci_dump_input_ctx32(buf);
+
+            //flush input context
+            cpu_cache_flush(buf, PAGE_SIZE);
+
+            //address device
+            assert((port->PORTSC & XHCI_PORTSC_PLS) == $u32 0, "xhci_initialize_port() : PLS should be U0");
+            assert((port->PORTSC & XHCI_PORTSC_PED) == XHCI_PORTSC_PED, "xhci_initialize_port() : port not enabled");
+            i32 status = xhci_address_device(slot, 0, $u64 buf);
+
+            if(!status) {
+                println("MPS : ", i, " WORKED");
+                break;
+            }
+        }
+    }
+
     //build initial input context
-    xhci_build_initial_input_ctx32(buf, $u32 port_id, XHCI_INTR0, $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), ep0_mps);
+    xhci_build_initial_input_ctx32(
+        buf, 
+        $u32 port_id, 
+        port_speed,
+        XHCI_INTR0, 
+        $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), 
+        ep0_mps
+    );
+    xhci_dump_input_ctx32(buf);
 
     //flush input context
     cpu_cache_flush(buf, PAGE_SIZE);
+
+    // panic("stop here for now");
 
     if(0) {
         println("xhci_initialize_port() : no-op command");
         xhci_no_op_command();
 
-        //address device, BSR = 0
-        println("xhci_initialize_port() : addressing device BSR = 0");
+        //address device, BSR = 1
+        println("xhci_initialize_port() : addressing device BSR = 1");
         println("xhci_initialize_port() : addressing port : ", port_id);
         println("xhci_initialize_port() : port speed : ", $u64 port_speed);
         println("xhci_initialize_port() : buf addr : ", buf);
@@ -1498,53 +1590,66 @@ u32 xhci_initialize_port(u32 port_id) {
         assert((port->PORTSC & XHCI_PORTSC_PED) == XHCI_PORTSC_PED, "xhci_initialize_port() : port not enabled");
         xhci_dump_input_ctx32(buf);
         xhci_dump_command_ring();
-        xhci_address_device(slot, 0, $u64 buf);
+        xhci_address_device(slot, 1, $u64 buf);
 
         //dump device context
         xhci_dump_device_ctx32(slot);
 
-        //grab first 8 bytes of device descriptor to learn ep0_mps
-        println("xhci_initialize_port() : grabbing 8 bytes of device descriptor");
-        {
-            u32 bm_request_type = USB_REQUEST_TYPE_DIR_IN | USB_REQUEST_TYPE_TYPE_STANDARD | USB_REQUEST_TYPE_RECIPIENT_DEVICE;
-            u32 b_request = USB_REQUEST_GET_DESCRIPTOR;
-            u32 w_value = (USB_DESCRIPTOR_TYPE_DEVICE << $u32 8) | ($u32 0 << $u32 0);
-            u32 w_index = $u32 0;
-            u32 w_length = $u32 8;
+        // //grab first 8 bytes of device descriptor to learn ep0_mps
+        // println("xhci_initialize_port() : grabbing 8 bytes of device descriptor");
+        // {
+        //     u32 bm_request_type = USB_REQUEST_TYPE_DIR_IN | USB_REQUEST_TYPE_TYPE_STANDARD | USB_REQUEST_TYPE_RECIPIENT_DEVICE;
+        //     u32 b_request = USB_REQUEST_GET_DESCRIPTOR;
+        //     u32 w_value = (USB_DESCRIPTOR_TYPE_DEVICE << $u32 8) | ($u32 0 << $u32 0);
+        //     u32 w_index = $u32 0;
+        //     u32 w_length = $u32 8;
 
-            u32 trb_status;
-            i64 status = xhci_device_request(
-                $u32 0,
-                slot,
-                bm_request_type,
-                b_request,
-                w_value,
-                w_index,
-                w_length,
-                buf, 
-                trb_status
-            );
-            println("xhci_initialize_port() : grab descriptor TRB status : ", trb_status);
-            assert(status >= $i64 0, "usb_device_get_descriptor() : should succeed for now");
+        //     u32 trb_status;
+        //     i64 status = xhci_device_request(
+        //         $u32 0,
+        //         slot,
+        //         bm_request_type,
+        //         b_request,
+        //         w_value,
+        //         w_index,
+        //         w_length,
+        //         buf, 
+        //         trb_status
+        //     );
+        //     println("xhci_initialize_port() : grab descriptor TRB status : ", trb_status);
+        //     assert(status >= $i64 0, "usb_device_get_descriptor() : should succeed for now");
 
-            if(port_speed <= $u32 3) ep0_mps = $u32 ($u8* buf)[7];  // low - high speed
-            else ep0_mps = $u32 1 << ($u32 ($u8* buf)[7]);          // super speed
-        }
+        //     if(port_speed <= $u32 3) ep0_mps = $u32 ($u8* buf)[7];  // low - high speed
+        //     else ep0_mps = $u32 1 << ($u32 ($u8* buf)[7]);          // super speed
+        // }
 
-        //build (final) initial input context, re-init slot
-        xhci_init_slot(slot);
-        xhci_build_initial_input_ctx32(buf, $u32 port_id, $u32 0, $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), ep0_mps);
+        // //build (final) initial input context, re-init slot
+        // xhci_init_slot(slot);
+        // xhci_build_initial_input_ctx32(
+        //     buf, 
+        //     $u32 port_id, 
+        //     port_speed,
+        //     XHCI_INTR0,
+        //     $u64 xhci_get_slot_transfer_ring(slot, XHCI_EP0), 
+        //     ep0_mps
+        // );
     }
 
     //address device, BSR = 0
     println("xhci_initialize_port() : addressing device BSR = 0");
+    println("xhci_initialize_port() : slot : ", slot);
     println("xhci_initialize_port() : addressing port : ", port_id);
     println("xhci_initialize_port() : port speed : ", $u64 port_speed);
     println("xhci_initialize_port() : buf addr : ", buf);
     println("xhci_initialize_port() : buf phys addr : ", pt_translate(pt_get_current(), buf));
     println("xhci_initialize_port() : PORTSC : ", $void* $u64 port->PORTSC);
     println("xhci_initialize_port() : PORTSC.PLS : ", (port->PORTSC & XHCI_PORTSC_PLS) >> $u32 5);
+    println("xhci_initialize_port() : DCBAA[slot] : ", $void* XHCI_DCBAA[slot]);
+    assert((port->PORTSC & XHCI_PORTSC_PLS) == $u32 0, "xhci_initialize_port() : PLS should be U0");
+    assert((port->PORTSC & XHCI_PORTSC_PED) == XHCI_PORTSC_PED, "xhci_initialize_port() : port not enabled");
     xhci_address_device(slot, 0, $u64 buf);
+
+    // panic("xhci_initialize_port() : ADDRESS DEVICE SUCCESSFUL!!");
 
     pfree(buf);
     return slot;
