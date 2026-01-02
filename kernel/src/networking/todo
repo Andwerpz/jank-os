@@ -1,11 +1,12 @@
 NOW
 - implement network stack...
-- rethink how i write the networking stack with big endian -> little endian
-- also how i store ipv4 addresses, should probably change to u32 instead of u8[4]
+- UDP
+- DHCP
+- DNS
+- TCP (make andrew do this cause im no good)
 
 LATER
 - configure Interrupt Mask for later...
 - make generic network device
-- implement network stack...
 - make that arp entry lookup not suck
 - add expirations for arp entries, probably 60 seconds?
