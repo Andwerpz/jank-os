@@ -700,6 +700,11 @@ void usb_inc_refcnt(USB_device* dev) {
 }
 
 void init_usb() {
+    if(!XHCI_DID_INIT) {
+        println("init_usb() : no xHCI controller found, cannot init usb");
+        return;
+    }
+
     assert(XHCI_DID_INIT, "init_usb() : need to have XHCI");
     println("start init usb");
 
