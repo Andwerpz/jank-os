@@ -584,7 +584,7 @@ i32 xhci_poll_events_until(u32 tgt_type, u64 tgt_ptr, u32 interrupter, xHCI_TRB*
             // spin
 
             poll_cnt ++;
-            if(poll_cnt == $u64 100000) {
+            if(poll_cnt == $u64 10000000) {
                 println("poll 10M");
                 println("CRCR : ", $void* $u64 XHCI_OP_REGS->CRCR);
                 println("USBSTS : ", $void* $u64 XHCI_OP_REGS->USBSTS);
@@ -728,6 +728,9 @@ void xhci_init_page_TRB_ring(void* buf) {
     link_trb->parameter = $u64 buf;                                                 //point link TRB back to first TRB
     link_trb->status = $u32 0;
     link_trb->control = $u32 (XHCI_TRB_TYPE_LINK << $u32 10) | XHCI_TRB_LINK_TC;    //link TRB should toggle cycle state
+
+    //flush changes
+    cpu_cache_flush(buf, PAGE_SIZE);
 }
 
 void init_xhci(u64 addr) {
@@ -745,8 +748,10 @@ void init_xhci(u64 addr) {
     //enable busmaster and memory mapped access
     {
         u16 cmd = pci_hdr->command; 
+        cmd &= $u16 ~(1 << 0);  // command IO
         cmd |= $u16 (1 << 1);   // MSE (memory space enable)
         cmd |= $u16 (1 << 2);   // BME (bus master enable)
+        cmd |= $u16 ~(1 << 10); // Interrupt Disable (1 = Disable Legacy INTx)
         pci_hdr->command = cmd;
     }
 
@@ -914,10 +919,26 @@ void init_xhci(u64 addr) {
 
     //alloc stuff for host controller 
     {
+        //set max device slots in CONFIG
+        u32 max_slots = (cap_regs->HCSPARAMS1 & XHCI_HCSPARAMS1_MAXSLOTS) >> $u32 0;
+        op_regs->CONFIG = (op_regs->CONFIG & ~XHCI_CONFIG_MAXSLOTS) | (max_slots << $u32 0);
+        XHCI_MAX_SLOTS = $u64 max_slots;
+        println("xHCI Max Slots : ", max_slots);
+
+        //get number of ports
+        XHCI_MAX_PORTS = $u64 (cap_regs->HCSPARAMS1 >> $u32 24);
+        println("xHCI Max Ports : ", XHCI_MAX_PORTS);
+
+        //get xHCI page size
+        u64 xhci_pgsize = $u64 op_regs->PAGESIZE << $u64 12;
+        println("xHCI Page Size : ", xhci_pgsize);
+        assert(xhci_pgsize == $u64 4096, "init_xhci() : only support xHCI PAGESIZE == 4096");
+
         // Device Context Base Address Array
         //256 64-bit pointers = 2048 bytes
         u64 DCBAA_addr = $u64 palloc();
         memset($void* DCBAA_addr, 0, PAGE_SIZE);
+        assert((DCBAA_addr & 0xFFF) == 0x0, "init_xhci() : making sure DCBAA is 64-bit aligned");
         {
             //find max number of scratchpads
             u64 nr_scratch_lo = ($u64 cap_regs->HCSPARAMS2 >> $u64 27) & 0x1F;
@@ -925,19 +946,22 @@ void init_xhci(u64 addr) {
             u64 nr_scratch = (nr_scratch_hi << $u64 5) | nr_scratch_lo;
             println("Nr Scratchpads : ", nr_scratch);
             
-            //need to alloc scratchpad buffer
+            //alloc scratchpad buffer for DCBAA[0]
             if (nr_scratch != 0x0) {
                 assert(nr_scratch <= $u64 512, "init_xhci() : currently can\'t alloc more than 4096 contiguous physical bytes");
 
                 // Scratchpad Buffer Array (SBA)
                 u64 sba_addr = $u64 palloc();
+                assert((sba_addr & 0xFFF) == 0x0, "init_xhci() : making sure SBA is 64-bit aligned");
                 memset($void* sba_addr, 0, PAGE_SIZE);
 
                 // allocate scratchpad buffers and store their physical addresses in SBA
                 u64* sba = $u64* sba_addr;
                 for (u64 i = 0x0; i < nr_scratch; i++) {
                     u64 buf = $u64 palloc();                       // 4KB scratchpad buffer
+                    assert(($u64 buf & 0xFFF) == 0x0, "init_xhci() : making sure scratchpad is 64-bit aligned");
                     memset($void* buf, 0, PAGE_SIZE);
+                    cpu_cache_flush($void* buf, PAGE_SIZE);
                     sba[i] = buf; 
                 }
 
@@ -947,6 +971,17 @@ void init_xhci(u64 addr) {
                 // DCBAA[0] points to SBA 
                 ($u64* DCBAA_addr)[0] = sba_addr;
             }
+
+            //alloc one page for each DCBAA pointer up to XHCI_MAX_SLOTS
+            //this is for hardware storage of endpoint contexts
+            for(u64 i = 0x1; i <= XHCI_MAX_SLOTS; i++) {
+                void* ctx_buf = palloc();
+                memset(ctx_buf, 0, PAGE_SIZE);
+                ($u64* DCBAA_addr)[i] = $u64 ctx_buf;
+            }
+
+            //flush changes to DCBAA
+            cpu_cache_flush($void* DCBAA_addr, PAGE_SIZE);
         }
         op_regs->DCBAAP = DCBAA_addr;
         XHCI_DCBAA = $u64* DCBAA_addr;
@@ -985,9 +1020,11 @@ void init_xhci(u64 addr) {
             // clear pending IP (RW1C) and enable IE
             interrupters[0].IMAN = XHCI_IMAN_IP | XHCI_IMAN_IE;
         }
+        cpu_cache_flush($void* event_ring_addr, PAGE_SIZE);
+        cpu_cache_flush($void* ERST_addr, PAGE_SIZE);
 
-        // enable global interrupt/event generation
-        op_regs->USBCMD |= XHCI_USBCMD_INTE;
+        // disable interrupt generation
+        op_regs->USBCMD &= ~XHCI_USBCMD_INTE;
 
         //allocate room for event ring consumer state storage
         XHCI_EVENT_RING_CONSUMER_INDEXES = $u64* palloc();
@@ -999,16 +1036,6 @@ void init_xhci(u64 addr) {
         for(u64 i = 0x0; i * sizeof(u32) < PAGE_SIZE; i++) {
             XHCI_EVENT_RING_CONSUMER_STATES[i] = XHCI_TRB_C;
         }
-
-        //set max device slots in CONFIG
-        u32 max_slots = (cap_regs->HCSPARAMS1 & XHCI_HCSPARAMS1_MAXSLOTS) >> $u32 0;
-        op_regs->CONFIG = (op_regs->CONFIG & ~XHCI_CONFIG_MAXSLOTS) | (max_slots << $u32 0);
-        XHCI_MAX_SLOTS = $u64 max_slots;
-        println("xHCI Max Slots : ", max_slots);
-
-        //get number of ports
-        XHCI_MAX_PORTS = $u64 (cap_regs->HCSPARAMS1 >> $u32 24);
-        println("xHCI Max Ports : ", XHCI_MAX_PORTS);
 
         //alloc memory for slot transfer rings
         XHCI_SLOT_RINGS = $xHCI_TRB*** malloc(sizeof(xHCI_TRB**) * (XHCI_MAX_SLOTS + 0x1));
@@ -1026,14 +1053,6 @@ void init_xhci(u64 addr) {
                 assert(ring_buf == pt_translate(pt_get_current(), ring_buf), "init_xhci() : ring buffer addresses should be physical D:");
                 XHCI_SLOT_RINGS[i][j] = $xHCI_TRB* ring_buf;
             }
-        }
-
-        //alloc one page for each DCBAA pointer up to XHCI_MAX_SLOTS
-        //this is for hardware storage of endpoint contexts
-        for(u64 i = 0x1; i <= XHCI_MAX_SLOTS; i++) {
-            void* ctx_buf = palloc();
-            memset(ctx_buf, 0, PAGE_SIZE);
-            XHCI_DCBAA[i] = $u64 ctx_buf;
         }
     }
 
@@ -1219,11 +1238,31 @@ void init_xhci(u64 addr) {
 
 
 // --- COMMANDS ---
+//sends Evaluate Context command to xHC
+//update parameters of existing endpoints
+// maintains the selected slots state
+void xhci_evaluate_context(u32 slot_id, u64 input_ctx_addr) {
+    xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    memset($void* trb, 0, sizeof(xHCI_TRB));
+    assert((input_ctx_addr & 0xF) == 0x0, "xhci_evaluate_context() : low bits of input context address are reserved");
+    trb->control |= slot_id << $u32 24;
+    xhci_trb_set_type(trb, XHCI_TRB_TYPE_EVALUATE_CTX);
+    trb->parameter |= input_ctx_addr;
+
+    xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    xhci_exec_command(trb, out_trb);
+    assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_evaluate_context() : result of command should be command completion TRB");
+    assert(xhci_event_trb_completion_code(out_trb) == XHCI_COMPLETION_CODE_SUCCESS, "xhci_evaluate_context() : for now, command must succeed");
+
+    free($void* trb, sizeof(xHCI_TRB));
+    free($void* out_trb, sizeof(xHCI_TRB));
+}
+
 //sends Address Device command to xHC
 //supplies an initial Input Context for a slot
-//transitions the selected slot from the default to addressed state
+// transitions the selected slot from the enabled state to the addressed state if BSR = 0
+// transitions the selected slot from the enabled state to the default state if BSR = 1
 i32 xhci_address_device(u32 slot_id, i32 set_bsr, u64 input_ctx_addr) {
-    //address device command trb
     xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
     memset($void* trb, 0, sizeof(xHCI_TRB));
     assert((input_ctx_addr & 0xF) == 0x0, "xhci_address_device() : low bits of input context address are reserved");
@@ -1244,14 +1283,15 @@ i32 xhci_address_device(u32 slot_id, i32 set_bsr, u64 input_ctx_addr) {
 
     println("xhci_address_device() : out_slot_id : ", out_slot_id);
     println("xhci_address_device() : completion code : ", completion_code);
-    assert(xhci_trb_type(out_trb) == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_address_device() : result of command should be command completion TRB");
+    assert(trb_type == XHCI_TRB_TYPE_CMD_COMPLETION, "xhci_address_device() : result of command should be command completion TRB");
     assert(completion_code == XHCI_COMPLETION_CODE_SUCCESS, "xhci_address_device() : for now, command must succeed");
 
     return status;
 }
 
 //sends Configure Endpoint command to xHC
-//like Address Device, but should be used on an already addressed slot
+//change what endpoints are in use. 
+// transitions the selected slot from the addressed state to the configured state
 void xhci_configure_endpoint(u32 slot_id, u64 input_ctx_addr) {
     //configure endpoint command trb
     xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
@@ -1272,6 +1312,7 @@ void xhci_configure_endpoint(u32 slot_id, u64 input_ctx_addr) {
 
 //tells the xHC to select an available device slot to enable
 //returns the ID of the selected slot
+// places the allocated slot into the enabled state
 u32 xhci_enable_slot(u32 protocol_slot_type) {
     //enable slot command trb
     xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
@@ -1342,13 +1383,28 @@ void xhci_reset_port_usb2(xHCI_port_regs* port) {
     // initiate port reset
     xhci_portsc_write_bits(port, port->PORTSC | XHCI_PORTSC_PR, $u32 0);
 
+    println("xhci_reset_port_usb2() : spin1");
+    for(u64 i = 0x0; i < $u64 10000000; i++) {
+        // spin
+    }
+
     // wait for controller to clear PR back to 0
     while(port->PORTSC & XHCI_PORTSC_PR) {
         // spin
     }
 
+    println("xhci_reset_port_usb2() : spin2");
+    for(u64 i = 0x0; i < $u64 10000000; i++) {
+        // spin
+    }
+
     // wait for PRC to be set (reset complete indication)
     while((port->PORTSC & XHCI_PORTSC_PRC) == $u32 0) {
+        // spin
+    }
+
+    println("xhci_reset_port_usb2() : spin3");
+    for(u64 i = 0x0; i < $u64 10000000; i++) {
         // spin
     }
 
@@ -1411,10 +1467,9 @@ void xhci_reset_port(u32 port_id) {
     else panic("xhci_reset_port() : unknown protocol");
 
     //small spin to make sure port is settled
-    for(u64 i = 0x0; i < $u64 100000000; i++) {
+    for(u64 i = 0x0; i < $u64 10000000; i++) {
         // spin
     }
-
 }
 
 //ports are 1-indexed, so valid values are in range [1, XHCI_MAX_PORTS]
@@ -1502,6 +1557,9 @@ u32 xhci_initialize_port(u32 port_id) {
     assert((XHCI_CAP_REGS->HCCPARAMS1 & XHCI_HCCPARAMS1_CSZ) == $u32 0, "init_usb() : only support 32-byte context structs");
     xHCI_port_regs* port = xhci_get_port(port_id);
     void* buf = palloc();
+
+    println("xhci_initialize_port() : port_id : ", port_id);
+    println("xhci_initialize_port() : offset from XHCI_OP_REGS : ", $void* ($u64 port - $u64 XHCI_OP_REGS));
 
     println("xhci_initialize_port() : HCCPARAMS1 : ", $void* $u64 (XHCI_CAP_REGS->HCCPARAMS1));
 
@@ -1634,6 +1692,16 @@ u32 xhci_initialize_port(u32 port_id) {
         //     ep0_mps
         // );
     }
+    
+    //small delay
+    println("xhci_initialize_port() : small delay");
+    for(u64 i = 0x0; i < $u64 10000000; i++) {
+        // spin
+    }
+    println("xhci_initialize_port() : small delay done");
+
+    //ack portsc bits
+    xhci_portsc_write_bits(port, port->PORTSC, (port->PORTSC & XHCI_PORTSC_RW1C_MASK) & ~XHCI_PORTSC_PED);
 
     //address device, BSR = 0
     println("xhci_initialize_port() : addressing device BSR = 0");
@@ -1649,7 +1717,64 @@ u32 xhci_initialize_port(u32 port_id) {
     assert((port->PORTSC & XHCI_PORTSC_PED) == XHCI_PORTSC_PED, "xhci_initialize_port() : port not enabled");
     xhci_address_device(slot, 0, $u64 buf);
 
+    //for full speed device, find actual ep0_mps and reconfigure ep0
+    if(port_speed == $u32 1) {
+        //grab first 8 bytes of device descriptor to learn ep0_mps
+        println("xhci_initialize_port() : full speed device, grabbing 8 bytes of device descriptor");
+        {
+            u32 bm_request_type = USB_REQUEST_TYPE_DIR_IN | USB_REQUEST_TYPE_TYPE_STANDARD | USB_REQUEST_TYPE_RECIPIENT_DEVICE;
+            u32 b_request = USB_REQUEST_GET_DESCRIPTOR;
+            u32 w_value = (USB_DESCRIPTOR_TYPE_DEVICE << $u32 8) | ($u32 0 << $u32 0);
+            u32 w_index = $u32 0;
+            u32 w_length = $u32 8;
+
+            u32 trb_status;
+            i64 status = xhci_device_request(
+                $u32 0,
+                slot,
+                bm_request_type,
+                b_request,
+                w_value,
+                w_index,
+                w_length,
+                buf, 
+                trb_status
+            );
+            println("xhci_initialize_port() : grab descriptor TRB status : ", trb_status);
+            assert(status >= $i64 0, "usb_device_get_descriptor() : should succeed for now");
+
+            ep0_mps = $u32 ($u8* buf)[7];
+
+            if(port_speed <= $u32 3) ep0_mps = $u32 ($u8* buf)[7];  // low - high speed
+            else ep0_mps = $u32 1 << ($u32 ($u8* buf)[7]);          // super speed
+        }
+
+        println("xhci_initialize_port() : got ep0_mps : ", ep0_mps);
+
+        if(ep0_mps != $u32 8) {
+            memset(buf, 0, PAGE_SIZE);
+            xHCI_input_control_ctx32* input_ctx = $xHCI_input_control_ctx32* buf;
+            input_ctx->add_context_flags = $u32 (1 << 1);   //just EP0
+
+            xHCI_endpoint_ctx32* ep_ctx = $xHCI_endpoint_ctx32* ($u64 buf + 0x40);
+            void* output_ctx = $void* XHCI_DCBAA[slot];
+            memcpy($void* ep_ctx, $void* ($u64 output_ctx + 0x20), sizeof(xHCI_endpoint_ctx32));
+            ep_ctx->ep_info1 &= ~($u32 0xFFFF << $u32 16);  //overwrite MPS
+            ep_ctx->ep_info1 |= ep0_mps << $u32 16;
+
+            xhci_dump_input_ctx32(buf);
+
+            //flush input context
+            cpu_cache_flush(buf, PAGE_SIZE);
+
+            //update context
+            println("xhci_initialize_port() : evaluate context");
+            xhci_evaluate_context(slot, $u64 buf);
+        }
+    }
+
     // panic("xhci_initialize_port() : ADDRESS DEVICE SUCCESSFUL!!");
+    // panic("xhci_initialize_port() : stop here");
 
     pfree(buf);
     return slot;
