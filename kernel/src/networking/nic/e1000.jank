@@ -236,30 +236,9 @@ void e1000_get_mac_address(u8[6]& mac) {
 
     print("init_e1000() : nic MAC address is ");
     print("[");
-    // for(i32 i = 0; i < 6; i++) {
-    //     print_hex(mac[i]); 
-    //     if(i < 5) print(":");
-    // }
     print_mac_addr(mac);
     print("]");
     println("");
-    // MAC = $u8* malloc(sizeof(u8) * $u64 6);
-    // u16 temp = $u16 0x0;
-    // i32 mac_idx = 0;
-    // for(i32 i = 0; i < 3; i++) {
-    //     temp = e1000_eeprom_read($u8 i);
-    //     MAC[mac_idx++] = $u8 (temp & $u16 0xFF);
-    //     MAC[mac_idx++] = $u8 (temp >> $u16 8);
-    // }
-
-    // print("init_e1000() : nic MAC address is ");
-    // print("[");
-    // for(i32 i = 0; i < 6; i++) {
-    //     print_hex(MAC[i]); 
-    //     if(i < 5) print(":");
-    // }
-    // print("]");
-    // println("");
 }
 
 void e1000_startup() {
@@ -454,6 +433,10 @@ void e1000_send(void* data, u16 len) {
 
 void e1000_recieve_poll() {
     u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
+    
+    i32 sent = 0;
+    u64 init_time = hpet_get_ns();
+    u64 curr_time = 0x0;
 
     while(1) {
         u8 status = RDESC_RING[CURR_RDESC].status;
@@ -468,6 +451,12 @@ void e1000_recieve_poll() {
             RDESC_RING[CURR_RDESC].status = $u8 0;
             *rdt_ptr = $u32 CURR_RDESC;
             CURR_RDESC = (CURR_RDESC + $u16 1) % $u16 E1000_NUM_RDESC;
+        }
+
+        curr_time = hpet_get_ns();
+        if(!sent && ((curr_time - init_time) > 0xB2D05E00)) {
+            icmp_send_request(CURRENT_INTERFACE->gateway_ip, $u16 1, $u16 1);
+            sent = 1;
         }
     }
 }
