@@ -16,3 +16,5 @@ user/bin/*
 bootloader/uefi/build/*
 
 !kernel/trampoline.s
+
+*.pcap
