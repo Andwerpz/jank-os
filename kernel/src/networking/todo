@@ -8,6 +8,7 @@ NOW
 LATER
 - how i handle buffers for the tx rx, rn i just pre alloc the buffers and keep using them, i should copy phys hardware buffer to a malloc'd buffer and set the hardware flag so that it can keep recieving?
 - configure Interrupt Mask for later...
-- make generic network device
 - make that arp entry lookup not suck
 - add expirations for arp entries, probably 60 seconds?
+- generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards?
+- add lease time to dhcp

@@ -11,6 +11,8 @@ struct NetInterface {
     u32 ip_address;
     u32 subnet_mask;
     u32 gateway_ip;
+    u32 dhcp_server;
+    u32 dns_server;
 
     // driver abstractions
     fn<void(void*, u16)> send;
@@ -67,6 +69,14 @@ void dump_network_interface(NetInterface* net) {
 
     print("gateway_ip:      ");
     print_ipv4_addr(net->gateway_ip);
+    println("");
+
+    print("dhcp_server:     ");
+    print_ipv4_addr(net->dhcp_server);
+    println("");
+
+    print("dns_server:      ");
+    print_ipv4_addr(net->dns_server);
     println("");
 }
 

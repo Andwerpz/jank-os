@@ -126,6 +126,12 @@ void e1000_init(u64 addr) {
     e1000_init_rx();
     e1000_init_tx();
 
+    nic->ip_address = $u32 0;
+    nic->subnet_mask = $u32 0;
+    nic->gateway_ip = $u32 0;
+    nic->dhcp_server = $u32 0;
+    nic->dns_server = $u32 0;
+
     nic->send = #<e1000_send(void*, u16)>;
 
     net_interfaces.push_back(nic);
@@ -134,13 +140,7 @@ void e1000_init(u64 addr) {
     println("e1000_init() : finished initializing NIC");
 
     {
-        // testing
-        CURRENT_INTERFACE->ip_address = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 15 << 0);
-        CURRENT_INTERFACE->gateway_ip = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 2 << 0);
-
-        dump_network_interface(CURRENT_INTERFACE);
-
-        send_arp_request(CURRENT_INTERFACE->gateway_ip);
+        dhcp_send_discover();
         e1000_recieve_poll();
     }
 }
@@ -456,9 +456,12 @@ void e1000_recieve_poll() {
         }
 
         curr_time = hpet_get_ns();
-        if(!sent && ((curr_time - init_time) > 0xB2D05E00)) {
-            icmp_send_request(CURRENT_INTERFACE->gateway_ip, $u16 1, $u16 1);
-            sent = 1;
+        if(CURRENT_INTERFACE->ip_address != $u32 0 && !sent && ((curr_time - init_time) > 0xB2D05E00)) {
+            // icmp_send_request(CURRENT_INTERFACE->gateway_ip, $u16 1, $u16 1);
+            u32 test_ip = $u32 (1 << 24 | 1 << 16 | 1 << 8 | 1 << 0);
+            icmp_send_request(test_ip, $u16 1, $u16 1);
+            init_time = curr_time;
+            // sent = 1;
         }
     }
 }

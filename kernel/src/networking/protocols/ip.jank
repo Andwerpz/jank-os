@@ -28,6 +28,8 @@ struct IPv4Header {
 [__GLOBAL_FIRST__] u16 IPv4_HEADER_FLAGS_MASK = $u16 0xE000;
 [__GLOBAL_FIRST__] u16 IPv4_HEADER_FRAGMENT_OFFSET_MASK = $u16 0x1FFF;
 
+[__GLOBAL_FIRST__] u32 IPv4_BROADCAST_ADDR = $u32 0xFFFFFFFF;
+
 void ipv4_handle(IPv4Header* ip) {
     u16 total_length = be_to_cpu(ip->total_length);
     if(total_length < $u16 20) {
@@ -56,8 +58,11 @@ void ipv4_handle(IPv4Header* ip) {
         return;
     }
 
-    if(be_to_cpu(ip->dst_ip) != CURRENT_INTERFACE->ip_address) {
-        println("ipv4_handle() : destination ip does not match with host");
+    u32 dst_ip = be_to_cpu(ip->dst_ip);
+    if(!(dst_ip == CURRENT_INTERFACE->ip_address || dst_ip == IPv4_BROADCAST_ADDR)) {
+        print("ipv4_handle() : destination ip ");
+        print_ipv4_addr(be_to_cpu(ip->dst_ip));
+        println(" does not match with host, ignoring");
         return;
     }
 
@@ -82,7 +87,7 @@ void ipv4_handle(IPv4Header* ip) {
 }
 
 void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
-    print("ipv4_send_packet() : sending packet to: ");
+    print("ipv4_send_packet() : sending IPv4 packet to: ");
     print_ipv4_addr(dst_ip);
     println("");
 
@@ -91,7 +96,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     u64 ethernet_frame_len = sizeof(EthernetHeader) + ipv4_packet_len;
 
     void* buffer = malloc(ethernet_frame_len);
-    memset($void* buffer, 0, ethernet_frame_len);
+    memset(buffer, 0, ethernet_frame_len);
 
     EthernetHeader* eth = $EthernetHeader* buffer;
     IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
@@ -118,14 +123,21 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     // subnet checking somewhere maybe?
     // D:
 
-    if(!arp_lookup(dst_ip, eth->dst)) {
-        println("ipv4_send_packet() : destination not in ARP table, packet not sent, sent ARP request instead");
+    // set destination MAC
+    if(dst_ip == $u32 0xFFFFFFFF) {
+        // dst ip is a broadcast, change mac to broadcast
+        for(i32 i = 0; i < 6; i++) eth->dst[i] = $u8 0xFF;
+    } else {
+        // dst ip is not broadcast, do an ARP lookup.
+        if(!arp_lookup(dst_ip, eth->dst)) {
+            println("ipv4_send_packet() : destination not in ARP table, packet not sent, sent ARP request instead");
 
-        send_arp_request(dst_ip);
+            send_arp_request(dst_ip);
 
-        free(buffer, ethernet_frame_len);
+            free(buffer, ethernet_frame_len);
 
-        return;
+            return;
+        }
     }
 
     CURRENT_INTERFACE->send#(buffer, $u16 ethernet_frame_len);

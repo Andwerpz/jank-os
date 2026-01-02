@@ -28,13 +28,32 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     void* payload = $void* ($u64 udp + sizeof(UDPHeader));
     u16 payload_len = length - $u16 sizeof(UDPHeader);
 
-    println("udp_handle() : recieved udp");
-    print("Destination Port: ");
-    println($u64 dst_port);
-    print("Payload: ");
-    
-    for(u16 i = $u16 0; i < payload_len; i++) {
-        print(($u8*payload)[i]);
+    if(be_to_cpu(udp->dst_port) == DHCP_CLIENT_LISTEN_PORT) {
+        DHCPHeader* dhcp = $DHCPHeader* payload; 
+        dhcp_handle(dhcp, payload_len);
     }
+}
+
+void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 payload_len) {
+    print("udp_send_packet() : sending UDP packet to: ");
+    print_ipv4_addr(dst_ip);
     println("");
+
+    u64 udp_packet_len = sizeof(UDPHeader) + $u64 payload_len;
+
+    void* buffer = malloc(udp_packet_len);
+    memset(buffer, 0, udp_packet_len);
+
+    UDPHeader* udp = $UDPHeader* buffer;
+    void* dst_payload = $void* ($u64 buffer + sizeof(UDPHeader));
+
+    udp->src_port = cpu_to_be(src_port);
+    udp->dst_port = cpu_to_be(dst_port);
+    udp->length = cpu_to_be($u16 udp_packet_len);
+    udp->checksum = $u16 0; // this is valid for ipv4, we can just not do it lol
+
+    memcpy(dst_payload, payload, $u64 payload_len);
+
+    ipv4_send_packet(dst_ip, IPv4_PROTOCOL_UDP, buffer, $u16 udp_packet_len);
+    free(buffer, udp_packet_len);
 }
