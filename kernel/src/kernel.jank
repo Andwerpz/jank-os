@@ -37,6 +37,7 @@
 #include "usb/usb.jank";
 #include "usb/bot.jank";
 #include "usb/scsi.jank";
+#include "networking/net_interface.jank";
 #include "networking/protocols/ethernet.jank";
 #include "networking/protocols/arp.jank";
 #include "networking/protocols/ip.jank";

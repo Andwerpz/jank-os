@@ -9,8 +9,8 @@ struct IPv4Header {
     u8  ttl;                // Time to live (TTL): 8 bits
     u8  protocol;           // Protocol: 8 bits
     u16 header_checksum;    // Header Checksum: 16 bits
-    u8[4] src_ip;           // Source address: 32 bits
-    u8[4] dst_ip;           // Destination address: 32 bits
+    u32 src_ip;             // Source address: 32 bits
+    u32 dst_ip;             // Destination address: 32 bits
 }
 
 [__GLOBAL_FIRST__] u8 IPv4_VALID_VERSION = $u8 4;
@@ -27,6 +27,12 @@ struct IPv4Header {
 [__GLOBAL_FIRST__] u16 IPv4_HEADER_FRAGMENT_OFFSET_MASK = $u16 0x1FFF;
 
 void ipv4_handle(IPv4Header* ip) {
+    u16 total_length = be_to_cpu(ip->total_length);
+    if(total_length < $u16 20) {
+        println("ipv4_handle() : packet length shorter than minimum (20 bytes)");
+        return;
+    }
+
     u8 version = (ip->version_ihl & IPv4_HEADER_VERSION_MASK) >> $u8 4;
     if(version != IPv4_VALID_VERSION) {
         println("ipv4_handle() : invalid version in header");
@@ -35,37 +41,53 @@ void ipv4_handle(IPv4Header* ip) {
     
     // for now i only support length 20 headers, no support for options...
     u8 ihl = ip->version_ihl & IPv4_HEADER_IHL_MASK;
-    if(ihl * $u8 5 != $u8 20) {
+    u16 header_len = $u16 ihl * $u16 4; // ihl * 32 bits = header length 
+    if(header_len != $u16 20) {
         println("ipv4_handle() : invalid ihl, header length not supported");
         return;
     }
 
     u16 calc = calculate_ipv4_header_checksum(ip);
-    if(calc != $u16 0) {
+    if(calc != ip->header_checksum) {
         println("ipv4_handle() : checksum failed");
         return;
     }
 
-    if(
-        ip->dst_ip[0] != IPV4_ADDR[0] ||
-        ip->dst_ip[1] != IPV4_ADDR[1] ||
-        ip->dst_ip[2] != IPV4_ADDR[2] ||
-        ip->dst_ip[3] != IPV4_ADDR[3]
-    ) {
-        
+    if(be_to_cpu(ip->dst_ip) != CURRENT_INTERFACE->ip_address) {
+        println("ipv4_handle() : destination ip does not match with host");
+        return;
+    }
+
+    u8* payload = $u8* ($u64 ip + $u64 header_len);
+    u16 payload_size = total_length - header_len;
+
+    if(ip->protocol == IPv4_PROTOCOL_ICMP) {
+        println("ipv4_handle() : ICMP packet recieved");
+    } else if(ip->protocol == IPv4_PROTOCOL_TCP) {
+        println("ipv4_handle() : TCP packet recieved");
+    } else if(ip->protocol == IPv4_PROTOCOL_UDP) {
+        println("ipv4_handle() : UDP packet recieved");
+    } else {
+        print("ipv4_handle() : unknown protocol ");
+        print_hex(ip->protocol);
+        println("");
     }
 }
 
+// group header into 16 bit words, sum them all up excluding the checksum field.
+// ones complement sum, then return bitwise NOT of sum.
 u16 calculate_ipv4_header_checksum(IPv4Header* ip) {
+    u16* header = $u16* ip;
+    
     u32 sum = $u32 0;
-    u16* data = $u16* ip;
-
-    for(u64 i = 0x0; i < sizeof(IPv4Header) / $u64 2; i++) {
-        sum += $u32 data[i];
+    for(u64 i = 0x0; i < sizeof(IPv4Header) / 0x2; i++) {
+        if(i != $u64 5) sum += $u32 header[i]; // ignore the checksum field.
     }
 
-    while(sum >> $u32 16) {
-        sum = (sum & $u32 0xFFFF) + (sum >> $u32 16);
+    while(sum > $u32 0xFFFF) {
+        u32 carry = sum >> $u32 16;
+        sum &= $u32 0xFFFF;
+        sum += carry; 
     }
 
     return ~($u16 sum);

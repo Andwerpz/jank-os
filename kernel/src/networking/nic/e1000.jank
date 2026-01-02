@@ -4,11 +4,6 @@
 [__GLOBAL_FIRST__] u16 INTEL_VEND = $u16 0x8086;
 [__GLOBAL_FIRST__] u16 E1000_DEV = $u16 0x100E;
 
-[__GLOBAL_FIRST__] u8* MAC;
-[__GLOBAL_FIRST__] u8* IPV4_ADDR;
-[__GLOBAL_FIRST__] u8* IPV4_SUBNET_MASK;
-[__GLOBAL_FIRST__] u8* IPV4_GATEWAY;
-
 [__GLOBAL_FIRST__] u8 EEPROM_EXISTS = $u8 0;
 [__GLOBAL_FIRST__] u64 MMIO_BASE = 0x0;
 [__GLOBAL_FIRST__] u8 E1000_IRQ = $u8 0;
@@ -121,29 +116,29 @@ struct E1000_TDESC {
 void e1000_init(u64 addr) {
     println("e1000_init() : beginning initializing NIC");
 
+    NetInterface* nic = $NetInterface* malloc(sizeof(NetInterface));
+    memset($void* nic, 0, sizeof(NetInterface));
+    nic->name = "eth0"; // temp name for now
+
     e1000_pci_setup(addr);
-    e1000_get_mac_address();
+    e1000_get_mac_address(nic->mac_address);
     e1000_startup();
     e1000_init_rx();
     e1000_init_tx();
+
+    net_interfaces.push_back(nic);
+    CURRENT_INTERFACE = nic;
 
     println("e1000_init() : finished initializing NIC");
 
     {
         // testing
-        IPV4_ADDR = $u8* malloc(sizeof(u8) * $u64 4);
-        IPV4_ADDR[0] = $u8 10;
-        IPV4_ADDR[1] = $u8 0;
-        IPV4_ADDR[2] = $u8 2;
-        IPV4_ADDR[3] = $u8 15;
+        CURRENT_INTERFACE->ip_address = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 15 << 0);
+        CURRENT_INTERFACE->gateway_ip = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 2 << 0);
 
-        IPV4_GATEWAY = $u8* malloc(sizeof(u8) * $u64 4);
-        IPV4_GATEWAY[0] = $u8 10;
-        IPV4_GATEWAY[1] = $u8 0;
-        IPV4_GATEWAY[2] = $u8 2;
-        IPV4_GATEWAY[3] = $u8 2;
-        
-        send_arp_request(IPV4_GATEWAY);
+        dump_network_interface(CURRENT_INTERFACE);
+
+        send_arp_request(CURRENT_INTERFACE->gateway_ip);
         e1000_recieve_poll();
     }
 }
@@ -219,7 +214,8 @@ void e1000_pci_setup(u64 addr) {
     println("e1000_pci_setup() : finished PCI setup");
 }
 
-void e1000_get_mac_address() {
+// will write 6 bytes to mac
+void e1000_get_mac_address(u8[6]& mac) {
     println("e1000_get_mac_address() : attempting to read MAC from NIC EEPROM");
 
     // check if eeprom exists
@@ -230,23 +226,40 @@ void e1000_get_mac_address() {
     }
 
     // read EEPROM for MAC address
-    MAC = $u8* malloc(sizeof(u8) * $u64 6);
     u16 temp = $u16 0x0;
     i32 mac_idx = 0;
     for(i32 i = 0; i < 3; i++) {
         temp = e1000_eeprom_read($u8 i);
-        MAC[mac_idx++] = $u8 (temp & $u16 0xFF);
-        MAC[mac_idx++] = $u8 (temp >> $u16 8);
+        mac[mac_idx++] = $u8 (temp & $u16 0xFF);
+        mac[mac_idx++] = $u8 (temp >> $u16 8);
     }
 
     print("init_e1000() : nic MAC address is ");
     print("[");
-    for(i32 i = 0; i < 6; i++) {
-        print_hex(MAC[i]); 
-        if(i < 5) print(":");
-    }
+    // for(i32 i = 0; i < 6; i++) {
+    //     print_hex(mac[i]); 
+    //     if(i < 5) print(":");
+    // }
+    print_mac_addr(mac);
     print("]");
     println("");
+    // MAC = $u8* malloc(sizeof(u8) * $u64 6);
+    // u16 temp = $u16 0x0;
+    // i32 mac_idx = 0;
+    // for(i32 i = 0; i < 3; i++) {
+    //     temp = e1000_eeprom_read($u8 i);
+    //     MAC[mac_idx++] = $u8 (temp & $u16 0xFF);
+    //     MAC[mac_idx++] = $u8 (temp >> $u16 8);
+    // }
+
+    // print("init_e1000() : nic MAC address is ");
+    // print("[");
+    // for(i32 i = 0; i < 6; i++) {
+    //     print_hex(MAC[i]); 
+    //     if(i < 5) print(":");
+    // }
+    // print("]");
+    // println("");
 }
 
 void e1000_startup() {
