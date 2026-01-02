@@ -80,6 +80,10 @@ void ipv4_handle(IPv4Header* ip) {
 }
 
 void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
+    print("ipv4_send_packet() : sending packet to: ");
+    print_ipv4_addr(dst_ip);
+    println("");
+    
     u64 ipv4_packet_len = sizeof(IPv4Header) + $u64 payload_len;
 
     u64 ethernet_frame_len = sizeof(EthernetHeader) + ipv4_packet_len;
@@ -100,8 +104,8 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     ip->flags_fragment = $u16 0;
     ip->ttl = IPv4_DEFAULT_TTL;
     ip->protocol = protocol;
-    ip->src_ip = CURRENT_INTERFACE->ip_address;
-    ip->dst_ip = dst_ip;
+    ip->src_ip = cpu_to_be(CURRENT_INTERFACE->ip_address);
+    ip->dst_ip = cpu_to_be(dst_ip);
 
     ip->header_checksum = $u16 0;
     ip->header_checksum = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
