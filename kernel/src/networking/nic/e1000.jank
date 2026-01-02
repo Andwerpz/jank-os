@@ -126,6 +126,8 @@ void e1000_init(u64 addr) {
     e1000_init_rx();
     e1000_init_tx();
 
+    nic->send = #<e1000_send(void*, u16)>;
+
     net_interfaces.push_back(nic);
     CURRENT_INTERFACE = nic;
 

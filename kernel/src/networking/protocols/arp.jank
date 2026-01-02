@@ -71,7 +71,7 @@ void arp_handle(ARPHeader* arp) {
             set_mac(arp_reply->target_mac, arp->sender_mac);
             arp_reply->target_ip = arp->sender_ip;
 
-            e1000_send(buffer, $u16 size);
+            CURRENT_INTERFACE->send#(buffer, $u16 size);
             
             free(buffer, size);
         } else {
@@ -119,7 +119,7 @@ void send_arp_request(u32 target_ip) {
     arp->target_ip = cpu_to_be(target_ip);
 
     // send
-    e1000_send(buffer, $u16 size);
+    CURRENT_INTERFACE->send#(buffer, $u16 size);
     
     free(buffer, size);
 }

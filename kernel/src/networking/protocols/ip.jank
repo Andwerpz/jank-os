@@ -128,6 +128,6 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
         return;
     }
 
-    e1000_send(buffer, $u16 ethernet_frame_len);
+    CURRENT_INTERFACE->send#(buffer, $u16 ethernet_frame_len);
     free(buffer, ethernet_frame_len);
 }

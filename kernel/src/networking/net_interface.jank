@@ -13,6 +13,7 @@ struct NetInterface {
     u32 gateway_ip;
 
     // driver abstractions
+    fn<void(void*, u16)> send;
 }
 
 i32 mac_address_is_equal(u8[6]& mac1, u8[6]& mac2) {
