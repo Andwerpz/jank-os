@@ -3,6 +3,13 @@
 [__GLOBAL_FIRST__] u16 ARP_OPCODE_REQUEST       = $u16 0x0001;
 [__GLOBAL_FIRST__] u16 ARP_OPCODE_REPLY         = $u16 0x0002;
 
+vector<ARPEntry*> arp_entries;
+
+struct ARPEntry {
+    u32     ip;
+    u8[6]   mac;
+}
+
 struct ARPHeader {
     u16     hw_type;        // Hardware Type
     u16     proto_type;     // Protocol Type
@@ -64,7 +71,7 @@ void arp_handle(ARPHeader* arp) {
             set_mac(arp_reply->target_mac, arp->sender_mac);
             arp_reply->target_ip = arp->sender_ip;
 
-            e1000_send_packet(buffer, $u16 size);
+            e1000_send(buffer, $u16 size);
             
             free(buffer, size);
         } else {
@@ -112,7 +119,41 @@ void send_arp_request(u32 target_ip) {
     arp->target_ip = cpu_to_be(target_ip);
 
     // send
-    e1000_send_packet(buffer, $u16 size);
+    e1000_send(buffer, $u16 size);
     
     free(buffer, size);
+}
+
+void arp_update(u32 ip, u8[6]& mac) {
+    for(u64 i = 0x0; i < arp_entries.size(); i++) {
+        if(arp_entries[i]->ip == ip) {
+            set_mac(mac, arp_entries[i]->mac);
+            return;
+        }
+    }
+
+    ARPEntry* arp_entry = $ARPEntry* malloc(sizeof(ARPEntry));
+    arp_entry->ip = ip;
+    set_mac(arp_entry->mac, mac);
+    arp_entries.push_back(arp_entry);
+}
+
+i32 arp_lookup(u32 ip, u8[6]& mac) {
+    for(u64 i = 0x0; i < arp_entries.size(); i++) {
+        if(arp_entries[i]->ip == ip) {
+            set_mac(mac, arp_entries[i]->mac);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void arp_table_dump() {
+    println("Current ARP Table:");
+    for(u64 i = 0x0; i < arp_entries.size(); i++) {
+        print_ipv4_addr(arp_entries[i]->ip);
+        print(" - ");
+        print_mac_addr(arp_entries[i]->mac);
+        println("");
+    }
 }

@@ -19,7 +19,10 @@ void ethernet_handle_packet(u8* buffer, u16 length) {
 
     if(type == ETHERNET_TYPE_ARP) {
         ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
+        // snoop for free addresses for free!!!
+        arp_update(be_to_cpu(arp->sender_ip), arp->sender_mac);
         arp_handle(arp);
+        arp_table_dump();
 
     } else if(type == ETHERNET_TYPE_IPV4) {
         IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
