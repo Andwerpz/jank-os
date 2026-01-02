@@ -432,7 +432,7 @@ void e1000_init_tx() {
 
 // hardware moves the head and software writes to tail
 // hardware will act when head != tail, otherwise it sleeps
-void e1000_send_packet(void* data, u16 len) {
+void e1000_send(void* data, u16 len) {
     // get tail index from hardware
     u32* tdt_ptr = $u32* (MMIO_BASE + $u64 REG_TDT);
     u32 tx_idx = *tdt_ptr & TDT_TDT;
