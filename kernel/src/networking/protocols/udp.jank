@@ -1,0 +1,40 @@
+// https://en.wikipedia.org/wiki/User_Datagram_Protocol#UDP_datagram_structure
+
+struct UDPHeader {
+    u16 src_port;
+    u16 dst_port;
+    u16 length;
+    u16 checksum;
+}
+
+struct UDPPseudoHeader {
+    u32 src_ip;
+    u32 dst_ip;
+    u8 zeroes;
+    u8 protocol;
+    u16 udp_length;
+}
+
+void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
+    u16 src_port = be_to_cpu(udp->src_port);
+    u16 dst_port = be_to_cpu(udp->dst_port);
+    u16 length   = be_to_cpu(udp->length);
+
+    if(length < $u16 sizeof(UDPHeader)) {
+        println("udp_handle() : udp length shorter than header");
+        return;
+    }
+
+    void* payload = $void* ($u64 udp + sizeof(UDPHeader));
+    u16 payload_len = length - $u16 sizeof(UDPHeader);
+
+    println("udp_handle() : recieved udp");
+    print("Destination Port: ");
+    println($u64 dst_port);
+    print("Payload: ");
+    
+    for(u16 i = $u16 0; i < payload_len; i++) {
+        print(($u8*payload)[i]);
+    }
+    println("");
+}

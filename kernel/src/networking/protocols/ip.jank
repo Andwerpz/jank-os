@@ -72,6 +72,8 @@ void ipv4_handle(IPv4Header* ip) {
         println("ipv4_handle() : TCP packet recieved");
     } else if(ip->protocol == IPv4_PROTOCOL_UDP) {
         println("ipv4_handle() : UDP packet recieved");
+        UDPHeader* udp = $UDPHeader* payload;
+        udp_handle(udp, payload_size, ip->src_ip);
     } else {
         print("ipv4_handle() : unknown protocol ");
         print_hex(ip->protocol);
@@ -83,7 +85,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     print("ipv4_send_packet() : sending packet to: ");
     print_ipv4_addr(dst_ip);
     println("");
-    
+
     u64 ipv4_packet_len = sizeof(IPv4Header) + $u64 payload_len;
 
     u64 ethernet_frame_len = sizeof(EthernetHeader) + ipv4_packet_len;
