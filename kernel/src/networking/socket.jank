@@ -1,0 +1,102 @@
+// https://man7.org/linux/man-pages/man2/socket.2.html
+// https://man7.org/linux/man-pages/man7/address_families.7.html
+
+[__GLOBAL_FIRST__] file_ops* FILE_OPS_SOCKET;
+
+[__GLOBAL_FIRST__] i32 AF_INET = 2;
+
+[__GLOBAL_FIRST__] i32 SOCK_STREAM  = 1; // TCP
+[__GLOBAL_FIRST__] i32 SOCK_DGRAM   = 2; // UDP
+[__GLOBAL_FIRST__] i32 SOCK_RAW     = 3;
+
+[__GLOBAL_FIRST__] i32 IPPROTO_ICMP = 1;
+[__GLOBAL_FIRST__] i32 IPPROTO_TCP  = 6;
+[__GLOBAL_FIRST__] i32 IPPROTO_UDP  = 17;
+
+struct sockaddr {
+
+}
+
+struct socket {
+    i32 domain;
+    i32 type;
+    i32 protocol;
+
+    i32 state;
+    u32 local_addr;
+    u32 remote_addr;
+    u16 local_port;
+    u16 remote_port;
+
+    deque<u8> rx_queue;
+
+    void push_rx_data() {
+        
+    }
+}
+
+void init_socket_file_ops() {
+    FILE_OPS_SOCKET = $file_ops* malloc(sizeof(file_ops));
+    new (FILE_OPS_SOCKET) file_ops();
+    FILE_OPS_SOCKET->op_read        = #<socket_read(file*, u8*, u64)>;
+    FILE_OPS_SOCKET->op_write       = #<socket_write(file*, u8*, u64)>;
+    FILE_OPS_SOCKET->op_lseek       = #<socket_lseek(file*, i64, i32)>;
+    FILE_OPS_SOCKET->op_getdents    = #<socket_getdents(file*, u8*, u64)>;
+    FILE_OPS_SOCKET->op_close       = #<socket_close(file*)>;
+    FILE_OPS_SOCKET->op_truncate    = #<socket_truncate(file*, u64)>;
+    FILE_OPS_SOCKET->op_fstat       = #<socket_fstat(file*, stat*)>;
+}
+
+i64 socket_read(file* f, u8* buf, u64 len) {
+    // TODO
+    socket* socket = $socket* f->resource_ptr;
+
+    return $i64 123;
+}
+
+i64 socket_write(file* f, u8* buf, u64 len) {
+    // TODO
+    socket* socket = $socket* f->resource_ptr;
+
+    return $i64 123;
+}
+
+i64 socket_lseek(file* f, i64 offset, i32 whence) {
+    // no seek in network
+    return $i64 -1;
+}
+
+i64 socket_getdents(file* f, u8* buf, u64 len) {
+    // socket is not a directory
+    return $i64 -1;
+}
+
+i32 socket_close(file* f) {
+    // TODO
+    socket* socket = $socket* f->resource_ptr;
+    socket->~();
+    free($void* socket, sizeof(socket));
+    return 123;
+}
+
+i32 socket_truncate(file* f, u64 len) {
+    // not make the sense for the socket
+    return -1;
+}
+
+i32 socket_fstat(file* f, stat* s) {
+    memset($void* s, 0, sizeof(stat));
+
+    s->st_dev = 0x0;
+    s->st_ino = 0x0;
+    s->st_nlink = 0x1;
+
+    s->st_mode = S_IFSOCK | $mode_t 0o666;
+
+    s->st_rdev = 0x0;
+    s->st_size = $i64 0x0;
+    s->st_blksize = $i64 PAGE_SIZE;
+    s->st_blocks = $i64 0x0;
+
+    return 0;
+}

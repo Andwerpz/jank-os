@@ -38,12 +38,14 @@
 #include "usb/bot.jank";
 #include "usb/scsi.jank";
 #include "networking/net_interface.jank";
+#include "networking/socket.jank";
 #include "networking/protocols/ethernet.jank";
 #include "networking/protocols/arp.jank";
 #include "networking/protocols/ip.jank";
 #include "networking/protocols/icmp.jank";
 #include "networking/protocols/udp.jank";
 #include "networking/protocols/dhcp.jank";
+#include "networking/protocols/tcp.jank";
 #include "networking/nic/e1000.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
