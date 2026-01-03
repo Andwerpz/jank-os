@@ -290,17 +290,20 @@ void usb_configure_device(USB_device* dev) {
             USB_endpoint* end = selected_endpoints[i];
             u32 dci = $u32 end->endpoint;
             u32 endpoint_type = end->endpoint_type;
+            u64 ep_ring_phys = $u64 xhci_get_slot_transfer_ring(dev->slot, dci);
             assert(dci > $u32 XHCI_EP0, "usb_configure_device() : DCI should not be EP0 or slot");
 
             xHCI_endpoint_ctx32* ep_ctx = $xHCI_endpoint_ctx32* ($u64 buf + $u64 32 * ($u64 dci + 0x1));
-            ep_ctx->ep_info1 |= $u32 3 << $u32 1;                   //max allowed consecutive errors = 3
-            ep_ctx->ep_info1 |= endpoint_type << $u32 3;            //endpoint type
-            ep_ctx->ep_info1 |= $u32 (end->max_packet_size & 0xFFFF) << $u32 16;
-            
-            u64 ep_ring_phys = $u64 xhci_get_slot_transfer_ring(dev->slot, dci);
-            assert(ep_ring_phys != 0x0, "usb_configure_device() : null ep ring");
-            ep_ctx->deque_ptr |= ep_ring_phys;                      //deque physical address
-            ep_ctx->deque_ptr |= XHCI_ENDPOINT_CTX_DCS;             //deque cycle state = 1
+            xhci_build_endpoint_ctx32(
+                ep_ctx,
+                $u32 3,                         // cerr
+                endpoint_type,                  // endpoint type
+                $u32 0,                         // max burst size
+                $u32 end->max_packet_size,      // max packet size
+                1,                              // DCS
+                ep_ring_phys,                   // transfer ring pointer
+                $u32 8                          // average TRB length
+            );
         }
 
         //configure endpoints
