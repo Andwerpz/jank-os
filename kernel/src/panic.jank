@@ -1,5 +1,6 @@
 
 void panic(u8* msg) {
+    enable_vga_print();
     print("panic : ");
     print(msg);
     print("\n");

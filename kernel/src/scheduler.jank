@@ -342,6 +342,9 @@ void init_scheduler() {
     //initialize init process
     create_process(new string("/bin/sys/init"));
 
+    //disable printing to screen 
+    disable_vga_print();
+
     //point %rsp to top of kernel stack
     asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
 
