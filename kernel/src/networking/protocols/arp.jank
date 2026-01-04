@@ -85,6 +85,11 @@ void arp_handle(ARPHeader* arp) {
 }
 
 void send_arp_request(u32 target_ip) {
+    if(net_interfaces.size() == 0x0) {
+        println("send_arp_request() : no network interfaces initialized, not sending");
+        return;
+    }
+
     println("send_arp_request() : sending arp packet");
 
     u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);

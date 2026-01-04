@@ -87,6 +87,11 @@ void ipv4_handle(IPv4Header* ip) {
 }
 
 void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
+    if(net_interfaces.size() == 0x0) {
+        println("ipv4_send_packet() : no network interfaces initialized, not sending");
+        return;
+    }
+
     print("ipv4_send_packet() : sending IPv4 packet to: ");
     print_ipv4_addr(dst_ip);
     println("");

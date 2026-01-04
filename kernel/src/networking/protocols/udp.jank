@@ -35,6 +35,11 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
 }
 
 void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 payload_len) {
+    if(net_interfaces.size() == 0x0) {
+        println("udp_send_packet() : no network interfaces initialized, not sending");
+        return;
+    }
+
     print("udp_send_packet() : sending UDP packet to: ");
     print_ipv4_addr(dst_ip);
     println("");

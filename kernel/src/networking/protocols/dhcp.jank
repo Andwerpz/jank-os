@@ -215,6 +215,11 @@ void dhcp_handle_offer(DHCPHeader* dhcp, u16 len) {
 }
 
 void dhcp_send_request(u32 offered_ip, u32 server_ip) {
+    if(net_interfaces.size() == 0x0) {
+        println("dhcp_send_request() : no network interfaces initialized, not sending");
+        return;
+    }
+
     println("dhcp_send_request() : sending DHCP request");
 
     u64 total_len = sizeof(DHCPHeader) + sizeof(DHCPRequestOptions);
@@ -268,6 +273,11 @@ void dhcp_send_request(u32 offered_ip, u32 server_ip) {
 }
 
 void dhcp_send_discover() {
+    if(net_interfaces.size() == 0x0) {
+        println("dhcp_send_discover() : no network interfaces initialized, not sending");
+        return;
+    }
+
     println("dhcp_send_discover() : sending DHCP discover");
 
     u64 total_len = sizeof(DHCPHeader) + sizeof(DHCPDiscoverOptions);

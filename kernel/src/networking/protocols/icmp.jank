@@ -31,6 +31,11 @@ void icmp_handle(ICMPHeader* icmp, u16 len, u32 src_ip) {
 }
 
 void icmp_send_request(u32 dst_ip, u16 id, u16 seq) {
+    if(net_interfaces.size() == 0x0) {
+        println("icmp_send_request() : no network interfaces initialized, not sending");
+        return;
+    }
+
     void* buffer = malloc(sizeof(ICMPHeader));
     memset(buffer, 0 , sizeof(ICMPHeader));
 
