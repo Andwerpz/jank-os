@@ -18,16 +18,6 @@
 [__GLOBAL_FIRST__] u16 PIC_SLAVE_COMMAND    = $u16 0x00a0;
 [__GLOBAL_FIRST__] u16 PIC_SLAVE_DATA       = $u16 0x00a1;
 
-[__GLOBAL_FIRST__] u8 PIC_EOI               = $u8 0x20;
-//  This is issued to the PIC chips at the end of an IRQ-based interrupt routine.
-// If the IRQ came from the Master PIC, it is sufficient to issue this command only to the Master PIC; however if the IRQ came from the Slave PIC, it is necessary to issue the command to both PIC chips.
-void pic_sendEOI(u8 irq) {
-    if(irq >= $u8 8) {
-        outb(PIC_SLAVE_COMMAND, PIC_EOI);
-    }
-    outb(PIC_MASTER_COMMAND, PIC_EOI);
-}
-
 // When you enter protected mode (or even before hand, if you're not using GRUB) the first command you will need to give the two PICs is the initialise command (code 0x11). This command makes the PIC wait for 3 extra "initialisation words" on the data port. These bytes give the PIC:
 // - Its vector offset on the IDT. (ICW2)
 // - Tell it how it is wired to master/slaves. (ICW3)
@@ -120,4 +110,8 @@ void IRQ_clear_mask(u8 IRQline) {
     }
     value = inb(port) & ~($u8 1 << IRQline);
     outb(port, value);
+}
+
+u64 IRQ_to_int_vec(u8 IRQline) {
+    return $u64 IRQline + $u64 ICW2_OFFSET_1;
 }
