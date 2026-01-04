@@ -7,6 +7,7 @@
 [__GLOBAL_FIRST__] u8 EEPROM_EXISTS = $u8 0;
 [__GLOBAL_FIRST__] u64 MMIO_BASE = 0x0;
 [__GLOBAL_FIRST__] u8 E1000_IRQ = $u8 0;
+[__GLOBAL_FIRST__] u64 INTNO_E1000 = 0x0;
 
 [__GLOBAL_FIRST__] u64 E1000_NUM_RDESC = $u64 32;
 [__GLOBAL_FIRST__] E1000_RDESC* RDESC_RING;
@@ -24,7 +25,9 @@
 [__GLOBAL_FIRST__] u32 REG_FCAH = $u32 0x2C; // Flow Control Address High
 [__GLOBAL_FIRST__] u32 REG_FCT = $u32 0x30; // Flow Control Type
 [__GLOBAL_FIRST__] u32 REG_FCTTV = $u32 0x170; // Flow Control Transmit Timer Value
+[__GLOBAL_FIRST__] u32 REG_ICR = $u32 0xC0; // Interrupt Cause Read
 [__GLOBAL_FIRST__] u32 REG_IMS = $u32 0xD0; // Interrupt Mask Set/Read
+[__GLOBAL_FIRST__] u32 REG_IMC = $u32 0xD8; // Interrupt Mask Clear
 
 [__GLOBAL_FIRST__] u32 REG_RCTL = $u32 0x100; // Receive Control
 [__GLOBAL_FIRST__] u32 REG_RDBAL = $u32 0x2800; // Receive Descriptor Base Low
@@ -54,8 +57,9 @@
 [__GLOBAL_FIRST__] u32 EERD_DONE = $u32 0x10; // Read Done, set to 1b when done, set to 0b when in progess. software writes ignored.
 [__GLOBAL_FIRST__] u32 EERD_DATA = $u32 0xFFFF0000; // Read Data, Data returned from EEPROM read.
 
-// IMS bits
-// TO FILL IN WHEN I DO INTERRUPTS
+// ICR, IMS, IMC bits
+[__GLOBAL_FIRST__] u32 IMS_LSC = $u32 0x2; // Link Status Change, This bit is set each time the link status changes (either from up to down, or from down to up)
+[__GLOBAL_FIRST__] u32 IMS_RXT0 = $u32 0x80; // Receiver Timer Interrupt, Set when the receiver timer expires.
 
 // RCTL bits
 [__GLOBAL_FIRST__] u32 RCTL_EN = $u32 0x2; // Receiver Enable, The receiver is enabled when this bit is 1b. Writing this bit to 0b stops reception after receipt of any in-progress packets
@@ -140,8 +144,8 @@ void e1000_init(u64 addr) {
     println("e1000_init() : finished initializing NIC");
 
     {
-        dhcp_send_discover();
-        e1000_recieve_poll();
+        // dhcp_send_discover();
+        // e1000_recieve_poll();
     }
 }
 
@@ -213,6 +217,9 @@ void e1000_pci_setup(u64 addr) {
     println("");
     IRQ_clear_mask(E1000_IRQ);
 
+    // convert the irq to int vec
+    INTNO_E1000 = IRQ_to_int_vec(E1000_IRQ);
+
     println("e1000_pci_setup() : finished PCI setup");
 }
 
@@ -278,9 +285,24 @@ void e1000_startup() {
         *mta_ptr = $u32 0;
     }
 
+    // register the interrupt vector
+    idt_set_entry($u64 INTNO_E1000, $u64 @network_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
+
+    // register the pic bit
+    IRQ_clear_mask(E1000_IRQ);
+
+    // disable all interrupts
+    u32* imc_ptr = $u32* (MMIO_BASE + $u64 REG_IMC);
+    *imc_ptr = $u32 0xFFFF;
+
+    // clear pending interrupts
+    u32* icr_ptr = $u32* (MMIO_BASE + $u64 REG_ICR);
+    u32 dummy = *icr_ptr;
+
     // configure Interrupt Mask
     u32* ims_ptr = $u32* (MMIO_BASE + $u64 REG_IMS);
-    // DO THIS LATER!!!1!!
+    u32 ims = IMS_LSC | IMS_RXT0;
+    *ims_ptr = ims;
 
     println("e1000_startup() : finished general intialization");
 }
@@ -464,4 +486,38 @@ void e1000_recieve_poll() {
             // sent = 1;
         }
     }
+}
+
+void e1000_handle_receive() {
+    println("e1000_handle_receive() : handling packet receive");
+    u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
+
+    while((RDESC_RING[CURR_RDESC].status & RDESC_STATUS_DD) != $u8 0) {
+        println("e1000_handle_receive() : spinning");
+
+        u16 len = RDESC_RING[CURR_RDESC].length;
+        u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
+
+        ethernet_handle_packet(buffer, len);
+
+        RDESC_RING[CURR_RDESC].status = $u8 0;
+        *rdt_ptr = $u32 CURR_RDESC;
+        CURR_RDESC = (CURR_RDESC + $u16 1) % $u16 E1000_NUM_RDESC;
+    }
+}
+
+void e1000_interrupt_handler(trapframe* tf) {
+    u32* icr_ptr = $u32* (MMIO_BASE + $u64 REG_ICR);
+    u32 status = *icr_ptr;
+
+    if(status & IMS_LSC) {
+        println("e1000_interrupt_handler() : link status changed");
+    }
+
+    if(status & IMS_RXT0) {
+        e1000_handle_receive();
+        println("e1000_interrupt_handler() : packet recieved");
+    }
+
+    scheduler(tf);
 }

@@ -275,6 +275,7 @@ i32 main() {
 
     //tests();    
 
+    dhcp_send_discover();
     init_scheduler();
 
     //shouldn't get here
