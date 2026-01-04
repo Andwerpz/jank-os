@@ -477,13 +477,13 @@ void init_mcfg(MCFG* mcfg) {
                             init_xhci(addr);
                         }
                         else if(progif == $u8 0x20) {
-                            println("found EHCI controller");
+                            panic("found EHCI controller");
                         }
                         else if(progif == $u8 0x10) {
-                            println("found OHCI controller");
+                            panic("found OHCI controller");
                         }
                         else if(progif == $u8 0x00) {
-                            println("found UHCI controller");
+                            panic("found UHCI controller");
                         }
                     }
                 }

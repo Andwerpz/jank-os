@@ -12,6 +12,7 @@ user/bin/*
 *.work.fd
 *.EFI
 *.BIN
+tmp/*
 
 bootloader/uefi/build/*
 
