@@ -367,4 +367,11 @@ void println(T a, U b, V c, W d) {
     print("\n");
 }
 
+void print_hex(u8 x) {
+    u8* hex_digits = "0123456789abcdef";
+    u8 high = (x >> $u8 4) & $u8 0x0F;
+    u8 low = x & $u8 0x0F;
 
+    print(hex_digits[high]);
+    print(hex_digits[low]);
+}

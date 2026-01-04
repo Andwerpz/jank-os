@@ -1,0 +1,36 @@
+// https://en.wikipedia.org/wiki/Ethernet_frame#Ethernet_II
+// https://en.wikipedia.org/wiki/EtherType#Values
+
+[__GLOBAL_FIRST__] u16 ETHERNET_TYPE_IPV4   = $u16 0x0800; // Internet Protocol version 4 (IPv4) 
+[__GLOBAL_FIRST__] u16 ETHERNET_TYPE_ARP    = $u16 0x0806; // Address Resolution Protocol (ARP)
+
+struct EthernetHeader {
+    u8[6]   dst;    // Destination MAC
+    u8[6]   src;    // Source MAC
+    u16     type;   // Protocol Type
+}
+
+void ethernet_handle_packet(u8* buffer, u16 length) {
+    if($u64 length < sizeof(EthernetHeader)) return;
+
+    EthernetHeader* eth = $EthernetHeader* buffer;
+
+    u16 type = be_to_cpu(eth->type);
+
+    if(type == ETHERNET_TYPE_ARP) {
+        ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
+        // snoop for free addresses for free!!!
+        arp_update(be_to_cpu(arp->sender_ip), arp->sender_mac);
+        arp_handle(arp);
+        arp_table_dump();
+
+    } else if(type == ETHERNET_TYPE_IPV4) {
+        IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
+        ipv4_handle(ip);
+
+    } else {
+        print("ethernet_handle_packet() : unknown packet type: ");
+        print($void* ($u64 type));
+        println("");
+    }
+}

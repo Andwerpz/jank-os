@@ -17,7 +17,7 @@ drive: user
 boot: drive 
 	@mkdir -p build
 	@cp /usr/share/OVMF/OVMF_VARS_4M.fd ./build/OVMF_VARS_4M.work.fd
-	qemu-system-x86_64 \
+	sudo qemu-system-x86_64 \
 		-machine q35 \
 		-m 2G \
 		-no-reboot \
@@ -27,9 +27,10 @@ boot: drive
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-device ich9-ahci,id=ahci \
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
-		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 
-
-# boot from emulated USB, emulated xHCI
+		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
+		-netdev user,id=net0,hostfwd=udp::1234-:1234 -device e1000,netdev=net0,mac=52:54:00:12:34:56 \
+		-object filter-dump,id=f1,netdev=net0,file=jankos.pcap
+# 		-d int
 .PHONY: boot_usb
 boot_usb: drive
 	@mkdir -p build

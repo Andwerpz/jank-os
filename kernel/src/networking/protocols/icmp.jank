@@ -1,0 +1,51 @@
+// https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol#Header
+// https://wiki.osdev.org/Internet_Control_Message_Protocol
+// https://en.wikipedia.org/wiki/Ping_(networking_utility)
+
+[__GLOBAL_FIRST__] u8 ICMP_CTRL_MSG_REPLY_TYPE = $u8 0;
+[__GLOBAL_FIRST__] u8 ICMP_CTRL_MSG_REPLY_CODE = $u8 0;
+
+[__GLOBAL_FIRST__] u8 ICMP_CTRL_MSG_REQUEST_TYPE = $u8 8;
+[__GLOBAL_FIRST__] u8 ICMP_CTRL_MSG_REQUEST_CODE = $u8 0;
+
+// support for ping, not anything else.
+struct ICMPHeader {
+    u8  type;
+    u8  code;
+    u16 checksum;
+    u16 identifier;
+    u16 seq_num;
+}
+
+void icmp_handle(ICMPHeader* icmp, u16 len, u32 src_ip) {
+    if(icmp->type == ICMP_CTRL_MSG_REQUEST_TYPE) {
+        println("icmp_handle() : recieved icmp request, attempting to reply");
+
+        icmp->type = ICMP_CTRL_MSG_REPLY_TYPE;
+
+        icmp->checksum = $u16 0;
+        icmp->checksum = ones_comp_checksum($void* icmp, $u64 len, $u64 1);
+
+        ipv4_send_packet(src_ip, IPv4_PROTOCOL_ICMP, $void* icmp, len);
+    }
+}
+
+void icmp_send_request(u32 dst_ip, u16 id, u16 seq) {
+    void* buffer = malloc(sizeof(ICMPHeader));
+    memset(buffer, 0 , sizeof(ICMPHeader));
+
+    ICMPHeader* icmp = $ICMPHeader* buffer;
+
+    icmp->type = ICMP_CTRL_MSG_REQUEST_TYPE;
+    icmp->code = ICMP_CTRL_MSG_REQUEST_CODE;
+    icmp->identifier = cpu_to_be(id);
+    icmp->seq_num = cpu_to_be(seq);
+
+    icmp->checksum = $u16 0;
+    icmp->checksum = ones_comp_checksum($void* icmp, sizeof(ICMPHeader), $u64 1);
+
+    println("icmp_send_request() : sending ICMP echo request");
+    ipv4_send_packet(dst_ip, IPv4_PROTOCOL_ICMP, buffer, $u16 sizeof(ICMPHeader));
+
+    free(buffer, sizeof(ICMPHeader));
+}

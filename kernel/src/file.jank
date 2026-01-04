@@ -4,10 +4,11 @@
 //multiple file descriptors can point towards the same file struct
 //the file struct holds metadata related to the file's current access mode by the user. 
 
-[__GLOBAL_FIRST__] u64 FILE_TYPE_SERIAL = 0x0;
-[__GLOBAL_FIRST__] u64 FILE_TYPE_VFS    = 0x1;
-[__GLOBAL_FIRST__] u64 FILE_TYPE_PIPE   = 0x2;
-[__GLOBAL_FIRST__] u64 FILE_TYPE_TTY    = 0x3;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_SERIAL = 0x1;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_VFS    = 0x2;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_PIPE   = 0x3;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_TTY    = 0x4;
+[__GLOBAL_FIRST__] u64 FILE_TYPE_SOCKET = 0x5;
 
 //file descriptor position should be managed internally by these file_ops. 
 //position should just be some opaque thing that each fd uses to keep track of where they are. 
@@ -55,6 +56,20 @@ file* file_create_serial(u64 flags) {
     fd->type = FILE_TYPE_SERIAL;
     fd->resource_ptr = nullptr;
     fd->ops = FILE_OPS_SERIAL;
+    fd->position = 0x0;
+    fd->flags = flags;
+    fd->refcount = 0x1;
+
+    return fd;
+}
+
+file* file_create_socket(u64 flags, socket* socket) {
+    file* fd = $file* malloc(sizeof(file));
+    new (fd) file();
+
+    fd->type = FILE_TYPE_SOCKET;
+    fd->resource_ptr = $void* socket;
+    fd->ops = FILE_OPS_SOCKET;
     fd->position = 0x0;
     fd->flags = flags;
     fd->refcount = 0x1;
@@ -167,4 +182,5 @@ void init_file() {
     init_pipe_file_ops();
     init_tty_file_ops();
     init_vfs_file_ops();
+    init_socket_file_ops();
 }

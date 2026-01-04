@@ -459,9 +459,17 @@ void init_mcfg(MCFG* mcfg) {
                     u32 vendor_device = ($u32* addr)[0];
                     if((vendor_device & $u32 0xFFFF) == $u32 0xFFFF) continue;  //no device here
 
+                    u16 vendor_id = $u16 (vendor_device & $u32 0xFFFF);
+                    u16 device_id = $u16 ((vendor_device & $u32 0xFFFF0000) >> $u32 16);
+
                     u8 class    = ($u8* addr)[0x0B];
                     u8 subclass = ($u8* addr)[0x0A];
                     u8 progif   = ($u8* addr)[0x09];
+
+                    if (vendor_id == INTEL_VEND && device_id == E1000_DEV) {
+                        // found intel e1000 nic
+                        e1000_init(addr);
+                    }
 
                     if(class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
                         if(progif == $u8 0x30) {

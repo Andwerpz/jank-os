@@ -11,65 +11,107 @@
 
 // IRQ0 : PIT
 // IRQ1 : usually keyboard?
+// IRQ2 : Cascade for slave
 
 [__GLOBAL_FIRST__] u16 PIC_MASTER_COMMAND   = $u16 0x0020;
 [__GLOBAL_FIRST__] u16 PIC_MASTER_DATA      = $u16 0x0021;
 [__GLOBAL_FIRST__] u16 PIC_SLAVE_COMMAND    = $u16 0x00a0;
 [__GLOBAL_FIRST__] u16 PIC_SLAVE_DATA       = $u16 0x00a1;
 
-[__GLOBAL_FIRST__] u8 PIC_EOI               = $u8 0x20;
+// When you enter protected mode (or even before hand, if you're not using GRUB) the first command you will need to give the two PICs is the initialise command (code 0x11). This command makes the PIC wait for 3 extra "initialisation words" on the data port. These bytes give the PIC:
+// - Its vector offset on the IDT. (ICW2)
+// - Tell it how it is wired to master/slaves. (ICW3)
+// - Gives additional information about the environment. (ICW4)
+[__GLOBAL_FIRST__] u8 PIC_INIT_CODE     = $u8 0x11;
 
-// https://wiki.osdev.org/Programmable_Interval_Timer
-// PIT (Programmable Interval Timer)
-// oscillates at roughly 1.193182 MHz
-// has 3 output channels, the useful one is channel 0 for generating timer interrupts. 
-// channel 0 is connected to PIC IRQ 0
+[__GLOBAL_FIRST__] u8 ICW1_ICW4         = $u8 0x01; // Indicates that ICW4 will be present
+[__GLOBAL_FIRST__] u8 ICW1_SINGLE       = $u8 0x02; // Single (cascade) mode
+[__GLOBAL_FIRST__] u8 ICW1_INTERVAL4    = $u8 0x04; // Call address interval 4 (8)
+[__GLOBAL_FIRST__] u8 ICW1_LEVEL        = $u8 0x08; // Level triggered (edge) mode
+[__GLOBAL_FIRST__] u8 ICW1_INIT         = $u8 0x10; // Initialization - required!
 
-[__GLOBAL_FIRST__] u16 PIT_CHANNEL0         = $u16 0x0040;
-[__GLOBAL_FIRST__] u16 PIT_COMMAND          = $u16 0x0043;
+[__GLOBAL_FIRST__] u8 ICW4_8086         = $u8 0x01; // 8086/88 (MCS-80/85) mode
+[__GLOBAL_FIRST__] u8 ICW4_AUTO         = $u8 0x02; // Auto (normal) EOI
+[__GLOBAL_FIRST__] u8 ICW4_BUF_SLAVE    = $u8 0x08; // Buffered mode/slave
+[__GLOBAL_FIRST__] u8 ICW4_BUF_MASTER   = $u8 0x0C; // Buffered mode/master
+[__GLOBAL_FIRST__] u8 ICW4_SFNM         = $u8 0x10; // Special fully nested (not)
+[__GLOBAL_FIRST__] u8 CASCADE_IRQ       = $u8 2; // Slave cascade IRQ
 
+// offset1 - vector offset for master PIC
+//     vectors on the master become offset1..offset1+7
+// offset2 - same for slave PIC: offset2..offset2+7
+[__GLOBAL_FIRST__] u8 ICW2_OFFSET_1     = $u8 0x20; // ICW2: Master PIC vector offset
+[__GLOBAL_FIRST__] u8 ICW2_OFFSET_2     = $u8 0x28; // ICW2: Slave PIC vector offset
+
+// for future li andrew, probably want to handle Spurious IRQs
 i32 init_pic() {
-    cout << "start init pic\n";
+    println("start init pic");
 
-    //initialize PIC (send signal 0x11)
-    //after this, both PICs will wait for 3 extra initialization bytes:
-    // - Its vector offset on the IDT. (ICW2)
-    // - Tell it how it is wired to master/slaves. (ICW3)
-    // - Gives additional information about the environment. (ICW4)
-    {
-        //initialize
-        outb(PIC_MASTER_COMMAND, $u8 0x11);
-        outb(PIC_SLAVE_COMMAND, $u8 0x11);
+    //initialize
+    outb(PIC_MASTER_COMMAND, PIC_INIT_CODE);
+    // io_wait();
+    outb(PIC_SLAVE_COMMAND, PIC_INIT_CODE);
+    // io_wait();
 
-        //ICW2
-        outb(PIC_MASTER_DATA, $u8 0x20);
-        outb(PIC_SLAVE_DATA, $u8 0x28);
+    //ICW2
+    outb(PIC_MASTER_DATA, ICW2_OFFSET_1);
+    // io_wait();
+    outb(PIC_SLAVE_DATA, ICW2_OFFSET_2);
+    // io_wait();
 
-        //ICW3
-        outb(PIC_MASTER_DATA, $u8 0x04);    //tell master there is slave pic at IRQ2
-        outb(PIC_SLAVE_DATA, $u8 0x02);     //tell slave its cascade identity
+    //ICW3
+    outb(PIC_MASTER_DATA, $u8 1 << CASCADE_IRQ); //tell master there is slave pic at IRQ2
+    // io_wait();
+    outb(PIC_SLAVE_DATA, CASCADE_IRQ); //tell slave its cascade identity
+    // io_wait();
 
-        //ICW4, have PICs use 8086 mode
-        outb(PIC_MASTER_DATA, $u8 0x01);
-        outb(PIC_SLAVE_DATA, $u8 0x01);
-    }
+    //ICW4, have PICs use 8086 mode
+    outb(PIC_MASTER_DATA, ICW4_8086);
+    // io_wait();
+    outb(PIC_SLAVE_DATA, ICW4_8086);
+    // io_wait();
 
-    //set PIC masks
-    //which IRQs are allowed to interrupt the CPU? (not set is allowed)
-    outb(PIC_MASTER_DATA, $u8 0b11111100);
+    // set initial PIC masks, only cascade line allowed 
+    // which IRQs are allowed to interrupt the CPU? (not set is allowed)
+    outb(PIC_MASTER_DATA, $u8 0b11111011);
     outb(PIC_SLAVE_DATA,  $u8 0b11111111);
 
-    //setup PIT
-    {
-        u64 divisor = $u64 (1193182 / 100); // 100 Hz
+    // Set masks here
+    IRQ_clear_mask($u8 0); // PIT
+    IRQ_clear_mask($u8 1); // keyboard
 
-        //channel 0, access mode: lobyte/hibyte, mode 3 (square wave)
-        outb(PIT_COMMAND, $u8 0b00110110);
-
-        outb(PIT_CHANNEL0, $u8 (divisor & 0xff));           //low byte
-        outb(PIT_CHANNEL0, $u8 ((divisor >> 0x8) & 0xff));  //high byte
-    }
-
-    cout << "done init pic\n";
+    println("done init pic");
     return 0;
+}
+
+void IRQ_set_mask(u8 IRQline) {
+    u16 port;
+    u8 value;
+
+    if(IRQline < $u8 8) {
+        port = PIC_MASTER_DATA;
+    } else {
+        port = PIC_SLAVE_DATA;
+        IRQline -= $u8 8;
+    }
+    value = inb(port) | ($u8 1 << IRQline);
+    outb(port, value);
+}
+
+void IRQ_clear_mask(u8 IRQline) {
+    u16 port;
+    u8 value;
+
+    if(IRQline < $u8 8) {
+        port = PIC_MASTER_DATA;
+    } else {
+        port = PIC_SLAVE_DATA;
+        IRQline -= $u8 8;
+    }
+    value = inb(port) & ~($u8 1 << IRQline);
+    outb(port, value);
+}
+
+u64 IRQ_to_int_vec(u8 IRQline) {
+    return $u64 IRQline + $u64 ICW2_OFFSET_1;
 }
