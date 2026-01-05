@@ -21,13 +21,19 @@ struct IDTEntry {
    u32 zero;            // reserved
 }
 
+//CPU interrupts : 0x00 - 0x1F
 [__GLOBAL_FIRST__] u64 INTNO_DIVIDE_ERROR       = 0x00;
 [__GLOBAL_FIRST__] u64 INTNO_INVALID_OPCODE     = 0x06;
 [__GLOBAL_FIRST__] u64 INTNO_INVALID_TSS        = 0x0A;
 [__GLOBAL_FIRST__] u64 INTNO_GENERAL_PROTECTION = 0x0D;
 [__GLOBAL_FIRST__] u64 INTNO_PAGE_FAULT         = 0x0E;
+
+//PIC interrupts : 0x20 - 0x2F
 [__GLOBAL_FIRST__] u64 INTNO_TIMER              = 0x20;
 [__GLOBAL_FIRST__] u64 INTNO_KEYBOARD           = 0x21;
+
+//Custom interrupts : 0x30 - ???
+[__GLOBAL_FIRST__] u64 INTNO_XHCI               = 0x30;
 
 i32 init_idt() {
     println("start init idt");
@@ -50,6 +56,7 @@ i32 init_idt() {
     idt_set_entry(INTNO_PAGE_FAULT, $u64 @page_fault_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_TRAP_GATE, idt);
     idt_set_entry(INTNO_TIMER, $u64 @timer_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
     idt_set_entry(INTNO_KEYBOARD, $u64 @keyboard_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
+    idt_set_entry(INTNO_XHCI, $u64 @xhci_event_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
 
     //flush changes
     idt_flush(idt_ptr);
@@ -79,6 +86,7 @@ void idt_flush(IDTPointer* ptr) {
 [__GLOBAL_FIRST__] extern u8 timer_interrupt_entry_stub;
 [__GLOBAL_FIRST__] extern u8 keyboard_interrupt_entry_stub;
 [__GLOBAL_FIRST__] extern u8 network_packet_receive_interrupt_entry_stub;
+[__GLOBAL_FIRST__] extern u8 xhci_event_interrupt_entry_stub;
 void interrupt_entry_stubs() {
     //we need to make sure these things are pushed onto stack before jumping to context handler
     // SS           : from user mode only
@@ -115,6 +123,12 @@ void interrupt_entry_stubs() {
     asm!("network_packet_receive_interrupt_entry_stub:");
     asm!("pushq $0");           // doesn't push error code
     asm!("pushq {INTNO_E1000}");
+    asm!("jmp interrupt_handler_entry");
+
+    //xhci event
+    asm!("xhci_event_interrupt_entry_stub:");
+    asm!("pushq $0");           // doesn't push error code
+    asm!("pushq {INTNO_XHCI}");
     asm!("jmp interrupt_handler_entry");
 
     //we should always go to handler
@@ -228,6 +242,7 @@ export void interrupt_handler_disambiguator(trapframe* tf, u64 trap_id, u64 erro
     if(trap_id == INTNO_TIMER) timer_interrupt_handler(tf);
     if(trap_id == INTNO_KEYBOARD) keyboard_interrupt_handler(tf);
     if(trap_id == INTNO_E1000) e1000_interrupt_handler(tf);
+    if(trap_id == INTNO_XHCI) xhci_interrupt_handler(tf);
     panic("interrupt_handler_disambiguator() : should not be here");
 }
 
@@ -301,5 +316,24 @@ void keyboard_interrupt_handler(trapframe* tf) {
     while(!ps2_poll_data(c)) {
         ps2_accept_char(c);
     }
+    scheduler(tf);
+}
+
+void xhci_interrupt_handler(trapframe* tf) {
+    println("xhci_interrupt_handler() : xhci interrupt");
+
+    //clear interrupt bits
+    xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[XHCI_INTR0]);
+    XHCI_OP_REGS->USBSTS |= XHCI_USBSTS_EINT;
+    intr->IMAN |= XHCI_IMAN_IP; 
+
+    //drain event ring
+    //only have INTR0 configured for now
+    xHCI_TRB* trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
+    while(xhci_poll_event(XHCI_INTR0, trb) == 0) {
+        xhci_handle_event(trb);
+    }   
+    free($void* trb, sizeof(xHCI_TRB));
+
     scheduler(tf);
 }

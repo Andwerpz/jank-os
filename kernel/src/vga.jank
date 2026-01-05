@@ -1,3 +1,12 @@
+//ways to improve speed of VGA
+// - reading from VGA is very slow (looking at the shift-up operation), should instead keep a parallel copy
+//   of the VGA buffer that we can do the shift up, then memcpy it into the VGA buffer
+// - can allow the CPU to more aggressively group memory operations by mapping the VGA memory as WC (write-combining)
+//   will need to set up the PAT to do this. 
+// - look into writing custom assembly for memcpy and memmove operations:
+//     rep movsq, rep movsd
+//     rep stosq, rep stosd
+
 [__GLOBAL_FIRST__] u32* FB_ADDR = $u32* 0xfffffffffc000000;
 
 [VGA] u64 FB_SCANLINE = $u64 bootinfo->fb_ppsl;

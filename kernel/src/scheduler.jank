@@ -84,6 +84,7 @@ pid_t current_process = $pid_t 0;
 //on success, returns a pointer to a process
 //on failure, returns nullptr
 process* find_process(pid_t pid) {
+    assert(pid != $pid_t 0, "find_process() : zero pid");
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
         if(all_processes[i]->pid != pid) continue;
@@ -98,6 +99,8 @@ process* find_process(pid_t pid) {
 //just removes process from scheduler
 //if it can't find the process, it panics
 void erase_process(pid_t pid) {
+    assert(pid != $pid_t 0, "erase_process() : zero pid");
+
     //remove from all_processes
     u64 ind = all_processes.size();
     for(u64 i = 0x0; i < all_processes.size(); i++){
@@ -110,6 +113,7 @@ void erase_process(pid_t pid) {
 }
 
 export process* get_cur_proc() {
+    assert(current_process != $pid_t 0, "get_cur_proc() : current_process is 0??");
     process* proc = find_process(get_cur_pid());
     assert(proc != nullptr, "get_cur_proc() : failed to find current process");
     return proc;
@@ -330,9 +334,37 @@ void iret_to_process(trapframe* tf) {
 
 //ends the current process's time slice, goes to the scheduler
 void yield() {
-    assert(irq_disable_count == 0x0, "yield() : interrupts should be enabled");
+    //just invoke the timer interrupt handler
     asm!("int $0x20");
 }
+
+//transitions the process from a runnable state to the BLOCKED state and yields to the scheduler
+//panics if the process isn't initially runnable
+void wait_on(process* proc, waitq* q) {
+    assert(proc->status == PROCESS_READY || proc->status == PROCESS_RUNNING,  "wait_on() : process must be runnable to wait");
+    waitq_add_proc(q, proc);
+    proc->status = PROCESS_BLOCKED;
+    yield();
+}
+
+//transitions the current process from a runnable state to the BLOCKED state and yields to the scheduler
+//panics if the process isn't initially runnable
+void wait_on(waitq* q) {
+    process* proc = get_cur_proc();
+    assert(proc->status == PROCESS_READY || proc->status == PROCESS_RUNNING,  "wait_on() : process must be runnable to wait");
+    waitq_add_proc(q, proc);
+    proc->status = PROCESS_BLOCKED;
+    yield();
+}
+
+//transitions the process from the BLOCKED state to the READY state
+//panics if the process isn't initially in the BLOCKED state
+void wake(process* proc) {
+    assert(proc->status == PROCESS_BLOCKED, "wake() : process should be blocked");
+    proc->status = PROCESS_READY;
+}
+
+[__GLOBAL_FIRST__] i32 SCHEDULER_STARTED = 0;
 
 //once we call this, the initial kernel startup phase has finished
 //this function should never return. 
@@ -342,8 +374,9 @@ void init_scheduler() {
     //initialize init process
     create_process(new string("/bin/sys/init"));
 
-    //disable printing to screen 
+    //get ready for scheduler
     disable_vga_print();
+    SCHEDULER_STARTED = 1;
 
     //point %rsp to top of kernel stack
     asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");

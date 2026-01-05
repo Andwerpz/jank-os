@@ -1,10 +1,9 @@
 
-[__GLOBAL_FIRST__] u64 PROCESS_NEW          = 0x0;
-[__GLOBAL_FIRST__] u64 PROCESS_READY        = 0x1;
-[__GLOBAL_FIRST__] u64 PROCESS_RUNNING      = 0x2;
-[__GLOBAL_FIRST__] u64 PROCESS_ZOMBIE       = 0x3;
-[__GLOBAL_FIRST__] u64 PROCESS_IDLE         = 0x4;
-[__GLOBAL_FIRST__] u64 PROCESS_BLOCKED      = 0x5;
+[__GLOBAL_FIRST__] u64 PROCESS_NEW          = 0x0;  // process hasn't completely been initialized, will transition to PROCESS_RUNNING when completely initialized
+[__GLOBAL_FIRST__] u64 PROCESS_READY        = 0x1;  // process is runnable, just not currrently running
+[__GLOBAL_FIRST__] u64 PROCESS_RUNNING      = 0x2;  // process is currently running
+[__GLOBAL_FIRST__] u64 PROCESS_ZOMBIE       = 0x3;  // process has exited, but hasn't fully cleaned up after itself
+[__GLOBAL_FIRST__] u64 PROCESS_BLOCKED      = 0x4;  // process is not runnable, is waiting on something to complete before becoming PROCESS_READY
 
 [__GLOBAL_FIRST__] u64 PROCESS_MAX_FD = $u64 64;
 struct process {

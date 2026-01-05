@@ -1,0 +1,23 @@
+
+struct waitq {
+    vector<process*> waiters;
+}
+
+void waitq_add_proc(waitq* q, process* proc) {
+    q->waiters.push_back(proc);
+}
+
+void waitq_wake_one(waitq* q) {
+    if(q->waiters.size() == 0x0) return;    //nothing to wake
+    process* proc = q->waiters[q->waiters.size() - 0x1];
+    q->waiters.erase(q->waiters.size() - 0x1);
+    wake(proc);
+}
+
+void waitq_wake_all(waitq* q) {
+    for(u64 i = 0x0; i < q->waiters.size(); i++) {
+        process* proc = q->waiters[i];
+        wake(proc);
+    }
+    q->waiters.clear();
+}

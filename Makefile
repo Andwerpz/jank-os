@@ -40,7 +40,7 @@ boot_usb: drive
 		-m 2G \
 		-no-reboot \
 		-serial stdio \
-		-device qemu-xhci,id=xhci \
+		-device nec-usb-xhci,id=xhci \
 		-device usb-hub,bus=xhci.0,id=hub0 \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \

@@ -1,0 +1,11 @@
+// Advanced Programmable Interrupt Controller (APIC)
+// updated version of the PIC
+// https://wiki.osdev.org/APIC
+
+void init_apic() {
+    println("start init apic");
+
+
+
+    println("done init apic");
+}
