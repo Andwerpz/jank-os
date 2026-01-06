@@ -164,6 +164,7 @@ struct USB_transfer {
     u32 endpoint;
     u32 interrupter;
     u64 trb_ptr;
+    u64 amt;
 
     i32 is_done;
     i64 status; 
@@ -897,7 +898,6 @@ u64 usb_device_get_descriptor_class(USB_device* dev, u32 desc_type, u32 desc_ind
 
 void usb_handle_transfer_event(xHCI_TRB* trb) {
     assert(xhci_trb_type(trb) == XHCI_TRB_TYPE_TRANSFER_EVENT, "usb_handle_transfer_event() : trb is not transfer event trb");
-    println("usb_handle_transfer_event() : here");
 
     //find transfer
     u32 slot = xhci_event_trb_slot_id(trb);
@@ -907,6 +907,14 @@ void usb_handle_transfer_event(xHCI_TRB* trb) {
     assert(transfer->is_done == 0, "usb_handle_transfer_event() : transfer already done");
     
     //populate transfer status
+    if(xhci_event_trb_completion_code(trb) == XHCI_COMPLETION_CODE_SUCCESS) {
+        //it gives you the part that wasn't transfered
+        transfer->status = $i64 (transfer->amt - $u64 trb->status & 0x00FFFFFF);
+    }
+    else {
+        // TODO consider returning something more informative
+        transfer->status = $i64 -1;
+    }
 
     //mark transfer as done
     transfer->is_done = 1;
@@ -940,7 +948,7 @@ USB_transfer* usb_find_transfer(u32 slot, u64 trb_ptr) {
 
 void usb_transfer_dec_refcnt(USB_transfer* transfer) {
     assert(transfer != nullptr, "usb_transfer_dec_refcnt() : null transfer");
-    assert(transfer->refcnt == 0x0, "usb_transfer_dec_refcnt() : zero refcnt");
+    assert(transfer->refcnt != 0x0, "usb_transfer_dec_refcnt() : zero refcnt");
     transfer->refcnt --;
     if(transfer->refcnt == 0x0) {
         //dealloc the transfer
@@ -994,10 +1002,6 @@ void usb_dealloc_transfer(USB_transfer* transfer) {
 i64 usb_bulk_out(USB_device* dev, USB_endpoint* end, void* buf, u64 amt) {
     assert(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_OUT, "usb_bulk_out() : wrong endpoint type");
     if(SCHEDULER_STARTED) { 
-        println("usb_bulk_out() : async transfer : ", get_cur_pid());
-        println("usb_bulk_out() : USBSTS : ", $void* $u64 XHCI_OP_REGS->USBSTS);
-        println("usb_bulk_out() : IMAN : ", $void* $u64 XHCI_INTERRUPTERS[XHCI_INTR0].IMAN);
-
         //allocate USB transfer struct
         USB_transfer* transfer = usb_alloc_transfer();
         usb_transfer_inc_refcnt(transfer);
@@ -1005,26 +1009,18 @@ i64 usb_bulk_out(USB_device* dev, USB_endpoint* end, void* buf, u64 amt) {
         transfer->slot = dev->slot;
         transfer->endpoint = end->endpoint;
         transfer->interrupter = XHCI_INTR0;
+        transfer->amt = amt;
         
         //initiate transfer
         u64 trb_ptr = xhci_initiate_bulk_transfer(dev->slot, end->endpoint, XHCI_INTR0, buf, amt);
         transfer->trb_ptr = trb_ptr;
 
-        for(u64 i = 0x0; i < $u64 10000000; i++) {
-            // spin
-        }
-        println("usb_bulk_out() : USBSTS : ", $void* $u64 XHCI_OP_REGS->USBSTS);
-        println("usb_bulk_out() : IMAN : ", $void* $u64 XHCI_INTERRUPTERS[XHCI_INTR0].IMAN);
-
         //block process until transfer is done
         process* process = get_cur_proc();
         while(1) {
-            println("usb_bulk_out() : block loop");
             if(transfer->is_done) break;
             wait_on(@(transfer->wait_queue));
         }
-
-        println("usb_bulk_out() : after block loop");
 
         //handle transfer
         i64 status = transfer->status;
@@ -1046,8 +1042,6 @@ i64 usb_bulk_out(USB_device* dev, USB_endpoint* end, void* buf, u64 amt) {
 i64 usb_bulk_in(USB_device* dev, USB_endpoint* end, void* buf, u64 amt) {
     assert(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_IN, "usb_bulk_in() : wrong endpoint type");
     if(SCHEDULER_STARTED) {
-        println("usb_bulk_in() : async transfer : ", get_cur_pid());
-
         //allocate USB transfer struct
         USB_transfer* transfer = usb_alloc_transfer();
         usb_transfer_inc_refcnt(transfer);
@@ -1055,6 +1049,7 @@ i64 usb_bulk_in(USB_device* dev, USB_endpoint* end, void* buf, u64 amt) {
         transfer->slot = dev->slot;
         transfer->endpoint = end->endpoint;
         transfer->interrupter = XHCI_INTR0;
+        transfer->amt = amt;
         
         //initiate transfer
         u64 trb_ptr = xhci_initiate_bulk_transfer(dev->slot, end->endpoint, XHCI_INTR0, buf, amt);

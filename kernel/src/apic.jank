@@ -2,10 +2,36 @@
 // updated version of the PIC
 // https://wiki.osdev.org/APIC
 
+[__GLOBAL_FIRST__] u32 IA32_APIC_BASE_MSR = $u32 0x1B;
+[__GLOBAL_FIRST__] u64 IA32_APIC_BASE_MSR_ENABLE = 0x800;
+
+//APIC is usually at a fixed physical address per the spec.
+[__GLOBAL_FIRST__] u64 APIC_BASE            = 0xFEE00000;
+[__GLOBAL_FIRST__] u64 APIC_REGISTER_EOI    = 0x00B0;       //write 0 to this register to do LAPIC EOI  
+[__GLOBAL_FIRST__] u64 APIC_REGISTER_SIVR   = 0x00F0;       //Spurious Interrupt Vector Register : 
+
 void init_apic() {
     println("start init apic");
 
+    //map APIC page as UC
+    pagetable_t pt = pt_get_current();
+    pt_map_page(pt, $void* APIC_BASE, $void* APIC_BASE, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
 
+    //enable APIC
+    wrmsr(IA32_APIC_BASE_MSR, rdmsr(IA32_APIC_BASE_MSR) | IA32_APIC_BASE_MSR_ENABLE);
+
+    //set SIVR to start recieving interrupts
+    apic_write_reg(APIC_REGISTER_SIVR, $u32 0x100 | $u32 INTNO_SPURIOUS);
 
     println("done init apic");
+}
+
+u32 apic_read_reg(u64 off) {
+    assert((off & 0x3) == 0x0, "apic_read_reg() : off must be 4-byte aligned");
+    return ($u32* (APIC_BASE + off))[0];
+}
+
+void apic_write_reg(u64 off, u32 val) {
+    assert((off & 0x3) == 0x0, "apic_write_reg() : off must be 4-byte aligned");
+    ($u32* (APIC_BASE + off))[0] = val;
 }

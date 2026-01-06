@@ -32,8 +32,11 @@ struct IDTEntry {
 [__GLOBAL_FIRST__] u64 INTNO_TIMER              = 0x20;
 [__GLOBAL_FIRST__] u64 INTNO_KEYBOARD           = 0x21;
 
-//Custom interrupts : 0x30 - ???
+//APIC interrupts : 0x30 - 0xEF
 [__GLOBAL_FIRST__] u64 INTNO_XHCI               = 0x30;
+
+//Reserved interrupts (?) : 0xF0 - 0xFF
+[__GLOBAL_FIRST__] u64 INTNO_SPURIOUS           = 0xFF;     // accidental interrupts arriving from APIC due to electrical faults (?)
 
 i32 init_idt() {
     println("start init idt");
@@ -57,6 +60,7 @@ i32 init_idt() {
     idt_set_entry(INTNO_TIMER, $u64 @timer_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
     idt_set_entry(INTNO_KEYBOARD, $u64 @keyboard_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
     idt_set_entry(INTNO_XHCI, $u64 @xhci_event_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
+    idt_set_entry(INTNO_SPURIOUS, $u64 @spurious_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
 
     //flush changes
     idt_flush(idt_ptr);
@@ -87,6 +91,7 @@ void idt_flush(IDTPointer* ptr) {
 [__GLOBAL_FIRST__] extern u8 keyboard_interrupt_entry_stub;
 [__GLOBAL_FIRST__] extern u8 network_packet_receive_interrupt_entry_stub;
 [__GLOBAL_FIRST__] extern u8 xhci_event_interrupt_entry_stub;
+[__GLOBAL_FIRST__] extern u8 spurious_interrupt_entry_stub;
 void interrupt_entry_stubs() {
     //we need to make sure these things are pushed onto stack before jumping to context handler
     // SS           : from user mode only
@@ -129,6 +134,12 @@ void interrupt_entry_stubs() {
     asm!("xhci_event_interrupt_entry_stub:");
     asm!("pushq $0");           // doesn't push error code
     asm!("pushq {INTNO_XHCI}");
+    asm!("jmp interrupt_handler_entry");
+
+    //spurious
+    asm!("spurious_interrupt_entry_stub:");
+    asm!("pushq $0");           // doesn't push error code
+    asm!("pushq {INTNO_SPURIOUS}");
     asm!("jmp interrupt_handler_entry");
 
     //we should always go to handler
@@ -214,12 +225,6 @@ void interrupt_handler() {
     //swap to kernel pagetable (need to do this after we save old pagetable)
     asm!("movq %gs:0, %rax");       
     asm!("mov %rax, %cr3");
-    
-    //send EOI
-    //if interrupts were disabled, this shouldn't enable interrupts? 
-    //before jumping to interrupt handler, CPU should've cleared interrupt in RFLAGS which this doesn't modify
-    asm!("movb $0x20, %al");
-    asm!("outb %al, $0x20");
 
     //gather arguments for high level interrupt handler
     asm!("movq %rsp, %rax");        //%rax now holds trapframe base
@@ -237,12 +242,28 @@ void interrupt_handler() {
 }
 
 export void interrupt_handler_disambiguator(trapframe* tf, u64 trap_id, u64 error_code) {
+    //send EOI
+    //if interrupts were disabled, this shouldn't enable interrupts? 
+    //before jumping to interrupt handler, CPU should've cleared interrupt in RFLAGS which this doesn't modify
+    if(trap_id < 0x30) {
+        if(trap_id >= 0x28) {
+            //send EOI to slave 
+            outb($u16 0xA0, $u8 0x20);
+        }
+        //send EOI to master
+        outb($u16 0x20, $u8 0x20);
+    }
+    else {
+        apic_write_reg(APIC_REGISTER_EOI, $u32 0);
+    }
+
     if(trap_id == INTNO_GENERAL_PROTECTION) general_protection_fault_handler(tf, error_code);
     if(trap_id == INTNO_PAGE_FAULT) page_fault_handler(tf, error_code);
     if(trap_id == INTNO_TIMER) timer_interrupt_handler(tf);
     if(trap_id == INTNO_KEYBOARD) keyboard_interrupt_handler(tf);
     if(trap_id == INTNO_E1000) e1000_interrupt_handler(tf);
     if(trap_id == INTNO_XHCI) xhci_interrupt_handler(tf);
+    if(trap_id == INTNO_SPURIOUS) spurious_interrupt_handler(tf);
     panic("interrupt_handler_disambiguator() : should not be here");
 }
 
@@ -307,7 +328,14 @@ void page_fault_handler(trapframe* tf, u64 error_code) {
 }
 
 //just jump to scheduler
+//flush VGA periodically
+[__GLOBAL_FIRST__] u64 TIMER_VGA_COUNTER = 0x0;
 void timer_interrupt_handler(trapframe* tf) {
+    TIMER_VGA_COUNTER ++;
+    if(TIMER_VGA_COUNTER >= 0x3) {
+        TIMER_VGA_COUNTER = 0x0;
+        vga_flush();
+    }
     scheduler(tf);
 }
 
@@ -320,8 +348,6 @@ void keyboard_interrupt_handler(trapframe* tf) {
 }
 
 void xhci_interrupt_handler(trapframe* tf) {
-    println("xhci_interrupt_handler() : xhci interrupt");
-
     //clear interrupt bits
     xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[XHCI_INTR0]);
     XHCI_OP_REGS->USBSTS |= XHCI_USBSTS_EINT;
@@ -335,5 +361,11 @@ void xhci_interrupt_handler(trapframe* tf) {
     }   
     free($void* trb, sizeof(xHCI_TRB));
 
+    scheduler(tf);
+}
+
+void spurious_interrupt_handler(trapframe* tf) {
+    //maybe do some logging?
+    println("spurious_interrupt_handler() : spurious interrupt");
     scheduler(tf);
 }

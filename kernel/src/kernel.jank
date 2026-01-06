@@ -48,6 +48,7 @@
 #include "networking/protocols/tcp.jank";
 #include "networking/nic/e1000.jank";
 #include "waitq.jank";
+#include "apic.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
@@ -241,6 +242,8 @@ void blockdev_mount_ext2() {
 }
 
 i32 main() {
+    init_vga();
+
     init_gdt();
     init_idt();
     init_pic();
@@ -266,8 +269,6 @@ i32 main() {
 
     // cout << "MMAP : \n";
     // print_mmap();
-
-    vga_clear_screen(COLOR_BLACK);
 
     // vfs_tests();
 

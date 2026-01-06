@@ -11,8 +11,6 @@ struct phys_page_node {
 
 //find all the memory that is marked as EfiConventionalMemory and mark it as free
 i32 init_pma() {
-    print("init_pma\n");
-
     MMapEnt* mmap = $MMapEnt* @(bootinfo->mmap);
     u64 freepg_cntr = 0x0;
 
@@ -33,11 +31,7 @@ i32 init_pma() {
 
         mmap = $MMapEnt* ($u64 mmap + $u64 sizeof(MMapEnt));
     }
-
-    print("FREE PAGES : ");
-    println($void* freepg_cntr);
-
-    print("done init pma\n");
+    
     return 0;
 }
 

@@ -566,8 +566,6 @@ void xhci_handle_event(xHCI_TRB* ev_trb) {
         // panic("xhci_handle_event() : port status change handler not implemented");
     }
     else if(trb_type == XHCI_TRB_TYPE_TRANSFER_EVENT) {
-        println("xhci_handle_event() : transfer event");
-
         // send this event to USB transfer event handler
         usb_handle_transfer_event(ev_trb);
     }
@@ -1012,9 +1010,9 @@ void init_xhci(u64 addr) {
             ents[0].ring_segment_size = $u16 (PAGE_SIZE / sizeof(xHCI_TRB));
 
             // point first interrupter to this ERST
-            interrupters[0].ERSTSZ = $u32 1;            // 1 segment
-            interrupters[0].ERSTBA = ERST_addr;         // ERST table base address
-            interrupters[0].ERDP = event_ring_addr;     // event ring pointer
+            interrupters[0].ERSTSZ = $u32 1;                            // 1 segment
+            interrupters[0].ERSTBA = ERST_addr;                         // ERST table base address
+            interrupters[0].ERDP = event_ring_addr | XHCI_ERDP_EHB;     // event ring pointer
 
             // turn off moderation
             interrupters[0].IMOD = $u32 0;
