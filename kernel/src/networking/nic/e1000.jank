@@ -127,6 +127,7 @@ void e1000_init(u64 addr) {
     e1000_pci_setup(addr);
     e1000_get_mac_address(nic->mac_address);
     e1000_startup();
+    e1000_enable_interrupts();
     e1000_init_rx();
     e1000_init_tx();
 
@@ -143,9 +144,9 @@ void e1000_init(u64 addr) {
 
     println("e1000_init() : finished initializing NIC");
 
-    {
-        // dhcp_send_discover();
-        // e1000_recieve_poll();
+    if(1) {
+        init_dhcp();
+        e1000_recieve_poll();
     }
 }
 
@@ -285,6 +286,12 @@ void e1000_startup() {
         *mta_ptr = $u32 0;
     }
 
+    println("e1000_startup() : finished general intialization");
+}
+
+void e1000_enable_interrupts() {
+    println("e1000_enable_interrupts() : enabling interrupts");
+
     // register the interrupt vector
     idt_set_entry($u64 INTNO_E1000, $u64 @network_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
 
@@ -303,8 +310,6 @@ void e1000_startup() {
     u32* ims_ptr = $u32* (MMIO_BASE + $u64 REG_IMS);
     u32 ims = IMS_LSC | IMS_RXT0;
     *ims_ptr = ims;
-
-    println("e1000_startup() : finished general intialization");
 }
 
 void e1000_eeprom_check() {
@@ -479,8 +484,8 @@ void e1000_recieve_poll() {
 
         curr_time = hpet_get_ns();
         if(CURRENT_INTERFACE->ip_address != $u32 0 && !sent && ((curr_time - init_time) > 0xB2D05E00)) {
-            u32 test_ip = $u32 (1 << 24 | 1 << 16 | 1 << 8 | 1 << 0);
-            // u32 test_ip = CURRENT_INTERFACE->gateway_ip;
+            // u32 test_ip = $u32 (1 << 24 | 1 << 16 | 1 << 8 | 1 << 0);
+            u32 test_ip = CURRENT_INTERFACE->gateway_ip;
             icmp_send_request(test_ip, $u16 1, $u16 1);
             init_time = curr_time;
             // sent = 1;
