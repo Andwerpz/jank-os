@@ -187,7 +187,7 @@ void dhcp_handle_ack(DHCPHeader* dhcp, u16 len) {
 }
 
 void dhcp_handle_offer(DHCPHeader* dhcp, u16 len) {
-    u32 offered_ip = dhcp->your_ip_addr;
+    u32 offered_ip = be_to_cpu(dhcp->your_ip_addr);
     u32 server_ip = $u32 0;
     
     u8* options = $u8* ($u64 dhcp + sizeof(DHCPHeader));
@@ -204,7 +204,7 @@ void dhcp_handle_offer(DHCPHeader* dhcp, u16 len) {
 
         if(opt_code == DHCP_OPT_SERVER_ID) {
             u32* dhcp_server = $u32* @options[i + $u64 2];
-            server_ip = *dhcp_server;
+            server_ip = be_to_cpu(*dhcp_server);
         }
 
         i += ($u64 2 + $u64 opt_len); // skip the type and len field, then skip by length
@@ -248,11 +248,11 @@ void dhcp_send_request(u32 offered_ip, u32 server_ip) {
 
     options->opt_req_ip_code = DHCP_OPT_REQUESTED_IP;
     options->opt_req_ip_len = $u8 4;
-    options->opt_req_ip_val = offered_ip;
+    options->opt_req_ip_val = cpu_to_be(offered_ip);
 
     options->opt_server_id_code = DHCP_OPT_SERVER_ID;
     options->opt_server_id_len = $u8 4;
-    options->opt_server_id_val = server_ip;
+    options->opt_server_id_val = cpu_to_be(server_ip);
 
     options->opt_req_list_code = DHCP_OPT_PARAM_REQ_LIST;
     options->opt_req_list_len = $u8 3;

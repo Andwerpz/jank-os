@@ -7,14 +7,6 @@ struct UDPHeader {
     u16 checksum;
 }
 
-struct UDPPseudoHeader {
-    u32 src_ip;
-    u32 dst_ip;
-    u8 zeroes;
-    u8 protocol;
-    u16 udp_length;
-}
-
 void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     u16 src_port = be_to_cpu(udp->src_port);
     u16 dst_port = be_to_cpu(udp->dst_port);
@@ -25,13 +17,39 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
         return;
     }
 
+    if($u32 dst_port >= MAX_PORTS || dst_port == $u16 0) {
+        println("udp_handle() : invalid dst port, outside allowed range");
+        return;
+    }
+    if(UDP_PORT_TABLE[dst_port] == nullptr) {
+        println("udp_handle() : nothing listening on port, dropping");
+        return;
+    }
+
     void* payload = $void* ($u64 udp + sizeof(UDPHeader));
     u16 payload_len = length - $u16 sizeof(UDPHeader);
 
-    if(be_to_cpu(udp->dst_port) == DHCP_CLIENT_LISTEN_PORT) {
+    // probably things that the OS needs here, rn just dhcp hijacks
+    if(dst_port == DHCP_CLIENT_LISTEN_PORT) {
         DHCPHeader* dhcp = $DHCPHeader* payload; 
         dhcp_handle(dhcp, payload_len);
+        return;
     }
+
+    // place packet into socket queue
+    socket* sock = UDP_PORT_TABLE[dst_port];
+
+    packet* pkt = $packet* malloc(sizeof(packet));
+    pkt->src_ip = src_ip;
+    pkt->src_port = src_port;
+    pkt->dst_ip = CURRENT_INTERFACE->ip_address;
+    pkt->dst_port = dst_port;
+    pkt->len = payload_len;
+    
+    pkt->data = $u8* malloc($u64 payload_len);
+    memcpy($void* pkt->data, payload, $u64 payload_len);
+    
+    socket_push_packet(sock, pkt);
 }
 
 void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 payload_len) {
@@ -56,4 +74,39 @@ void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 
 
     ipv4_send_packet(dst_ip, IPv4_PROTOCOL_UDP, buffer, $u16 udp_packet_len);
     free(buffer, udp_packet_len);
+}
+
+[__GLOBAL_FIRST__] proto_ops* UDP_OPS;
+
+void init_udp_ops() {
+    UDP_OPS = $proto_ops* malloc(sizeof(proto_ops));
+
+}
+
+i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
+    packet* pkt = socket_pop_packet(sock);
+
+    if($void* pkt == nullptr) {
+        return -ERR_AGAIN;
+    }
+
+    u64 copy_len = len;
+    if($u64 pkt->len < len) {
+        copy_len = $u64 pkt->len;
+    }
+
+    memcpy($void* buf, $void* pkt->data, copy_len);
+
+    if($void* src_addr != nullptr) {
+        sockaddr_in* sin = $sockaddr_in* src_addr;
+        sin->sin_family = AF_INET;
+        sin->sin_port = pkt->src_port;
+        sin->sin_addr = pkt->src_ip;
+        memset($void* @sin->sin_zero[0], 0, $u64 8); 
+    }
+
+    free($void* pkt->data, $u64 pkt->len);
+    free($void* pkt, sizeof(packet));
+
+    return $i32 copy_len;
 }

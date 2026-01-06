@@ -3,7 +3,7 @@
 
 [__GLOBAL_FIRST__] file_ops* FILE_OPS_SOCKET;
 
-[__GLOBAL_FIRST__] i32 AF_INET = 2;
+[__GLOBAL_FIRST__] u16 AF_INET = $u16 2;
 
 [__GLOBAL_FIRST__] i32 SOCK_STREAM  = 1; // TCP
 [__GLOBAL_FIRST__] i32 SOCK_DGRAM   = 2; // UDP
@@ -13,26 +13,111 @@
 [__GLOBAL_FIRST__] i32 IPPROTO_TCP  = 6;
 [__GLOBAL_FIRST__] i32 IPPROTO_UDP  = 17;
 
-struct sockaddr {
+[__GLOBAL_FIRST__] u32 MAX_PORTS = $u32 (1 << 16);
+socket** UDP_PORT_TABLE;
+socket** TCP_PORT_TABLE;
+
+
+void init_port_tables() {
+    // init tables
+    UDP_PORT_TABLE = $socket** malloc($u64 MAX_PORTS * sizeof(socket*));
+    memset($void* UDP_PORT_TABLE, 0, $u64 MAX_PORTS * sizeof(socket*));
+    TCP_PORT_TABLE = $socket** malloc($u64 MAX_PORTS * sizeof(socket*));
+    memset($void* TCP_PORT_TABLE, 0, $u64 MAX_PORTS * sizeof(socket*));
 
 }
+
+struct packet {
+    u32 src_ip;
+    u16 src_port;
+    u32 dst_ip;
+    u16 dst_port;
+    
+    u16 len;
+    u8* data;
+    
+    packet* next; 
+}
+
+struct proto_ops {
+    fn<i32(socket*, sockaddr*, i32)> bind;
+    fn<i32(socket*, sockaddr*)> connect;
+    fn<i32(socket*, packet*)> send;
+    fn<i32(socket*, u8*, u64, i32, sockaddr*)> recieve;
+    fn<i32(socket*)> close;
+}
+
+
+// the sockaddr_in and the sockaddr are the same size so we can cast the more
+// general sockaddr struct to the more specific sockaddr_in struct
+// the address family will always(?) be the first 2 bytes for both.
+// we can support more address families this way.
+
+struct sockaddr {
+    u16 sa_family;
+    u8[14] sa_data;
+}
+
+struct sockaddr_in {
+    u16 sin_family;
+    u16 sin_port;
+    u32 sin_addr;
+    u8[8] sin_zero;
+}
+
 
 struct socket {
     i32 domain;
     i32 type;
     i32 protocol;
-
+    
+    proto_ops* ops;
+    
     i32 state;
     u32 local_addr;
-    u32 remote_addr;
     u16 local_port;
+    u32 remote_addr;
     u16 remote_port;
+    
+    packet* rx_head; 
+    packet* rx_tail;
+    u64 rx_count;
 
-    deque<u8> rx_queue;
-
-    void push_rx_data() {
-        
+    socket() {
+        this.rx_head = $packet* nullptr;
+        this.rx_tail = $packet* nullptr;
     }
+}
+
+void socket_push_packet(socket* sock, packet* pkt) {
+    pkt->next = $packet* nullptr;
+    
+    if(sock->rx_head == nullptr) {
+        sock->rx_head = pkt;
+        sock->rx_tail = pkt;
+    } else {
+        // queue, pkt->next is the next packet in line.
+        sock->rx_tail->next = pkt;
+        sock->rx_tail = pkt;
+    }
+}
+
+packet* socket_pop_packet(socket* sock) {
+    if(sock->rx_head == nullptr) {
+        return $packet* nullptr;
+    }
+
+    packet* pkt = sock->rx_head;
+
+    sock->rx_head = pkt->next;
+
+    if(sock->rx_head == nullptr) {
+        sock->rx_tail = $packet* nullptr;
+    }
+
+    pkt->next = $packet* nullptr;
+
+    return pkt;
 }
 
 void init_socket_file_ops() {
@@ -48,17 +133,15 @@ void init_socket_file_ops() {
 }
 
 i64 socket_read(file* f, u8* buf, u64 len) {
-    // TODO
     socket* socket = $socket* f->resource_ptr;
 
-    return $i64 123;
+    return $i64 0;
 }
 
 i64 socket_write(file* f, u8* buf, u64 len) {
-    // TODO
     socket* socket = $socket* f->resource_ptr;
 
-    return $i64 123;
+    return $i64 0;
 }
 
 i64 socket_lseek(file* f, i64 offset, i32 whence) {
@@ -72,11 +155,9 @@ i64 socket_getdents(file* f, u8* buf, u64 len) {
 }
 
 i32 socket_close(file* f) {
-    // TODO
     socket* socket = $socket* f->resource_ptr;
-    socket->~();
-    free($void* socket, sizeof(socket));
-    return 123;
+    // return socket->ops->close();
+    return -1;
 }
 
 i32 socket_truncate(file* f, u64 len) {

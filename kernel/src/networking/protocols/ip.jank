@@ -61,24 +61,25 @@ void ipv4_handle(IPv4Header* ip) {
     u32 dst_ip = be_to_cpu(ip->dst_ip);
     if(!(dst_ip == CURRENT_INTERFACE->ip_address || dst_ip == IPv4_BROADCAST_ADDR)) {
         print("ipv4_handle() : destination ip ");
-        print_ipv4_addr(be_to_cpu(ip->dst_ip));
+        print_ipv4_addr(dst_ip);
         println(" does not match with host, ignoring");
         return;
     }
 
+    u32 src_ip = be_to_cpu(ip->src_ip);
     void* payload = $void* ($u64 ip + $u64 header_len);
     u16 payload_size = total_length - header_len;
 
     if(ip->protocol == IPv4_PROTOCOL_ICMP) {
         println("ipv4_handle() : ICMP packet recieved");
         ICMPHeader* icmp = $ICMPHeader* payload;
-        icmp_handle(icmp, payload_size, ip->src_ip);
+        icmp_handle(icmp, payload_size, src_ip);
     } else if(ip->protocol == IPv4_PROTOCOL_TCP) {
         println("ipv4_handle() : TCP packet recieved");
     } else if(ip->protocol == IPv4_PROTOCOL_UDP) {
         println("ipv4_handle() : UDP packet recieved");
         UDPHeader* udp = $UDPHeader* payload;
-        udp_handle(udp, payload_size, ip->src_ip);
+        udp_handle(udp, payload_size, src_ip);
     } else {
         print("ipv4_handle() : unknown protocol ");
         print_hex(ip->protocol);
