@@ -80,7 +80,31 @@ void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 
 
 void init_udp_ops() {
     UDP_OPS = $proto_ops* malloc(sizeof(proto_ops));
+    new (UDP_OPS) proto_ops();
+    UDP_OPS->recieve    = #<udp_recieve(socket*, u8*, u64, i32, sockaddr*)>;
+    UDP_OPS->bind       = #<udp_bind(socket*, sockaddr*, u64)>;
+}
 
+i32 udp_bind(socket* sock, sockaddr* addr, u64 len) {
+    // check if incoming sockaddr len is valid ipv4 udp
+    if(len < sizeof(sockaddr_in)) return -ERR_INVAL;
+
+    sockaddr_in* sin = $sockaddr_in* addr;
+    if(sin->sin_family != AF_INET) return -ERR_AFNOSUPPORT;
+
+    // no support for ephermal ports yet...
+    if(sin->sin_port == $u16 0) return -ERR_INVAL;
+    if($u32 sin->sin_port >= MAX_PORTS) return -ERR_INVAL;
+
+    if(UDP_PORT_TABLE[sin->sin_port] != nullptr) {
+        return -ERR_ADDRINUSE;
+    }
+
+    UDP_PORT_TABLE[sin->sin_port] = sock;
+    sock->local_port = sin->sin_port;
+    sock->local_addr = sin->sin_addr;
+
+    return 0;
 }
 
 i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
@@ -102,7 +126,7 @@ i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
         sin->sin_family = AF_INET;
         sin->sin_port = pkt->src_port;
         sin->sin_addr = pkt->src_ip;
-        memset($void* @sin->sin_zero[0], 0, $u64 8); 
+        memset($void* @sin->sin_zero[0], 0, sizeof(sockaddr_in) - $u64 6); // calculate padding, sockaddr_in and sockaddr should be the same size.
     }
 
     free($void* pkt->data, $u64 pkt->len);

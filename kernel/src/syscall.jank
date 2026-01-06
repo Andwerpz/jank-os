@@ -204,8 +204,8 @@ export u64 syscall_handler() {
     // else if(sys_id == SYS_SOCKET)           ans = $u64 sys_socket($i32 arg1, $i32 arg2, $i32 arg3);
     // else if(sys_id == SYS_CONNECT)          ans = $u64 sys_connect($i32 arg1, $i32 arg2, $i32 arg3);
     // else if(sys_id == SYS_SENDTO)           ans = $u64 sys_sendto($i32 arg1, $i32 arg2, $i32 arg3);
-    // else if(sys_id == SYS_RECVFROM)         ans = $u64 sys_recvfrom($i32 arg1, $i32 arg2, $i32 arg3);
-    // else if(sys_id == SYS_BIND)             ans = $u64 sys_bind($i32 arg1, $i32 arg2, $i32 arg3);
+    else if(sys_id == SYS_RECVFROM)         ans = $u64 sys_recvfrom($i32 arg1, $u8* arg2, $u64 arg3, $i32 arg4, $sockaddr* arg5, $u64* arg6);
+    else if(sys_id == SYS_BIND)             ans = $u64 sys_bind($i32 arg1, $sockaddr* arg2, $u64* arg3);
     else if(sys_id == SYS_FORK)             ans = $u64 sys_fork();
     else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
     else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
@@ -241,12 +241,99 @@ export u64 syscall_handler() {
     return $u64 ans;
 }
 
-i32 sys_sendto(i32 fd, void* buf, u64 size, i32 flags, sockaddr* dest_addr, i32 addr_len) {
-    return -ERR_UNKNOWN;
+i32 sys_bind(i32 fd, sockaddr* addr, u64* addr_len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    if(addr == nullptr) {
+        pt_switch(user_pt);
+        return -ERR_INVAL;
+    }
+
+    sockaddr* kaddr = $sockaddr* malloc(sizeof(sockaddr));
+    memset($void* kaddr, 0, sizeof(sockaddr));
+
+    u64 copy_len = 0x0;
+    copy_from_user(user_pt, $u8* @copy_len, $u8* addr_len, sizeof(u64));
+
+    if(copy_len > sizeof(sockaddr)) {
+        copy_len = sizeof(sockaddr);
+    }
+
+    copy_from_user(user_pt, $u8* kaddr, $u8* addr, copy_len);
+
+    i32 ret = sock->ops->bind#(sock, kaddr, copy_len);
+
+    free($void* kaddr, sizeof(sockaddr));
+    return ret;
 }
 
-i32 sys_recvfrom(i32 fd, void* buf, u64 size, i32 flags, sockaddr* src_addr, i32 addr_len) {
-    return -ERR_UNKNOWN;
+i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u64* addr_len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    u8* kbuf = $u8* malloc(size);
+
+    sockaddr* kaddr_src = $sockaddr* nullptr;
+    if(src_addr != nullptr) { // src_addr is an optional field, only if user cares about the sender ip
+        kaddr_src = $sockaddr* malloc(sizeof(sockaddr));
+    }
+
+    i32 ret = sock->ops->recieve#(sock, kbuf, size, flags, kaddr_src);
+
+    if(ret >= 0) {
+        copy_to_user(user_pt, kbuf, buf, $u64 ret);
+
+        u64 user_addr_len = 0x0;
+        copy_from_user(user_pt, $u8* @user_addr_len, $u8* addr_len, sizeof(u64));
+
+        if(src_addr != nullptr) {
+            u64 copy_amt = sizeof(sockaddr);
+            if(copy_amt > user_addr_len) {
+                copy_amt = user_addr_len;
+            }
+            copy_to_user(user_pt, $u8* kaddr_src, $u8* src_addr, copy_amt);
+            copy_to_user(user_pt, $u8* copy_amt, $u8* addr_len, sizeof(u64));
+        }
+    }
+
+    free($void* kbuf, size);
+    if(src_addr != nullptr) {
+        free($void* kaddr_src, sizeof(sockaddr));
+    }
+
+    pt_switch(user_pt);
+    return ret;
 }
 
 // https://man7.org/linux/man-pages/man2/socket.2.html
@@ -285,6 +372,8 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     socket->domain = domain;
     socket->type = type;
     socket->protocol = protocol;
+
+    if(type == SOCK_DGRAM) socket->ops = UDP_OPS;
 
     proc->fd_table[fd_ind] = file_create_socket($u64 O_RDWR, socket);
 

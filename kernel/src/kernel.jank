@@ -271,6 +271,10 @@ i32 main() {
 
     init_pit();
     init_kb();
+
+    init_port_tables();
+    init_udp_ops();
+
     init_acpi();
     init_ps2();
     init_file();
@@ -279,8 +283,6 @@ i32 main() {
     init_blockdev();
 
     init_usb();
-
-    init_port_tables();
 
     blockdev_mount_ext2();
 

@@ -40,7 +40,7 @@ struct packet {
 }
 
 struct proto_ops {
-    fn<i32(socket*, sockaddr*, i32)> bind;
+    fn<i32(socket*, sockaddr*, u64)> bind;
     fn<i32(socket*, sockaddr*)> connect;
     fn<i32(socket*, packet*)> send;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> recieve;
