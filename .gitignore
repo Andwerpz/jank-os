@@ -19,3 +19,4 @@ bootloader/uefi/build/*
 !kernel/trampoline.s
 
 *.pcap
+*.log

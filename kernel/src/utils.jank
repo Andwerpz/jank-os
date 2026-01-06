@@ -101,27 +101,6 @@ void bitmap_unset_bit(void* bitmap, u64 index) {
 }
 
 
-[__GLOBAL_FIRST__] u64 irq_disable_count = 0x0;
-[__GLOBAL_FIRST__] u64 irq_saved_rflags;
-
-void irq_disable() {
-    if(irq_disable_count == 0x0) {  //this should be multiprocess safe?
-        asm!("pushfq");     //need to push RFLAGS before cli to save actual RFLAGS
-        asm!("cli");        //do cli before popq to make global variable safe
-        asm!("popq irq_saved_rflags(%rip)");
-    }
-    irq_disable_count ++;
-}
-
-void irq_enable() {
-    assert(irq_disable_count != 0x0, "irq_enable() : unmatched irq_enable");
-    irq_disable_count --;
-    if(irq_disable_count == 0x0) {
-        asm!("pushq irq_saved_rflags(%rip)");
-        asm!("popfq");
-    }
-}
-
 //returns 0 on success, negative on failure
 //expects kernel_pt to be active
 i32 copy_to_user(pagetable_t user_pt, u8* kbuf, u8* ubuf, u64 amt) {
@@ -252,14 +231,14 @@ void cpu_cache_flush(void* addr, u64 size) {
 [__GLOBAL_FIRST__] i32 DO_VGA_PRINT = 1;
 void disable_vga_print() {
     DO_VGA_PRINT = 0;
-    vga_clear_screen(COLOR_BLACK);
+    vga_clear_screen();
 }
 
 void enable_vga_print() {
     DO_VGA_PRINT = 1;
     VGA_DEBUG_CURSOR_ROW = 0x0;
     VGA_DEBUG_CURSOR_COL = 0x0;
-    vga_clear_screen(COLOR_BLACK);
+    vga_clear_screen();
 }
 
 void print(u8 c) {

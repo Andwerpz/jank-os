@@ -66,7 +66,7 @@ i64 bot_exec(MSC_BOT* bot, u8* cmd, u64 cmd_len, i32 data_dir_in, void* data, u6
     memcpy($void* @(cbw->CBWCB), $void* cmd, cmd_len);
 
     //send CBW to device via bulk out
-    usb_transfer_status = usb_bulk_out(bot->dev->slot, bot->bulk_out, $void* cbw, sizeof(BOT_CBW));
+    usb_transfer_status = usb_bulk_out(bot->dev, bot->bulk_out, $void* cbw, sizeof(BOT_CBW));
     if(usb_transfer_status < $i64 0) {
         //transfer failed
         panic("bot_exec() : transfer CBW failed");
@@ -77,11 +77,11 @@ i64 bot_exec(MSC_BOT* bot, u8* cmd, u64 cmd_len, i32 data_dir_in, void* data, u6
     if(data_len != 0x0) {
         if(data_dir_in) {
             // BULK IN
-            usb_transfer_status = usb_bulk_in(bot->dev->slot, bot->bulk_in, data, data_len);
+            usb_transfer_status = usb_bulk_in(bot->dev, bot->bulk_in, data, data_len);
         }
         else {
             // BULK OUT
-            usb_transfer_status = usb_bulk_out(bot->dev->slot, bot->bulk_out, data, data_len);
+            usb_transfer_status = usb_bulk_out(bot->dev, bot->bulk_out, data, data_len);
         }
         if(usb_transfer_status < $i64 0) {
             //transfer failed
@@ -92,7 +92,7 @@ i64 bot_exec(MSC_BOT* bot, u8* cmd, u64 cmd_len, i32 data_dir_in, void* data, u6
 
     //alloc mem for CSW and retrieve via bulk in
     BOT_CSW* csw = $BOT_CSW* palloc();
-    usb_transfer_status = usb_bulk_in(bot->dev->slot, bot->bulk_in, $void* csw, sizeof(BOT_CSW));
+    usb_transfer_status = usb_bulk_in(bot->dev, bot->bulk_in, $void* csw, sizeof(BOT_CSW));
     if(usb_transfer_status < $i64 0) {
         //transfer failed
         panic("bot_exec() : transfer CSW failed");

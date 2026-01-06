@@ -1,14 +1,27 @@
-[__GLOBAL_FIRST__] u32* FB_ADDR = $u32* 0xfffffffffc000000;
+//ways to improve speed of VGA
+// - reading from VGA is very slow (looking at the shift-up operation), should instead keep a parallel copy
+//   of the VGA buffer that we can do the shift up, then memcpy it into the VGA buffer
+// - can allow the CPU to more aggressively group memory operations by mapping the VGA memory as WC (write-combining)
+//   will need to set up the PAT to do this. 
+// - look into writing custom assembly for memcpy and memmove operations:
+//     rep movsq, rep movsd
+//     rep stosq, rep stosd
+// - instead of flushing to FB every time we write, have an interrupt fire 60 times a second and flush in the interrupt. 
 
-[VGA] u64 FB_SCANLINE = $u64 bootinfo->fb_ppsl;
-[VGA] u64 FB_WIDTH = $u64 bootinfo->fb_width;
-[VGA] u64 FB_HEIGHT = $u64 bootinfo->fb_height;
+[__GLOBAL_FIRST__] u32* VGA_FB = $u32* 0xfffffffffc000000;
+[VGA] u64 VGA_FB_SCANLINE = $u64 bootinfo->fb_ppsl;
+[VGA] u64 VGA_FB_WIDTH = $u64 bootinfo->fb_width;
+[VGA] u64 VGA_FB_HEIGHT = $u64 bootinfo->fb_height;
 
 [__GLOBAL_FIRST__] u32 COLOR_WHITE = $u32 0x00ffffff;
 [__GLOBAL_FIRST__] u32 COLOR_BLACK = $u32 0x00000000;
 [__GLOBAL_FIRST__] u32 COLOR_GRAY = $u32 0x00aaaaaa;
 
 [__GLOBAL_FIRST__] extern u8 _binary_font_psf_start;
+
+[__GLOBAL_FIRST__] u32* VGA_STAGING_BUF = $u32* nullptr;
+[__GLOBAL_FIRST__] u64 VGA_STAGING_LINE_OFF;
+[__GLOBAL_FIRST__] u64 VGA_STAGING_HEIGHT;
 
 struct psf_header {
     u32 magic;
@@ -22,21 +35,44 @@ struct psf_header {
     u8 glyphs;  //glyph starting byte
 }
 
+[__GLOBAL_FIRST__] i32 VGA_DID_INIT = 0;
+void init_vga() {
+    //set VGA framebuffer MMIO to be WC
+    {
+        u64 ptr = $u64 VGA_FB;
+        pagetable_t pt = pt_get_current();
+        assert((ptr % PAGE_SIZE) == 0x0, "init_vga() : expect VGA FB to be page-aligned");
+        for(u64 i = 0x0; i < sizeof(u32) * VGA_FB_SCANLINE * VGA_FB_HEIGHT; i += PAGE_SIZE) {
+            void* vaddr = $void* (ptr + i);
+            pt_set_leaf_flags(pt, vaddr, pte_pat_bits(PAT_WC) | PTE_WRITEABLE);
+        }
+    }
+
+    //allocate staging buffer
+    VGA_STAGING_HEIGHT = VGA_FB_HEIGHT * $u64 16;
+    VGA_STAGING_LINE_OFF = 0x0;
+    VGA_STAGING_BUF = $u32* malloc(sizeof(u32) * VGA_FB_SCANLINE * VGA_STAGING_HEIGHT);
+
+    //copy everything from current FB to staging buffer
+    memcpy($void* VGA_STAGING_BUF, $void* VGA_FB, sizeof(u32) * VGA_FB_SCANLINE * VGA_FB_HEIGHT);
+
+    VGA_DID_INIT = 1;
+    println("done init vga");
+}
+
 [__GLOBAL_FIRST__] u64 VGA_DEBUG_CURSOR_COL = 0x0;
 [__GLOBAL_FIRST__] u64 VGA_DEBUG_CURSOR_ROW = 0x0;
 void vga_debug_draw_char(u8 c) {
+    assert(VGA_DID_INIT, "vga_debug_draw_char() : vga needs to be initialized");
     psf_header* font = $psf_header* @_binary_font_psf_start;
     if(c == '\n') {
         VGA_DEBUG_CURSOR_COL = 0x0;
         VGA_DEBUG_CURSOR_ROW ++;
-        VGA_DEBUG_CURSOR_ROW %= (FB_HEIGHT / ($u64 font->height));
-
-        for(u64 i = 0x0; i < $u64 font->height; i++) {
-            u64 y = i + VGA_DEBUG_CURSOR_ROW * $u64 font->height;
-            for(u64 j = 0x0; j < $u64 FB_WIDTH; j++) {
-                vga_draw_pixel(j, y, COLOR_BLACK);
-            }
+        if(VGA_DEBUG_CURSOR_ROW == (VGA_FB_HEIGHT / $u64 font->height)) {
+            vga_shift_up($u64 font->height);
+            VGA_DEBUG_CURSOR_ROW --;
         }
+        vga_flush();
     }
     else {  
         vga_draw_char(VGA_DEBUG_CURSOR_COL * $u64 font->width, VGA_DEBUG_CURSOR_ROW * $u64 font->height, c, COLOR_BLACK, COLOR_WHITE);
@@ -44,9 +80,23 @@ void vga_debug_draw_char(u8 c) {
     }
 }
 
+//flush whatever is in the staging buffer into the actual VGA buffer
+void vga_flush() {
+    assert(VGA_STAGING_LINE_OFF < VGA_STAGING_HEIGHT, "vga_flush() : invalid staging offset");
+    if(VGA_STAGING_LINE_OFF + VGA_FB_HEIGHT > VGA_STAGING_HEIGHT) {
+        // wrapping
+        u64 bef_wrap = VGA_STAGING_HEIGHT - VGA_STAGING_LINE_OFF;
+        memcpy($void* VGA_FB, $void* (@VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * bef_wrap);
+        memcpy($void* @(VGA_FB[bef_wrap * VGA_FB_SCANLINE]), $void* VGA_STAGING_BUF, sizeof(u32) * VGA_FB_SCANLINE * (VGA_FB_HEIGHT - bef_wrap));
+    }
+    else {
+        // no wrap
+        memcpy($void* VGA_FB, $void* @(VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * VGA_FB_HEIGHT);
+    }
+}
 
 void vga_draw_pixel(u64 x, u64 y, u32 color) {
-    FB_ADDR[FB_SCANLINE * y + x] = color;
+    VGA_STAGING_BUF[VGA_FB_SCANLINE * ((VGA_STAGING_LINE_OFF + y) % VGA_STAGING_HEIGHT) + x] = color;
 }
 
 //top left corner positioned at (x, y)
@@ -69,61 +119,57 @@ void vga_draw_char(u64 x, u64 y, u8 c, u32 bg_col, u32 fg_col) {
         }
     }
 }
- 
-void vga_clear_screen(u32 color) {
-    u64 n = FB_HEIGHT * FB_SCANLINE;
-    for(u64 i = 0x0; i < n; i++) FB_ADDR[i] = color;
+
+void vga_clear_lines(u64 start, u64 end) {
+    assert(start < end, "vga_clear_lines() : start must be <= end");
+    assert(end <= VGA_FB_HEIGHT, "vga_clear_lines() : end out of bounds");
+    start = (start + VGA_STAGING_LINE_OFF) % VGA_STAGING_HEIGHT;
+    end = (end + VGA_STAGING_LINE_OFF) % VGA_STAGING_HEIGHT;
+
+    if(start < end) {
+        //no wrap
+        memset($void* @(VGA_STAGING_BUF[start * VGA_FB_SCANLINE]), 0, sizeof(u32) * (end - start) * VGA_FB_SCANLINE);
+    }
+    else {
+        //wrap
+        memset($void* @(VGA_STAGING_BUF[start * VGA_FB_SCANLINE]), 0, sizeof(u32) * (VGA_STAGING_HEIGHT - start) * VGA_FB_SCANLINE);
+        memset($void* VGA_STAGING_BUF, 0, sizeof(u32) * end * VGA_FB_SCANLINE);
+    }
 }
 
+void vga_clear_screen() {
+    vga_clear_lines(0x0, VGA_FB_HEIGHT);
+}
+
+//shifts whatever is currently drawn down by some amount of lines
+//clears top lines
 void vga_shift_down(u64 lines) {
-    assert(lines <= FB_HEIGHT, "vga_shift_down() : shift too large");
+    assert(VGA_DID_INIT, "vga_shift_down() : vga should init before using this");
+    assert(lines <= VGA_FB_HEIGHT, "vga_shift_down() : shift too large");
 
     //do shift
-    {
-        u64 dy = lines;                     
-        u64 shamt_px = dy * FB_SCANLINE;        
+    if(VGA_STAGING_LINE_OFF >= lines) VGA_STAGING_LINE_OFF -= lines;
+    else VGA_STAGING_LINE_OFF = VGA_STAGING_HEIGHT - lines + VGA_STAGING_LINE_OFF;
 
-        u64 total_px = FB_SCANLINE * FB_HEIGHT;
-        u64 copy_px  = total_px - shamt_px;
-
-        u8* dst = $u8* @FB_ADDR[shamt_px];
-        u8* src = $u8* FB_ADDR;
-
-        memmove($void* dst, $void* src, copy_px * sizeof(u32)); 
-    }
-
-    //set top lines
-    for(u64 i = 0x0; i < lines; i++) {
-        for(u64 j = 0x0; j < FB_SCANLINE; j++) FB_ADDR[i * FB_SCANLINE + j] = COLOR_BLACK;
-    }
+    //clear top lines
+    vga_clear_lines(0x0, lines);
 }
 
 //shifts whatever is currently drawn up by some amount of lines
-//sets the bottom lines to black
+//clears bottom lines
 void vga_shift_up(u64 lines) {
-    assert(lines <= FB_HEIGHT, "vga_shift_up() : shift too large");
+    assert(VGA_DID_INIT, "vga_shift_up() : vga should init before using this");
+    assert(lines <= VGA_FB_HEIGHT, "vga_shift_up() : shift too large");
 
     //do shift
-    {
-        u64 dy = lines;                     
-        u64 shamt_px = dy * FB_SCANLINE;        
+    VGA_STAGING_LINE_OFF = (VGA_STAGING_LINE_OFF + lines) % VGA_STAGING_HEIGHT;
 
-        u64 total_px = FB_SCANLINE * FB_HEIGHT;
-        u64 copy_px  = total_px - shamt_px;
-
-        u8* dst = $u8* FB_ADDR;
-        u8* src = $u8* @FB_ADDR[shamt_px];
-
-        memmove($void* dst, $void* src, copy_px * sizeof(u32)); 
-    }
-
-    //set bottom lines
-    for(u64 i = FB_HEIGHT - lines; i < FB_HEIGHT; i++) {
-        for(u64 j = 0x0; j < FB_SCANLINE; j++) FB_ADDR[i * FB_SCANLINE + j] = COLOR_BLACK;
-    }
+    //clear bottom lines
+    vga_clear_lines(VGA_FB_HEIGHT - lines, VGA_FB_HEIGHT);
 }
 
 
+// -- VGA TERMINAL --
 [__GLOBAL_FIRST__] u64 TERMINAL_PARSE_BUF_SIZE = $u64 16;
 [__GLOBAL_FIRST__] u8 TERMINAL_ESC = $u8 0x1B;  // also written as \x1B
 
@@ -158,8 +204,8 @@ struct vga_terminal {
 
         psf_header* font = $psf_header* @_binary_font_psf_start;
         this.parse_bptr = 0x0;
-        this.grid_rows = $u64 FB_HEIGHT / $u64 font->height;
-        this.grid_cols = $u64 FB_WIDTH / $u64 font->width;
+        this.grid_rows = $u64 VGA_FB_HEIGHT / $u64 font->height;
+        this.grid_cols = $u64 VGA_FB_WIDTH / $u64 font->width;
         this.cursor_row = 0x0;
         this.cursor_col = 0x0;
 
@@ -181,8 +227,7 @@ void vga_terminal_clear_screen(vga_terminal* term) {
         vga_cell* cell = @(term->cells[i]);
         cell->char = ' ';
     }
-
-    vga_clear_screen(COLOR_BLACK);
+    vga_clear_screen();
 }
 
 //scrolls the terminal up one row, makes the bottom row empty

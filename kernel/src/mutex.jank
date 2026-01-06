@@ -1,7 +1,13 @@
 
+// kernel space synchronization
+// the assumption when I wrote this is that hardware interrupts are turned off, so we won't have any
+//  interrupts in unexpected locations. 
+// if this assumption is not true, then the code around locking and unlocking may need to be rewritten
+//  to include atomic CAS assembly instructions
+
 struct mutex {
     i32 locked;
-    deque<pid_t> wait_queue;
+    waitq wait_queue;
     pid_t owner;
 
     mutex() {
@@ -18,32 +24,21 @@ struct mutex {
     }
     
     void lock() {
-        irq_disable();
+        //check if currently locked
         if(this.locked) {
-            assert(this.owner != $pid_t 0, "mutex::lock() : must have owner when locked");
-
             //block process, if mutex becomes unlocked, will unblock a process from queue
-            process* proc = get_cur_proc();
-            proc->status = PROCESS_BLOCKED;
-            this.wait_queue.push_back(proc->pid);
-            irq_enable();
-
-            yield();
-
-            irq_disable();
+            assert(this.owner != $pid_t 0, "mutex::lock() : must have owner when locked");
+            wait_on(@(this.wait_queue));
             assert(!this.locked, "mutex::lock() : should be unlocked when woken up");
         }
 
+        //acquire lock
         assert(this.owner == $pid_t 0, "mutex::lock() : must not have owner");
-
         this.locked = 1;
         this.owner = get_cur_pid();
-        irq_enable();
     }
 
     void unlock() {
-        irq_disable();
-        
         assert(this.locked, "mutex::unlock() : should be locked when trying to unlock");
         assert(this.owner != $pid_t 0, "mutex::unlock() : there has to be an owner");
         assert(this.owner == get_cur_pid(), "mutex::unlock() : only owner can unlock");
@@ -51,12 +46,6 @@ struct mutex {
         this.owner = $pid_t 0;
 
         //if there are blocked processes, unblock one
-        if(this.wait_queue.size()){
-            process* nextp = find_process(this.wait_queue.pop_front());
-            assert(nextp->status == PROCESS_BLOCKED, "mutex::unlock() : process in queue should be blocked");
-            nextp->status = PROCESS_READY;
-        }
-
-        irq_enable();
+        waitq_wake_one(@(this.wait_queue));
     }
 }

@@ -561,12 +561,17 @@ void xhci_handle_event(xHCI_TRB* ev_trb) {
 
         //for now, just ack whatever changed
         xhci_portsc_write_bits(port, port->PORTSC, (port->PORTSC & XHCI_PORTSC_RW1C_MASK) & ~XHCI_PORTSC_PED);
+
+        // TODO send this event to USB port status event handler
+        // panic("xhci_handle_event() : port status change handler not implemented");
     }
     else if(trb_type == XHCI_TRB_TYPE_TRANSFER_EVENT) {
-        println("xhci_handle_event() : transfer event");
-
-        u32 completion_code = xhci_event_trb_completion_code(ev_trb);
-        println("xhci_handle_event() : transfer event completion code : ", completion_code);
+        // send this event to USB transfer event handler
+        usb_handle_transfer_event(ev_trb);
+    }
+    else if(trb_type == XHCI_TRB_TYPE_CMD_COMPLETION) {
+        println("xhci_handle_event() : command completion");
+        panic("xhci_handle_event() : missed command completion event");
     }
     else println("xhci_handle_event() : ignoring event ", trb_type);
 }
@@ -654,10 +659,11 @@ i32 xhci_look_for_event(u32 interrupter, u32 tgt_type) {
 }
 
 //retrieves the next TRB from the given interrupter
-//does not check IMAN.IP
+//doesn't touch IMAN.IP or USBSTS
 //returns 0 on success, 1 on failure
 i32 xhci_poll_event(u32 interrupter, xHCI_TRB* out_trb) {
     xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[interrupter]);
+    intr->IMAN |= XHCI_IMAN_IP;
     u64 ev_ptr = XHCI_EVENT_RING_CONSUMER_INDEXES[interrupter];
     u32 ev_state = XHCI_EVENT_RING_CONSUMER_STATES[interrupter];
     assert(intr->ERSTSZ == $u32 1, "xhci_read_event() : only support event rings with one segment for now");
@@ -715,6 +721,11 @@ u32 xhci_event_trb_slot_id(xHCI_TRB* trb) {
     return trb->control >> $u32 24;
 }
 
+//extracts trb ptr from an event TRB
+u64 xhci_event_trb_trb_ptr(xHCI_TRB* trb) {
+    return trb->parameter;
+}
+
 //initializes a command / transfer TRB ring buffer with a link TRB at the end
 void xhci_init_page_TRB_ring(void* buf) {
     assert($u64 buf % PAGE_SIZE == 0x0, "xhci_init_page_TRB_ring() : buf should be page aligned");
@@ -744,30 +755,20 @@ void init_xhci(u64 addr) {
     //enable busmaster and memory mapped access
     {
         u16 cmd = pci_hdr->command; 
-        cmd &= $u16 ~(1 << 0);  // command IO
         cmd |= $u16 (1 << 1);   // MSE (memory space enable)
         cmd |= $u16 (1 << 2);   // BME (bus master enable)
-        cmd |= $u16 ~(1 << 10); // Interrupt Disable (1 = Disable Legacy INTx)
+        cmd |= $u16 (1 << 10);  // Disable legacy interrupts
         pci_hdr->command = cmd;
     }
 
-    //parse PCI capabilities
-    if(pci_hdr->status & ($u16 1 << $u16 4)) {
-        u64 ptr = $u64 pci_hdr->capabilities_ptr;
-        while(ptr) {
-            u8 cap_id = ($u8* (addr + ptr))[0];
-            u8 next_ptr = ($u8* (addr + ptr))[1];
-            println("PCI cap_id : ", $u64 cap_id);
-
-            if(cap_id == $u8 0x01) {
-                // power management
-                u16 pmcsr = ($u16* (addr + ptr + 0x4))[0];
-                println("PMCSR : ", pmcsr);
-            }
-
-            ptr = $u64 next_ptr;
-        }
+    //setup interrupts
+    if(pci_enable_msix(pci_hdr, $u8 INTNO_XHCI) == 0) {
+        println("init_xhci() : enabled MSI-X");
     }
+    else if(pci_enable_msi(pci_hdr, $u8 INTNO_XHCI) == 0) {
+        println("init_xhci() : enabled MSI");
+    }
+    else panic("init_xhci() : failed to enable interrupts");
 
     //need to find address and size of xHCI MMIO from PCI header
     u64 xhci_mmio = 0x0;
@@ -1009,21 +1010,24 @@ void init_xhci(u64 addr) {
             ents[0].ring_segment_size = $u16 (PAGE_SIZE / sizeof(xHCI_TRB));
 
             // point first interrupter to this ERST
-            interrupters[0].ERSTSZ = $u32 1;
-            interrupters[0].ERSTBA = ERST_addr;
-            interrupters[0].ERDP = event_ring_addr;
+            interrupters[0].ERSTSZ = $u32 1;                            // 1 segment
+            interrupters[0].ERSTBA = ERST_addr;                         // ERST table base address
+            interrupters[0].ERDP = event_ring_addr | XHCI_ERDP_EHB;     // event ring pointer
 
             // turn off moderation
             interrupters[0].IMOD = $u32 0;
 
-            // clear pending IP (RW1C) and enable IE
+            // clear pending IP (RW1C) and enable interrupts
             interrupters[0].IMAN = XHCI_IMAN_IP | XHCI_IMAN_IE;
         }
         cpu_cache_flush($void* event_ring_addr, PAGE_SIZE);
         cpu_cache_flush($void* ERST_addr, PAGE_SIZE);
 
-        // disable interrupt generation
-        op_regs->USBCMD &= ~XHCI_USBCMD_INTE;
+        // enable interrupt generation
+        op_regs->USBCMD |= XHCI_USBCMD_INTE;
+
+        // clear pending interrupt bits from USBSTS
+        op_regs->USBSTS |= XHCI_USBSTS_EINT;
 
         //allocate room for event ring consumer state storage
         XHCI_EVENT_RING_CONSUMER_INDEXES = $u64* palloc();
@@ -1776,15 +1780,14 @@ void xhci_init_slot(u32 slot) {
 
 
 // --- TRANSFER HELPERS ---
-//sends a normal transfer TRB to the specified slot and endpoint
+//sends a normal transfer TRB to the specified slot and endpoint 
 //buf must be a physical buffer
-//writes the resulting transfer TRB to out_trb
-//for now, null transfers are not supported
-//on success, returns the number of bytes transferred, on failure returns -1
-i64 xhci_bulk_transfer(u32 slot, u32 endpoint, u32 interrupter, void* buf, u64 amt) {
-    assert(amt != 0x0, "xhci_bulk_transfer() : amt has to be >= 0");
-    assert(buf != nullptr, "xhci_bulk_transfer() : null buf");
-    assert(amt < (0x1 << $u64 17), "xhci_bulk_transfer() : amt too big");
+//doesn't wait for transfer to complete, immediately returns
+//returns the trb_ptr of the corresponding transfer event TRB
+u64 xhci_initiate_bulk_transfer(u32 slot, u32 endpoint, u32 interrupter, void* buf, u64 amt) {
+    assert(amt != 0x0, "xhci_initiate_bulk_transfer() : amt has to be >= 0");
+    assert(buf != nullptr, "xhci_initiate_bulk_transfer() : null buf");
+    assert(amt < (0x1 << $u64 17), "xhci_initiate_bulk_transfer() : amt too big");
 
     //build TRB
     xHCI_TRB* normal_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
@@ -1800,9 +1803,21 @@ i64 xhci_bulk_transfer(u32 slot, u32 endpoint, u32 interrupter, void* buf, u64 a
     u64 trb_ptr = xhci_write_transfer(slot, endpoint, normal_trb);
     xhci_ring_transfer_doorbell(slot, endpoint);
 
+    free($void* normal_trb, sizeof(xHCI_TRB));
+    return trb_ptr;
+}
+
+//sends a normal transfer TRB to the specified slot and endpoint
+//buf must be a physical buffer
+//writes the resulting transfer TRB to out_trb
+//for now, null transfers are not supported
+//on success, returns the number of bytes transferred, on failure returns -1
+i64 xhci_bulk_transfer(u32 slot, u32 endpoint, u32 interrupter, void* buf, u64 amt) {
+    //initiate transfer
+    u64 trb_ptr = xhci_initiate_bulk_transfer(slot, endpoint, interrupter, buf, amt);
+
     //poll for transfer TRB
     xHCI_TRB* out_trb = $xHCI_TRB* malloc(sizeof(xHCI_TRB));
-    // println("xhci_bulk_transfer() : poll events until");
     xhci_poll_events_until(XHCI_TRB_TYPE_TRANSFER_EVENT, trb_ptr, interrupter, out_trb);
     
     i64 retval;
@@ -1812,8 +1827,6 @@ i64 xhci_bulk_transfer(u32 slot, u32 endpoint, u32 interrupter, void* buf, u64 a
     else retval = $i64 -1;
 
     free($void* out_trb, sizeof(xHCI_TRB));
-    free($void* normal_trb, sizeof(xHCI_TRB));
-
     return retval;
 }
 

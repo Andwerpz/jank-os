@@ -241,38 +241,13 @@ export u64 syscall_handler() {
     return $u64 ans;
 }
 
-// i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u16 addr_len) {
-//     pagetable_t user_pt = pt_get_current();
-//     pt_switch_to_kernel();
+i32 sys_sendto(i32 fd, void* buf, u64 size, i32 flags, sockaddr* dest_addr, i32 addr_len) {
+    return -ERR_UNKNOWN;
+}
 
-//     if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
-//         pt_switch(user_pt);
-//         return -ERR_BADF;
-//     }
-
-//     process* proc = get_cur_proc();
-//     file* f = proc->fd_table[fd];
-
-//     if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
-//         pt_switch(user_pt);
-//         return -ERR_NOTSOCK;
-//     }
-
-//     socket* sock = $socket* f->resource_ptr;
-//     u8* kbuf = $u8* malloc(size);
-
-//     sockaddr_in* ksrc = $sockaddr* $u64 nullptr;
-//     if($void* src_addr != nullptr) {
-//         ksrc = $sockaddr_in* malloc(sizeof(sockaddr_in));
-//     }
-
-
-//     i32 ret = sock->ops->recieve(sock, kbuf, size, flags, $sockaddr* ksrc);
-
-
-//     pt_switch(user_pt);
-//     return ret;
-// }
+i32 sys_recvfrom(i32 fd, void* buf, u64 size, i32 flags, sockaddr* src_addr, i32 addr_len) {
+    return -ERR_UNKNOWN;
+}
 
 // https://man7.org/linux/man-pages/man2/socket.2.html
 i32 sys_socket(i32 domain, i32 type, i32 protocol) {

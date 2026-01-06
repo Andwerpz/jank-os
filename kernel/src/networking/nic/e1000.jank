@@ -144,7 +144,7 @@ void e1000_init(u64 addr) {
 
     println("e1000_init() : finished initializing NIC");
 
-    if(1) {
+    if(0) {
         init_dhcp();
         e1000_recieve_poll();
     }
