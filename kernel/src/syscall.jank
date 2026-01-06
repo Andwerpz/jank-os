@@ -49,8 +49,10 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_DUP2             = $u64 33;
 [__GLOBAL_FIRST__] u64 SYS_GETPID           = $u64 39;
 [__GLOBAL_FIRST__] u64 SYS_SOCKET           = $u64 41;
+[__GLOBAL_FIRST__] u64 SYS_CONNECT          = $u64 42;
 [__GLOBAL_FIRST__] u64 SYS_SENDTO           = $u64 44;
 [__GLOBAL_FIRST__] u64 SYS_RECVFROM         = $u64 45;
+[__GLOBAL_FIRST__] u64 SYS_BIND             = $u64 49;
 [__GLOBAL_FIRST__] u64 SYS_FORK             = $u64 57;
 [__GLOBAL_FIRST__] u64 SYS_EXECVE           = $u64 59;
 [__GLOBAL_FIRST__] u64 SYS_EXIT             = $u64 60;
@@ -199,7 +201,11 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_MMAP)             ans = $u64 sys_mmap($void* arg1, $u64 arg2, $u64 arg3, $u64 arg4, $i32 arg5, $u64 arg6);
     else if(sys_id == SYS_MUNMAP)           ans = $u64 sys_munmap($void* arg1, $u64 arg2);
     else if(sys_id == SYS_GETPID)           ans = $u64 sys_getpid();
-    else if(sys_id == SYS_SOCKET)           ans = $u64 sys_socket($i32 arg1, $i32 arg2, $i32 arg3);
+    // else if(sys_id == SYS_SOCKET)           ans = $u64 sys_socket($i32 arg1, $i32 arg2, $i32 arg3);
+    // else if(sys_id == SYS_CONNECT)          ans = $u64 sys_connect($i32 arg1, $i32 arg2, $i32 arg3);
+    // else if(sys_id == SYS_SENDTO)           ans = $u64 sys_sendto($i32 arg1, $i32 arg2, $i32 arg3);
+    // else if(sys_id == SYS_RECVFROM)         ans = $u64 sys_recvfrom($i32 arg1, $i32 arg2, $i32 arg3);
+    // else if(sys_id == SYS_BIND)             ans = $u64 sys_bind($i32 arg1, $i32 arg2, $i32 arg3);
     else if(sys_id == SYS_FORK)             ans = $u64 sys_fork();
     else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
     else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
@@ -235,13 +241,38 @@ export u64 syscall_handler() {
     return $u64 ans;
 }
 
-i32 sys_sendto(i32 fd, void* buf, u64 size, i32 flags, sockaddr* dest_addr, i32 addr_len) {
-    return -ERR_UNKNOWN;
-}
+// i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u16 addr_len) {
+//     pagetable_t user_pt = pt_get_current();
+//     pt_switch_to_kernel();
 
-i32 sys_recvfrom(i32 fd, void* buf, u64 size, i32 flags, sockaddr* src_addr, i32 addr_len) {
-    return -ERR_UNKNOWN;
-}
+//     if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+//         pt_switch(user_pt);
+//         return -ERR_BADF;
+//     }
+
+//     process* proc = get_cur_proc();
+//     file* f = proc->fd_table[fd];
+
+//     if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+//         pt_switch(user_pt);
+//         return -ERR_NOTSOCK;
+//     }
+
+//     socket* sock = $socket* f->resource_ptr;
+//     u8* kbuf = $u8* malloc(size);
+
+//     sockaddr_in* ksrc = $sockaddr* $u64 nullptr;
+//     if($void* src_addr != nullptr) {
+//         ksrc = $sockaddr_in* malloc(sizeof(sockaddr_in));
+//     }
+
+
+//     i32 ret = sock->ops->recieve(sock, kbuf, size, flags, $sockaddr* ksrc);
+
+
+//     pt_switch(user_pt);
+//     return ret;
+// }
 
 // https://man7.org/linux/man-pages/man2/socket.2.html
 i32 sys_socket(i32 domain, i32 type, i32 protocol) {
@@ -249,15 +280,15 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     pt_switch_to_kernel();
 
     // For later, rn i only support ipv4
-    if(domain != AF_INET) {
+    if(domain != $i32 AF_INET) {
         pt_switch(user_pt);
-        return -ERR_EAFNOSUPPORT;
+        return -ERR_AFNOSUPPORT;
     }
 
     // For later, only support udp and raw (?)
     if(type != SOCK_DGRAM && type != SOCK_RAW) {
         pt_switch(user_pt);
-        return -ERR_ESOCKTNOSUPPORT; 
+        return -ERR_SOCKTNOSUPPORT; 
     }
 
     process* proc = get_cur_proc();
@@ -270,7 +301,7 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     }
     if(fd_ind == -1) {
         pt_switch(user_pt);
-        return -ERR_ENFILE;
+        return -ERR_NFILE;
     }
 
     socket* socket = $socket* malloc(sizeof(socket));
@@ -1072,7 +1103,7 @@ i32 sys_pipe(i32[2]* fds) {
         }
     }
     if(fdind0 == -1 || fdind1 == -1) {
-        return -ERR_ENFILE; //file table overflow
+        return -ERR_NFILE; //file table overflow
     }
 
     //create the pipe
