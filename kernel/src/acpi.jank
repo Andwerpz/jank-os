@@ -427,8 +427,8 @@ struct PCIHeader0 {
     u32 expansion_rom_base_addr;        // pointer to optional option ROM
     u8 capabilities_ptr;                // offset to standard capability struct if (1 << 4) set in status
     u8[7] reserved0;
-    u8 interrupt_line;                  // which legacy PCI INTx pin the device uses
-    u8 interrupt_pin;                   // PIC IRQ routing number, mosly irrelevant
+    u8 interrupt_line;                  // tells you the PIC IRQ number 
+    u8 interrupt_pin;                   // tells you the INTx pin 
     u8 min_gnt;                         // PCI bus timing hints, mostly irrelevant
     u8 max_lat;
 }
@@ -492,4 +492,88 @@ void init_mcfg(MCFG* mcfg) {
     }
 
     println("done init mcfg");
+}
+
+//returns the address of the PCI capability on success
+//returns 0 on failure
+u64 pci_find_capability_addr(PCIHeader0* pci_hdr, u8 tgt_id) {
+    //check for existence of PCI capabilities
+    if((pci_hdr->status & ($u16 1 << $u16 4)) == $u16 0) {
+        //no capabilities
+        return 0x0;
+    }
+
+    u64 addr = $u64 pci_hdr;
+    u64 ptr = $u64 pci_hdr->capabilities_ptr;
+    while(ptr) {
+        u8 cap_id = ($u8* (addr + ptr))[0];
+        u8 next_ptr = ($u8* (addr + ptr))[1];
+        if(cap_id == tgt_id) {
+            //found it
+            return $u64 addr + ptr;
+        }
+        ptr = $u64 next_ptr;
+    }
+    return 0x0;
+}
+
+//returns 0 on success, 1 on failure
+// TODO multiple messages. Instead of only firing on the input vector, you can fire on vectors in range [int_vec, int_vec + 32)
+// TODO masking. It allows you to suppress interrupts for some input vectors
+i32 pci_enable_msi(PCIHeader0* pci_hdr, u8 int_vec) {
+    u64 MSI_addr = pci_find_capability_addr(pci_hdr, $u8 0x05);
+    if(MSI_addr == 0x0) return 1;
+
+    u16 msg_ctrl = ($u16* (MSI_addr + 0x2))[0];
+    i32 is_64bit = 0;
+    i32 masking_enabled = 0;
+    if(msg_ctrl & $u16 (0x1 << 0x7)) {
+        is_64bit = 1;
+    }
+    if(msg_ctrl & $u16 (0x1 << 0x8)) {
+        masking_enabled = 1;
+    }
+
+    //disable multiple messaging
+    msg_ctrl &= $u16 ~(0b0000000001110000);
+
+    //write message address + message data
+    u8 dest_apic_id = $u8 0;        //identifier for CPU, TODO read LAPIC ID
+    u64 LAPIC_base = 0xFEE00000;    //TODO read IA32_APIC_BASE_MSR
+    u64 msg_addr = LAPIC_base + ($u64 dest_apic_id << $u64 12);
+    if(is_64bit) {
+        ($u32* (MSI_addr + 0x4))[0] = $u32 msg_addr;
+        ($u32* (MSI_addr + 0x8))[0] = $u32 (msg_addr >> $u64 32);
+        ($u16* (MSI_addr + 0xC))[0] = $u16 int_vec;
+
+        if(masking_enabled) {
+            //unmask everything
+            ($u32* (MSI_addr + 0x10))[0] = $u32 0;
+        }
+    }
+    else {
+        ($u32* (MSI_addr + 0x4))[0] = $u32 msg_addr;
+        ($u16* (MSI_addr + 0x8))[0] = $u16 int_vec;
+        assert($u32 msg_addr == ($u32* (MSI_addr + 0x4))[0], "pci_enable_msi() : msg_addr should match");
+        assert(!masking_enabled, "pci_enable_msi() : masking should only be enabled with 64-bit addressing also enabled");
+    }
+
+    //enable MSI
+    msg_ctrl |= $u16 (1 << 0);
+    ($u16* (MSI_addr + 0x2))[0] = msg_ctrl;
+
+    return 0;
+}
+
+//returns 0 on success, 1 on failure
+i32 pci_enable_msix(PCIHeader0* pci_hdr, u8 int_vec) {
+    u64 MSIX_addr = pci_find_capability_addr(pci_hdr, $u8 0x11);
+    if(MSIX_addr == 0x0) return 1;
+
+    //explicitly disable MSI-X for now
+    u16 msg_ctrl = ($u16* (MSIX_addr + 0x2))[0];
+    msg_ctrl &= $u16 ~(0x8000);
+    ($u16* (MSIX_addr + 0x2))[0] = msg_ctrl;
+
+    return 1;
 }

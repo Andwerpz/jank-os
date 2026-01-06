@@ -295,16 +295,18 @@ void ext2_print_dir_entry(ext2_dir_entry* dir) {
     cout << "========================\n\n";
 }
 
-//read a single block from the underlying block device
+//read a single ext2 block from the underlying block device
 i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
+    // println("ext2_read_block() : read : ", fs->block_size);
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
     u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = $u64 fs->block_size / fs->dev->block_size;
     return blockdev_read(fs->dev, lba_start, count, buf);
 }
 
-//write a single block to the underlying block device
+//write a single ext2 block to the underlying block device
 i32 ext2_write_block(ext2_fs* fs, u32 block_number, void* buf) {
+    // println("ext2_write_block() : write : ", fs->block_size);
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
     u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = $u64 fs->block_size / fs->dev->block_size;
@@ -1654,6 +1656,7 @@ void ext2_construct_vfs_inode(u64 dev, string name, u32 inode_num, ext2_fs* supe
 
 //vfs operation to produce root inode for this ext2 filesystem
 i32 ext2_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
+    // println("ext2_get_mount_root() : start");
     ext2_fs* fs = $ext2_fs* super;
 
     //retrieve root inode
@@ -1664,11 +1667,13 @@ i32 ext2_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
     }
 
     ext2_construct_vfs_inode(file_next_dev(), _node->name, $u32 2, fs, node, res);
+    // println("ext2_get_mount_root() : done");
     return 0;
 }
 
 //vfs operation to get child of ext2 node
 i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
+    // println("ext2_lookup() : start");
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     assert(_node->is_directory(), "ext2_lookup() : only valid on directories");
@@ -1685,10 +1690,12 @@ i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
 
     //construct output and return
     ext2_construct_vfs_inode(_node->dev, child, child_node_num, fs, child_node, res);
+    // println("ext2_lookup() : done");
     return VFS_WALK_FOUND;
 }
 
 i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
+    // println("ext2_get_children() : start");
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     assert(_node->is_directory(), "ext2_get_children() : only valid on directories");
@@ -1718,6 +1725,8 @@ i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
         assert(offset == fs->block_size, "ext2_get_children() : offset must end exactly at block end");
     }
 
+    // println("ext2_get_children() : done");
+
     pfree(buf);
     return 0;
 }
@@ -1735,6 +1744,7 @@ i32 ext2_dir_empty(vfs_inode* _node, i32& ret) {
 }
 
 i32 ext2_mkdir(vfs_inode* _node, string name) {
+    // println("ext2_mkdir() : start");
     ext2_inode* parent_inode = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     assert(_node->is_directory(), "ext2_mkdir() : only valid on directories");
@@ -1788,6 +1798,8 @@ i32 ext2_mkdir(vfs_inode* _node, string name) {
     if(ext2_add_directory_entry(fs, dir_inode, inode_ind, parent_inode, $u32 _node->node_num, new string(".."))) {  //child -> parent
         panic("ext2_mkdir() : failed to add \"..\" entry to new dir");
     }
+
+    // println("ext2_mkdir() : done");
 
     free($void* dir_inode, sizeof(ext2_inode));
     return 0;
@@ -1962,7 +1974,13 @@ i32 ext2_get_size(vfs_inode* _node, u64& res) {
 //reads the contents from a regular file
 //it may be the case that some blocks are not mapped. If so, those will be filled with all '\0' on read
 //returns the number of bytes read
+// TODO reduce the amount of calls to ext_read_block()
+//  - right now, every time we traverse the block map we potentially emit a bunch of reads
+//    perhaps instead of traversing the block map for each block individually, we have a function in which we
+//    specify the range of blocks to translate (file block -> LBA), and then we can sort the LBAs to get 
+//    contiguous transfers. Maybe only enable this for large transfers (>= 5 blocks)
 i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
+    // println("ext2_read_file() : start : ", _node->name);
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     assert(_node->is_file(), "ext2_read_file() : only valid on files");
@@ -2026,6 +2044,7 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
         amt -= cur_amt;
     }
 
+    // println("ext2_read_file() : done");
     pfree(tmp_buf);
     return 0;
 }

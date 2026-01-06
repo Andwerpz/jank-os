@@ -155,12 +155,34 @@ struct USB_device {
     }
 }
 
+//information about an active USB transfer
+//transfer event handler should find a corresponding USB_transfer struct, populate it, and wake waiters / call callback
+struct USB_transfer {
+    USB_device* dev;
+    u64 refcnt;
+    u32 slot;
+    u32 endpoint;
+    u32 interrupter;
+    u64 trb_ptr;
+    u64 amt;
+
+    i32 is_done;
+    i64 status; 
+    waitq wait_queue;
+    i32 has_callback;
+    fn<void(USB_transfer*)> callback;
+}
+
 [__GLOBAL_FIRST__] USB_device* USB_DEVICES;
 [__GLOBAL_FIRST__] i32* USB_DEVICE_USED;
 [__GLOBAL_FIRST__] u64 USB_MAX_DEVICES = $u64 512;
 
 // dummy root hub device, root of USB device tree
 [__GLOBAL_FIRST__] USB_device* USB_ROOT_DEVICE;
+
+[__GLOBAL_FIRST__] u64 USB_MAX_TRANSFERS = $u64 128;
+[__GLOBAL_FIRST__] i32* USB_TRANSFER_PRESENT;
+[__GLOBAL_FIRST__] USB_transfer* USB_TRANSFERS;
 
 struct USB_configuration {
     vector<USB_interface*> interfaces;
@@ -218,6 +240,74 @@ struct USB_endpoint {
 [__GLOBAL_FIRST__] u8 USB_SUBCLASS_SCSI = $u8 0x06;
 [__GLOBAL_FIRST__] u8 USB_PROTOCOL_BOT = $u8 0x50;  // bulk only transfers
 
+void init_usb() {
+    if(!XHCI_DID_INIT) {
+        println("init_usb() : no xHCI controller found, cannot init usb");
+        return;
+    }
+
+    assert(XHCI_DID_INIT, "init_usb() : need to have XHCI");
+    println("start init usb");
+
+    assert(sizeof(USB_device_descriptor) == $u64 18, "init_usb() : sizeof(device_descriptor) should be 18");
+    assert(sizeof(USB_configuration_descriptor) == $u64 9, "init_usb() : sizeof(configuration_descriptor) should be 9");
+    assert(sizeof(USB_interface_descriptor) == $u64 9, "init_usb() : sizeof(interface_descriptor) should be 9");
+    assert(sizeof(USB_endpoint_descriptor) == $u64 7, "init_usb() : sizeof(endpoint_descriptor) should be 7");
+
+    //initialize USB transfer array
+    USB_TRANSFERS = $USB_transfer* malloc(sizeof(USB_transfer) * USB_MAX_TRANSFERS);
+    USB_TRANSFER_PRESENT = $i32* malloc(sizeof(i32) * USB_MAX_TRANSFERS);
+    memset($void* USB_TRANSFERS, 0, sizeof(USB_transfer) * USB_MAX_TRANSFERS);
+    memset($void* USB_TRANSFER_PRESENT, 0, sizeof(i32) * USB_MAX_TRANSFERS);
+
+    //initialize device allocator
+    USB_DEVICES = $USB_device* malloc(sizeof(USB_device) * USB_MAX_DEVICES);
+    USB_DEVICE_USED = $i32* malloc(sizeof(i32) * USB_MAX_DEVICES);
+    for(u64 i = 0x0; i < USB_MAX_DEVICES; i++) {
+        USB_DEVICE_USED[i] = 0;
+    }
+
+    //create root hub device
+    USB_ROOT_DEVICE = usb_alloc_device();
+    USB_ROOT_DEVICE->is_hub = 1;
+    USB_ROOT_DEVICE->nr_ports = XHCI_MAX_PORTS;
+    USB_ROOT_DEVICE->children = $USB_device** malloc(sizeof(USB_device*) * (XHCI_MAX_PORTS + 0x1));
+    USB_ROOT_DEVICE->child_present = $i32* malloc(sizeof(i32) * (XHCI_MAX_PORTS + 0x1));
+    for(u64 i = 0x0; i <= XHCI_MAX_PORTS; i++) {
+        USB_ROOT_DEVICE->child_present[i] = 0;
+    }
+    USB_ROOT_DEVICE->desc_str = "USB Root";
+
+    //do root ports sweep
+    println("Root ports sweep : ", XHCI_MAX_PORTS);
+    for(u32 i = $u32 0x1; i <= $u32 XHCI_MAX_PORTS; i++) {
+        //check if anything is connected here
+        if(!xhci_port_is_device_connected(i)) {
+            //nothing connected
+            println("Nothing on port : ", i);
+            continue;
+        }   
+        println("Found something on port : ", i);
+
+        //index device
+        USB_device* dev = usb_index_device(USB_ROOT_DEVICE, i);
+        println("Done indexing device");
+
+        //configure device
+        usb_configure_device(dev);
+        println("Done configuring device");
+    }
+
+    println("USB Device Tree : ");
+    usb_print_devtree();
+
+    // panic("stop here for now");
+
+    println("done init usb");
+}
+
+
+// -- USB device --
 //configures the provided USB device
 //should only be called once per device
 //also makes device interfaces public for use elsewhere (BOT -> blockdev for example)
@@ -452,7 +542,7 @@ USB_device* usb_index_device(USB_device* parent, u32 port) {
     dev->slot = slot;
     dev->parent = parent;
     assert(!parent->child_present[port], "usb_index_device() : parent already has child at this port");
-    usb_inc_refcnt(parent);
+    usb_device_inc_refcnt(parent);
     parent->children[port] = dev;
     parent->child_present[port] = 1;
 
@@ -685,98 +775,21 @@ void usb_dealloc_device(USB_device* dev) {
         assert(parent->children[port] == dev, "usb_dealloc_device() : parent->child mismatch");
         assert(parent->child_present[port], "usb_dealloc_device() : child should be present");
         
-        usb_dec_refcnt(parent);
+        usb_device_dec_refcnt(parent);
         parent->children[port] = $USB_device* nullptr;
         parent->child_present[port] = 0;
     }
 }
 
-void usb_dec_refcnt(USB_device* dev) {
-    assert(dev != nullptr, "usb_dec_refcnt() : null dev");
-    assert(dev->refcnt != 0x0, "usb_dec_refcnt() : zero refs");
+void usb_device_dec_refcnt(USB_device* dev) {
+    assert(dev != nullptr, "usb_device_dec_refcnt() : null dev");
+    assert(dev->refcnt != 0x0, "usb_device_dec_refcnt() : zero refs");
     dev->refcnt --;
 }
 
-void usb_inc_refcnt(USB_device* dev) {
-    assert(dev != nullptr, "usb_inc_refcnt() : null dev");
+void usb_device_inc_refcnt(USB_device* dev) {
+    assert(dev != nullptr, "usb_device_inc_refcnt() : null dev");
     dev->refcnt ++;
-}
-
-void init_usb() {
-    if(!XHCI_DID_INIT) {
-        println("init_usb() : no xHCI controller found, cannot init usb");
-        return;
-    }
-
-    assert(XHCI_DID_INIT, "init_usb() : need to have XHCI");
-    println("start init usb");
-
-    assert(sizeof(USB_device_descriptor) == $u64 18, "init_usb() : sizeof(device_descriptor) should be 18");
-    assert(sizeof(USB_configuration_descriptor) == $u64 9, "init_usb() : sizeof(configuration_descriptor) should be 9");
-    assert(sizeof(USB_interface_descriptor) == $u64 9, "init_usb() : sizeof(interface_descriptor) should be 9");
-    assert(sizeof(USB_endpoint_descriptor) == $u64 7, "init_usb() : sizeof(endpoint_descriptor) should be 7");
-
-    //initialize device allocator
-    USB_DEVICES = $USB_device* malloc(sizeof(USB_device) * USB_MAX_DEVICES);
-    USB_DEVICE_USED = $i32* malloc(sizeof(i32) * USB_MAX_DEVICES);
-    for(u64 i = 0x0; i < USB_MAX_DEVICES; i++) {
-        USB_DEVICE_USED[i] = 0;
-    }
-
-    //create root hub device
-    USB_ROOT_DEVICE = usb_alloc_device();
-    USB_ROOT_DEVICE->is_hub = 1;
-    USB_ROOT_DEVICE->nr_ports = XHCI_MAX_PORTS;
-    USB_ROOT_DEVICE->children = $USB_device** malloc(sizeof(USB_device*) * (XHCI_MAX_PORTS + 0x1));
-    USB_ROOT_DEVICE->child_present = $i32* malloc(sizeof(i32) * (XHCI_MAX_PORTS + 0x1));
-    for(u64 i = 0x0; i <= XHCI_MAX_PORTS; i++) {
-        USB_ROOT_DEVICE->child_present[i] = 0;
-    }
-    USB_ROOT_DEVICE->desc_str = "USB Root";
-
-    //do root ports sweep
-    println("Root ports sweep : ", XHCI_MAX_PORTS);
-    for(u32 i = $u32 0x1; i <= $u32 XHCI_MAX_PORTS; i++) {
-        //check if anything is connected here
-        if(!xhci_port_is_device_connected(i)) {
-            //nothing connected
-            println("Nothing on port : ", i);
-            continue;
-        }   
-        println("Found something on port : ", i);
-
-        //index device
-        USB_device* dev = usb_index_device(USB_ROOT_DEVICE, i);
-        println("Done indexing device");
-
-        //configure device
-        usb_configure_device(dev);
-        println("Done configuring device");
-    }
-
-    println("USB Device Tree : ");
-    usb_print_devtree();
-
-    // panic("stop here for now");
-
-    println("done init usb");
-}
-
-// -- MISC --
-void usb_print_devtree() {
-    usb_print_devtree(USB_ROOT_DEVICE, 0x0);
-}
-
-void usb_print_devtree(USB_device* dev, u64 depth) {
-    for(u64 i = 0x0; i < depth; i++) print("    ");
-    println(dev->desc_str);
-
-    if(dev->is_hub) {
-        for(u64 i = 0x1; i <= dev->nr_ports; i++) {
-            if(!dev->child_present[i]) continue;
-            usb_print_devtree(dev->children[i], depth + 0x1);
-        }
-    }
 }
 
 
@@ -878,25 +891,206 @@ u64 usb_device_get_descriptor_class(USB_device* dev, u32 desc_type, u32 desc_ind
 }
 
 
+// -- USB transfer --
+// TODO probably need a way to purge stale transfers
+//  will have to worry about this when I implement hotplug, 
+//  perhaps going around and purging all transfers related to recently disconnected devices
+
+void usb_handle_transfer_event(xHCI_TRB* trb) {
+    assert(xhci_trb_type(trb) == XHCI_TRB_TYPE_TRANSFER_EVENT, "usb_handle_transfer_event() : trb is not transfer event trb");
+
+    //find transfer
+    u32 slot = xhci_event_trb_slot_id(trb);
+    u64 trb_ptr = xhci_event_trb_trb_ptr(trb);
+    USB_transfer* transfer = usb_find_transfer(slot, trb_ptr);
+    assert(transfer != nullptr, "usb_handle_transfer_event() : null transfer");
+    assert(transfer->is_done == 0, "usb_handle_transfer_event() : transfer already done");
+    
+    //populate transfer status
+    if(xhci_event_trb_completion_code(trb) == XHCI_COMPLETION_CODE_SUCCESS) {
+        //it gives you the part that wasn't transfered
+        transfer->status = $i64 (transfer->amt - $u64 trb->status & 0x00FFFFFF);
+    }
+    else {
+        // TODO consider returning something more informative
+        transfer->status = $i64 -1;
+    }
+
+    //mark transfer as done
+    transfer->is_done = 1;
+
+    //wake waiters + call callback
+    waitq_wake_all(@(transfer->wait_queue));
+    if(transfer->has_callback) {
+        //call the callback
+        assert($u64 (transfer->callback) != 0x0, "usb_handle_transfer_event() : null callback");
+        transfer->callback#(transfer);
+    }
+
+    //drop USB transfer array reference
+    usb_transfer_dec_refcnt(transfer);
+}
+
+USB_transfer* usb_find_transfer(u32 slot, u64 trb_ptr) {
+    for(u64 i = 0x0; i < USB_MAX_TRANSFERS; i++) {
+        if(!USB_TRANSFER_PRESENT[i]) continue;
+
+        USB_transfer* transfer = @(USB_TRANSFERS[i]);
+        if(transfer->slot != slot || transfer->trb_ptr != trb_ptr) continue;
+
+        //found transfer
+        return transfer;
+    }
+
+    panic("usb_find_transfer() : failed to find transfer");
+    return $USB_transfer* nullptr;
+}
+
+void usb_transfer_dec_refcnt(USB_transfer* transfer) {
+    assert(transfer != nullptr, "usb_transfer_dec_refcnt() : null transfer");
+    assert(transfer->refcnt != 0x0, "usb_transfer_dec_refcnt() : zero refcnt");
+    transfer->refcnt --;
+    if(transfer->refcnt == 0x0) {
+        //dealloc the transfer
+        usb_dealloc_transfer(transfer);
+    }
+}
+
+void usb_transfer_inc_refcnt(USB_transfer* transfer) {
+    assert(transfer != nullptr, "usb_transfer_dec_refcnt() : null transfer");
+    transfer->refcnt ++;
+}
+
+USB_transfer* usb_alloc_transfer() {
+    for(u64 i = 0x0; i < USB_MAX_TRANSFERS; i++) {
+        if(USB_TRANSFER_PRESENT[i]) continue;
+
+        //ok, alloc transfer
+        USB_TRANSFER_PRESENT[i] = 1;
+        USB_transfer* transfer = @(USB_TRANSFERS[i]);
+        memset($void* transfer, 0, sizeof(USB_transfer));
+        new (transfer) USB_transfer();
+
+        //add USB transfer array reference
+        usb_transfer_inc_refcnt(transfer);
+
+        return transfer;
+    }
+    panic("usb_alloc_transfer() : out of transfers");
+    return $USB_transfer* nullptr;
+}
+
+void usb_dealloc_transfer(USB_transfer* transfer) {
+    assert($u64 transfer >= $u64 USB_TRANSFERS, "usb_dealloc_transfer() : transfer address before transfers array");
+    assert(($u64 USB_TRANSFERS - $u64 transfer) % sizeof(USB_transfer) == 0x0, "usb_dealloc_transfer() : transfer must be aligned");
+    u64 ind = ($u64 USB_TRANSFERS - $u64 transfer) / sizeof(USB_transfer);
+    assert(ind < USB_MAX_TRANSFERS, "usb_dealloc_transfer() : transfer is outside array");
+    assert(USB_TRANSFER_PRESENT[ind], "usb_dealloc_transfer() : transfer is not present");
+    assert(transfer->refcnt == 0x0, "usb_dealloc_transfer() : transfer still has references");
+
+    //ok, dealloc transfer
+    USB_TRANSFER_PRESENT[ind] = 0;
+    transfer->~();
+}
+
+
 // -- BULK TRANSPORT --
 //executes a bulk OUT (host -> device) transfer
 //the given endpoint must be of type XHCI_ENDPOINT_TYPE_BULK_OUT
 //buf must be a physical buffer
 //on success, returns the number of bytes transferred, on failure returns -1
-i64 usb_bulk_out(u32 slot, USB_endpoint* end, void* buf, u64 amt) {
+i64 usb_bulk_out(USB_device* dev, USB_endpoint* end, void* buf, u64 amt) {
     assert(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_OUT, "usb_bulk_out() : wrong endpoint type");
-    i64 retval = xhci_bulk_transfer(slot, end->endpoint, XHCI_INTR0, buf, amt);
-    return retval;
+    if(SCHEDULER_STARTED) { 
+        //allocate USB transfer struct
+        USB_transfer* transfer = usb_alloc_transfer();
+        usb_transfer_inc_refcnt(transfer);
+        transfer->dev = dev;
+        transfer->slot = dev->slot;
+        transfer->endpoint = end->endpoint;
+        transfer->interrupter = XHCI_INTR0;
+        transfer->amt = amt;
+        
+        //initiate transfer
+        u64 trb_ptr = xhci_initiate_bulk_transfer(dev->slot, end->endpoint, XHCI_INTR0, buf, amt);
+        transfer->trb_ptr = trb_ptr;
+
+        //block process until transfer is done
+        process* process = get_cur_proc();
+        while(1) {
+            if(transfer->is_done) break;
+            wait_on(@(transfer->wait_queue));
+        }
+
+        //handle transfer
+        i64 status = transfer->status;
+        usb_transfer_dec_refcnt(transfer);
+
+        return status;
+    }
+    else {
+        //do synchronous transfer
+        i64 retval = xhci_bulk_transfer(dev->slot, end->endpoint, XHCI_INTR0, buf, amt);
+        return retval;
+    }
 }
 
 //executes a bulk IN (device -> host) transfer 
 //the given endpoint must be of type XHCI_ENDPOINT_TYPE_BULK_IN
 //buf must be a physical buffer
 //on success, returns the number of bytes transferred, on failure returns -1
-i64 usb_bulk_in(u32 slot, USB_endpoint* end, void* buf, u64 amt) {
+i64 usb_bulk_in(USB_device* dev, USB_endpoint* end, void* buf, u64 amt) {
     assert(end->endpoint_type == XHCI_ENDPOINT_TYPE_BULK_IN, "usb_bulk_in() : wrong endpoint type");
-    i64 retval = xhci_bulk_transfer(slot, end->endpoint, XHCI_INTR0, buf, amt);
-    return retval;
+    if(SCHEDULER_STARTED) {
+        //allocate USB transfer struct
+        USB_transfer* transfer = usb_alloc_transfer();
+        usb_transfer_inc_refcnt(transfer);
+        transfer->dev = dev;
+        transfer->slot = dev->slot;
+        transfer->endpoint = end->endpoint;
+        transfer->interrupter = XHCI_INTR0;
+        transfer->amt = amt;
+        
+        //initiate transfer
+        u64 trb_ptr = xhci_initiate_bulk_transfer(dev->slot, end->endpoint, XHCI_INTR0, buf, amt);
+        transfer->trb_ptr = trb_ptr;
+
+        //block process until transfer is done
+        process* process = get_cur_proc();
+        while(1) {
+            if(transfer->is_done) break;
+            wait_on(@(transfer->wait_queue));
+        }
+
+        //handle transfer
+        i64 status = transfer->status;
+        usb_transfer_dec_refcnt(transfer);
+
+        return status;
+    }
+    else {
+        //do synchronous transfer
+        i64 retval = xhci_bulk_transfer(dev->slot, end->endpoint, XHCI_INTR0, buf, amt);
+        return retval;
+    }
+}
+
+
+// -- MISC --
+void usb_print_devtree() {
+    usb_print_devtree(USB_ROOT_DEVICE, 0x0);
+}
+
+void usb_print_devtree(USB_device* dev, u64 depth) {
+    for(u64 i = 0x0; i < depth; i++) print("    ");
+    println(dev->desc_str);
+
+    if(dev->is_hub) {
+        for(u64 i = 0x1; i <= dev->nr_ports; i++) {
+            if(!dev->child_present[i]) continue;
+            usb_print_devtree(dev->children[i], depth + 0x1);
+        }
+    }
 }
 
 

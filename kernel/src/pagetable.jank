@@ -24,16 +24,31 @@
 // - if you don't have the correct permissions (currently on a user data segment and PTE_USER is off), 
 //    a page fault happens
 
+//about the Page Attribute Table (PAT)
+// it used to be that you could only define cache-related behaviour using the PWT and PCD bits. 
+// with the introduction of the PAT bit, PAT, PCD, PWT bits instead become interpreted as a 3-bit index into the
+// IA32_PAT_MSR register, each entry describing some different caching behaviour. To maintain legacy behaviour,
+// I setup the PAT MSR so that with PAT = 0, the behaviour corresponds to non-PAT usage.
+
 typedef u64 pte_t;              
 typedef pte_t* pagetable_t;
 
-[__GLOBAL_FIRST__] u64 PTE_PRESENT    = $u64 1 << $u64 0;
-[__GLOBAL_FIRST__] u64 PTE_WRITEABLE  = $u64 1 << $u64 1;   //can only write if every entry along the walk has this flag 
-[__GLOBAL_FIRST__] u64 PTE_USER       = $u64 1 << $u64 2;   //user can only access if every entry along the walk has this flag 
-[__GLOBAL_FIRST__] u64 PTE_HUGEPG     = $u64 1 << $u64 7;
-[__GLOBAL_FIRST__] u64 PTE_NX         = $u64 1 << $u64 63;  //*NOT* executable flag, can only execute if no entry along the walk has this flag
-[__GLOBAL_FIRST__] u64 PTE_PCD        = $u64 1 << $u64 4;   // Cache Disable
-[__GLOBAL_FIRST__] u64 PTE_PWT        = $u64 1 << $u64 3;   // Write Through
+[__GLOBAL_FIRST__] u64 PTE_PRESENT      = $u64 1 << $u64 0;
+[__GLOBAL_FIRST__] u64 PTE_WRITEABLE    = $u64 1 << $u64 1;   //can only write if every entry along the walk has this flag 
+[__GLOBAL_FIRST__] u64 PTE_USER         = $u64 1 << $u64 2;   //user can only access if every entry along the walk has this flag 
+[__GLOBAL_FIRST__] u64 PTE_HUGEPG       = $u64 1 << $u64 7;
+[__GLOBAL_FIRST__] u64 PTE_NX           = $u64 1 << $u64 63;  //*NOT* executable flag, can only execute if no entry along the walk has this flag
+[__GLOBAL_FIRST__] u64 PTE_PWT          = $u64 1 << $u64 3;   // Write Through
+[__GLOBAL_FIRST__] u64 PTE_PCD          = $u64 1 << $u64 4;   // Cache Disable
+[__GLOBAL_FIRST__] u64 PTE_PAT          = $u64 1 << $u64 7;   // Page Attribute Table
+
+[__GLOBAL_FIRST__] u32 IA32_PAT_MSR     = $u32 0x277;
+[__GLOBAL_FIRST__] u64 PAT_UC           = $u64 0;   // Uncacheable : all accesses are uncacheable, write combining is not allowed, speculative reads are not allowed
+[__GLOBAL_FIRST__] u64 PAT_WC           = $u64 1;   // Write Combining : all accesses are uncacheable, write combining is allowed, speculative reads are allowed
+[__GLOBAL_FIRST__] u64 PAT_WT           = $u64 4;   // Write Through
+[__GLOBAL_FIRST__] u64 PAT_WP           = $u64 5;   // Write Protect
+[__GLOBAL_FIRST__] u64 PAT_WB           = $u64 6;   // Write Back 
+[__GLOBAL_FIRST__] u64 PAT_UCM          = $u64 7;   // Uncached : same as UC, but can be overridden by a WC MTRR
 
 void enable_nx() {
     //check if nx is supported
@@ -49,7 +64,33 @@ void enable_nx() {
 
 i32 init_paging() {
     enable_nx();
+
+    //setup PAT
+    {
+        u64 pat = 0x0;
+        pat |= PAT_WB << $u64 0;
+        pat |= PAT_WT << $u64 8;
+        pat |= PAT_UCM << $u64 16;
+        pat |= PAT_UC << $u64 24;
+        pat |= PAT_WC << $u64 32;
+        pat |= PAT_WT << $u64 40;
+        pat |= PAT_UCM << $u64 48;
+        pat |= PAT_UC << $u64 56;
+        wrmsr(IA32_PAT_MSR, pat);
+    }
+
     return 0;
+}
+
+//given a PAT caching type, gives you the pte permission bits to get that type
+u64 pte_pat_bits(u64 type) {
+    if(type == PAT_WB)          return 0x0;
+    else if(type == PAT_WT)     return PTE_PWT;
+    else if(type == PAT_UCM)    return PTE_PCD;
+    else if(type == PAT_UC)     return PTE_PCD | PTE_PWT;
+    else if(type == PAT_WC)     return PTE_PAT;
+    else panic("pte_pat_bits() : unexpected caching type");
+    return 0x0;
 }
 
 void* pte_get_addr(pte_t pte) {
@@ -226,6 +267,29 @@ void pt_map_hugepg(pagetable_t pt, void* vaddr, void* paddr, u64 leaf_flags) {
 
     //map the hugepg
     pt[ind] = pte_create_new(paddr, leaf_flags | PTE_HUGEPG);
+}
+
+//overwrites the flags of this vaddr mapping to be equal to leaf_flags
+//vaddr must be mapped using a regular sized page (4KB)
+void pt_set_leaf_flags(pagetable_t pt, void* vaddr, u64 leaf_flags) {
+    //ensure that vaddr is page aligned and mapped
+    assert(($u64 vaddr) % PAGE_SIZE == 0x0, "pt_set_leaf_flags() : vaddr must be page aligned");
+    assert(pt_is_vaddr_mapped(pt, vaddr), "pt_set_leaf_flags() : vaddr should be mapped");
+
+    //traverse pt to level 1
+    i32 level = 1;
+    pte_t pte = pt_walk(pt, vaddr, level, 0, PTE_WRITEABLE, leaf_flags);
+    assert(level == 1, "pt_set_leaf_flags() : we should get level 1 pte");
+    assert(!(pte & PTE_HUGEPG), "pt_set_leaf_flags() : pte should not correspond to huge page");
+
+    //traverse down to level 0 pt
+    pt = $pagetable_t pte_get_addr(pte);
+    u64 ind = vaddr_get_pt_ind(vaddr, 0);
+    assert((pt[ind] & PTE_PRESENT) == PTE_PRESENT, "pt_set_leaf_flags() : entry corresponding to physical page should be present");
+
+    //overwrite the flags
+    void* paddr = pte_get_addr(pt[ind]);
+    pt[ind] = pte_create_new(paddr, leaf_flags);
 }
 
 void pt_alloc_and_map_page(pagetable_t pt, void* vaddr, u64 leaf_flags) {

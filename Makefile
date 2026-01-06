@@ -22,15 +22,16 @@ boot: drive
 		-m 2G \
 		-no-reboot \
 		-serial stdio \
-		-device qemu-xhci,id=xhci \
+		-device nec-usb-xhci,id=xhci,msi=on,msix=off \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \
 		-device ich9-ahci,id=ahci \
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
 		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
 		-netdev user,id=net0,hostfwd=udp::1234-:1234 -device e1000,netdev=net0,mac=52:54:00:12:34:56 \
-		-object filter-dump,id=f1,netdev=net0,file=jankos.pcap
+		-object filter-dump,id=f1,netdev=net0,file=jankos.pcap 
 # 		-d int
+
 .PHONY: boot_usb
 boot_usb: drive
 	@mkdir -p build
@@ -40,7 +41,7 @@ boot_usb: drive
 		-m 2G \
 		-no-reboot \
 		-serial stdio \
-		-device qemu-xhci,id=xhci \
+		-device nec-usb-xhci,id=xhci,msi=on,msix=off \
 		-device usb-hub,bus=xhci.0,id=hub0 \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 		-drive if=pflash,format=raw,file=./build/OVMF_VARS_4M.work.fd \

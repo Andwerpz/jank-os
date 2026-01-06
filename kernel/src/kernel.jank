@@ -47,14 +47,12 @@
 #include "networking/protocols/dhcp.jank";
 #include "networking/protocols/tcp.jank";
 #include "networking/nic/e1000.jank";
+#include "waitq.jank";
+#include "apic.jank";
 
 [SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
 [PMA] i32 INIT_PMA_STATUS = init_pma();
-[GDT] i32 INIT_GDT_STATUS = init_gdt();
-[IDT] i32 INIT_IDT_STATUS = init_idt();
 [PAGING] i32 INIT_PAGING_STATUS = init_paging();
-[SYSCALL] i32 INIT_SYSCALL_STATUS = init_syscall();
-[PIC] i32 INIT_PIC_STATUS = init_pic();
 
 void check_paging_enabled() {
     u64 cr0;
@@ -244,6 +242,14 @@ void blockdev_mount_ext2() {
 }
 
 i32 main() {
+    init_vga();
+
+    init_gdt();
+    init_idt();
+    init_pic();
+    init_apic();
+    init_syscall();
+
     init_pit();
     init_kb();
     init_acpi();
@@ -263,8 +269,6 @@ i32 main() {
 
     // cout << "MMAP : \n";
     // print_mmap();
-
-    vga_clear_screen(COLOR_BLACK);
 
     // vfs_tests();
 
