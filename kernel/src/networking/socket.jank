@@ -137,15 +137,15 @@ void init_socket_file_ops() {
 }
 
 i64 socket_read(file* f, u8* buf, u64 len) {
-    socket* socket = $socket* f->resource_ptr;
-
-    return $i64 0;
+    socket* sock = $socket* f->resource_ptr;
+    i32 ret = sock->ops->recieve#(sock, buf, len, 0, $sockaddr* nullptr);
+    return $i64 ret;
 }
 
 i64 socket_write(file* f, u8* buf, u64 len) {
-    socket* socket = $socket* f->resource_ptr;
-
-    return $i64 0;
+    socket* sock = $socket* f->resource_ptr;
+    i32 ret = sock->ops->send#(sock, buf, len, 0, $sockaddr* nullptr);
+    return $i64 ret;
 }
 
 i64 socket_lseek(file* f, i64 offset, i32 whence) {
@@ -159,9 +159,11 @@ i64 socket_getdents(file* f, u8* buf, u64 len) {
 }
 
 i32 socket_close(file* f) {
-    socket* socket = $socket* f->resource_ptr;
-    // return socket->ops->close();
-    return -1;
+    socket* sock = $socket* f->resource_ptr;
+    i32 ret = sock->ops->close#(sock);
+    sock->~();
+    free($void* sock, sizeof(socket));
+    return ret;
 }
 
 i32 socket_truncate(file* f, u64 len) {

@@ -1,4 +1,5 @@
 NOW
+- TEST SYSCALLS AND FILE OPS
 - implement network stack...
 - clean up syscalls, copy to and from user can fail. 
 - rewrite socket struct
