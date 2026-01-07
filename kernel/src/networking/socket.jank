@@ -14,9 +14,19 @@
 [__GLOBAL_FIRST__] i32 IPPROTO_UDP  = 17;
 
 [__GLOBAL_FIRST__] u32 MAX_PORTS = $u32 (1 << 16);
+[__GLOBAL_FIRST__] u32 RESERVED_PORT_START = $u32 1;
+[__GLOBAL_FIRST__] u32 RESERVED_PORT_END = $u32 1024;
+[__GLOBAL_FIRST__] u32 EPHEMERAL_PORT_START = $u32 49152;
+[__GLOBAL_FIRST__] u32 EPHEMERAL_PORT_END = $u32 65535;
 socket** UDP_PORT_TABLE;
 socket** TCP_PORT_TABLE;
 
+i32 get_next_ephemeral_port(socket** port_table) {
+    for(u32 p = EPHEMERAL_PORT_START; p < EPHEMERAL_PORT_END; p++) {
+        if(port_table[p] != nullptr) return $i32 p; 
+    }
+    return -1;
+}
 
 void init_port_tables() {
     // init tables
@@ -41,30 +51,11 @@ struct packet {
 
 struct proto_ops {
     fn<i32(socket*, sockaddr*, u64)> bind;
-    fn<i32(socket*, sockaddr*)> connect;
-    fn<i32(socket*, packet*)> send;
+    fn<i32(socket*, sockaddr*, u64)> connect;
+    fn<i32(socket*, u8*, u64, i32, sockaddr*)> send;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> recieve;
     fn<i32(socket*)> close;
 }
-
-
-// the sockaddr_in and the sockaddr are the same size so we can cast the more
-// general sockaddr struct to the more specific sockaddr_in struct
-// the address family will always(?) be the first 2 bytes for both.
-// we can support more address families this way.
-
-struct sockaddr {
-    u16 sa_family;
-    u8[14] sa_data;
-}
-
-struct sockaddr_in {
-    u16 sin_family;
-    u16 sin_port;
-    u32 sin_addr;
-    u8[8] sin_zero;
-}
-
 
 struct socket {
     i32 domain;
@@ -103,11 +94,24 @@ void socket_push_packet(socket* sock, packet* pkt) {
 }
 
 packet* socket_pop_packet(socket* sock) {
+    // println("POPPING SOCKET: ");
+    // print_ipv4_addr(sock->local_addr); println("");
+    // println($u64 sock->local_port);
+    // print_ipv4_addr(sock->remote_addr); println("");
+    // println($u64 sock->remote_port);
+
     if(sock->rx_head == nullptr) {
         return $packet* nullptr;
     }
 
+    println("HERE");
+
     packet* pkt = sock->rx_head;
+
+    u8* temp = $u8* malloc($u64 pkt->len + 0x1);
+    memcpy($void* temp, $void* pkt->data, $u64 pkt->len);
+    temp[pkt->len] = $u8 0;
+    println(temp);
 
     sock->rx_head = pkt->next;
 

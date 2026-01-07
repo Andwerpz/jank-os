@@ -37,6 +37,7 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     }
 
     // place packet into socket queue
+    println("udp_handle() : placing packet in socket rx queue");
     socket* sock = UDP_PORT_TABLE[dst_port];
 
     packet* pkt = $packet* malloc(sizeof(packet));
@@ -81,8 +82,11 @@ void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 
 void init_udp_ops() {
     UDP_OPS = $proto_ops* malloc(sizeof(proto_ops));
     new (UDP_OPS) proto_ops();
+    UDP_OPS->send       = #<udp_send(socket*, u8*, u64, i32, sockaddr*)>;
     UDP_OPS->recieve    = #<udp_recieve(socket*, u8*, u64, i32, sockaddr*)>;
+    UDP_OPS->connect    = #<udp_connect(socket*, sockaddr*, u64)>;
     UDP_OPS->bind       = #<udp_bind(socket*, sockaddr*, u64)>;
+    UDP_OPS->close      = #<udp_close(socket*)>;
 }
 
 i32 udp_bind(socket* sock, sockaddr* addr, u64 len) {
@@ -100,6 +104,11 @@ i32 udp_bind(socket* sock, sockaddr* addr, u64 len) {
         return -ERR_ADDRINUSE;
     }
 
+    print("udp_bind() : udp bind called for ");
+    print_ipv4_addr(sin->sin_addr);
+    print(" on port: ");
+    println($u64 sin->sin_port);
+
     UDP_PORT_TABLE[sin->sin_port] = sock;
     sock->local_port = sin->sin_port;
     sock->local_addr = sin->sin_addr;
@@ -108,11 +117,18 @@ i32 udp_bind(socket* sock, sockaddr* addr, u64 len) {
 }
 
 i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
+    // println("udp_recieve() : udp receive called");
+    
     packet* pkt = socket_pop_packet(sock);
 
     if($void* pkt == nullptr) {
         return -ERR_AGAIN;
     }
+
+    u8* temp = $u8* malloc($u64 pkt->len + 0x1);
+    memcpy($void* temp, $void* pkt->data, $u64 pkt->len);
+    temp[pkt->len] = $u8 0;
+    println(temp);
 
     u64 copy_len = len;
     if($u64 pkt->len < len) {
@@ -129,8 +145,81 @@ i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
         memset($void* @sin->sin_zero[0], 0, sizeof(sockaddr_in) - $u64 6); // calculate padding, sockaddr_in and sockaddr should be the same size.
     }
 
+    u8* temp2 = $u8* malloc($u64 copy_len + 0x1);
+    memcpy($void* temp2, $void* buf, $u64 copy_len);
+    temp2[copy_len] = $u8 0;
+    println(temp2);
+
+    println($u64 copy_len);
+
     free($void* pkt->data, $u64 pkt->len);
     free($void* pkt, sizeof(packet));
 
+    println($u64 copy_len);
+
     return $i32 copy_len;
+}
+
+i32 udp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dest_addr) {
+    if(len > $u64 65507) return -ERR_MSGSIZE; // max udp payload size
+
+    u32 dst_ip = $u32 0;
+    u16 dst_port = $u16 0;
+
+    if(dest_addr != nullptr) {
+        sockaddr_in* sin = $sockaddr_in* dest_addr;
+        if(sin->sin_family != AF_INET) return -ERR_AFNOSUPPORT;
+
+        dst_ip = sin->sin_addr;
+        dst_port = sin->sin_port;
+    } else {
+        if(sock->remote_addr == $u32 0) return -ERR_DESTADDRREQ;
+
+        dst_ip = sock->remote_addr;
+        dst_port = sock->remote_port;
+    }
+
+    // if didnt call bind before
+    if(sock->local_port == $u16 0) {
+        i32 port = get_next_ephemeral_port(UDP_PORT_TABLE);
+        if(port < 0) return -ERR_ADDRINUSE;
+
+        UDP_PORT_TABLE[port] = sock;
+        sock->local_port = $u16 port;
+    }
+
+    udp_send_packet(dst_ip, sock->local_port, dst_port, $void* buf, $u16 len);
+
+    return $i32 len;
+}
+
+i32 udp_close(socket* sock) {
+    if(sock->local_port != $u16 0) {
+        assert(UDP_PORT_TABLE[sock->local_port] == sock, "udp_close() : current socket in table does not match associated port");
+        UDP_PORT_TABLE[sock->local_port] = $socket* nullptr;
+    }
+
+    while(1) {
+        packet* pkt = socket_pop_packet(sock);
+        if(pkt->next == nullptr) break;
+
+        free($void* pkt->data, $u64 pkt->len);
+        free($void* pkt, sizeof(packet));
+    }
+
+    return 0;
+}
+
+i32 udp_connect(socket* sock, sockaddr* addr, u64 len) {
+    if(len < sizeof(sockaddr_in)) return -ERR_INVAL;
+
+    sockaddr_in* sin = $sockaddr_in* addr;
+    if(sin->sin_family != AF_INET) return -ERR_AFNOSUPPORT;
+
+    sock->remote_addr = sin->sin_addr;
+    sock->remote_port = sin->sin_port;
+
+    // update state...
+
+    return 0;
 }

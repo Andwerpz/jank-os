@@ -201,11 +201,11 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_MMAP)             ans = $u64 sys_mmap($void* arg1, $u64 arg2, $u64 arg3, $u64 arg4, $i32 arg5, $u64 arg6);
     else if(sys_id == SYS_MUNMAP)           ans = $u64 sys_munmap($void* arg1, $u64 arg2);
     else if(sys_id == SYS_GETPID)           ans = $u64 sys_getpid();
-    // else if(sys_id == SYS_SOCKET)           ans = $u64 sys_socket($i32 arg1, $i32 arg2, $i32 arg3);
-    // else if(sys_id == SYS_CONNECT)          ans = $u64 sys_connect($i32 arg1, $i32 arg2, $i32 arg3);
-    // else if(sys_id == SYS_SENDTO)           ans = $u64 sys_sendto($i32 arg1, $i32 arg2, $i32 arg3);
+    else if(sys_id == SYS_SOCKET)           ans = $u64 sys_socket($i32 arg1, $i32 arg2, $i32 arg3);
+    else if(sys_id == SYS_CONNECT)          ans = $u64 sys_connect($i32 arg1, $sockaddr* arg2, $u64 arg3);
+    else if(sys_id == SYS_SENDTO)           ans = $u64 sys_sendto($i32 arg1, $u8* arg2, $u64 arg3, $i32 arg4, $sockaddr* arg5, $u64 arg6);
     else if(sys_id == SYS_RECVFROM)         ans = $u64 sys_recvfrom($i32 arg1, $u8* arg2, $u64 arg3, $i32 arg4, $sockaddr* arg5, $u64* arg6);
-    else if(sys_id == SYS_BIND)             ans = $u64 sys_bind($i32 arg1, $sockaddr* arg2, $u64* arg3);
+    else if(sys_id == SYS_BIND)             ans = $u64 sys_bind($i32 arg1, $sockaddr* arg2, $u64 arg3);
     else if(sys_id == SYS_FORK)             ans = $u64 sys_fork();
     else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
     else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
@@ -241,7 +241,84 @@ export u64 syscall_handler() {
     return $u64 ans;
 }
 
-i32 sys_bind(i32 fd, sockaddr* addr, u64* addr_len) {
+i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    if(len > sizeof(sockaddr)) {
+        len = sizeof(sockaddr);
+    }
+
+    sockaddr* kaddr = $sockaddr* malloc(len);
+    copy_from_user(user_pt, $u8* kaddr, $u8* addr, len);
+
+    i32 ret = sock->ops->connect#(sock, kaddr, len);
+
+    free($void* kaddr, len);
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+i32 sys_sendto(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* dest_addr, u64 addr_len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    u8* kbuf = $u8* malloc(size);
+    copy_from_user(user_pt, kbuf, buf, size);
+
+    u64 copy_amt = addr_len;
+    sockaddr* kaddr_dest = $sockaddr* nullptr;
+    if(dest_addr != nullptr) {
+        kaddr_dest = $sockaddr* malloc(sizeof(sockaddr));
+        memset($void* kaddr_dest, 0, sizeof(sockaddr));
+
+        if(copy_amt > sizeof(sockaddr)) copy_amt = sizeof(sockaddr);
+        copy_from_user(user_pt, $u8* kaddr_dest, $u8* dest_addr, copy_amt);
+    }
+
+    i32 ret = sock->ops->send#(sock, kbuf, size, flags, kaddr_dest);
+
+    free($void* kbuf, size);
+    if(kaddr_dest != nullptr) {
+        free($void* kaddr_dest, copy_amt);
+    }
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+i32 sys_bind(i32 fd, sockaddr* addr, u64 addr_len) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
@@ -268,8 +345,7 @@ i32 sys_bind(i32 fd, sockaddr* addr, u64* addr_len) {
     sockaddr* kaddr = $sockaddr* malloc(sizeof(sockaddr));
     memset($void* kaddr, 0, sizeof(sockaddr));
 
-    u64 copy_len = 0x0;
-    copy_from_user(user_pt, $u8* @copy_len, $u8* addr_len, sizeof(u64));
+    u64 copy_len = addr_len;
 
     if(copy_len > sizeof(sockaddr)) {
         copy_len = sizeof(sockaddr);
@@ -277,9 +353,17 @@ i32 sys_bind(i32 fd, sockaddr* addr, u64* addr_len) {
 
     copy_from_user(user_pt, $u8* kaddr, $u8* addr, copy_len);
 
+    sockaddr_in* temp = $sockaddr_in* kaddr;
+    print("sys_bind() : bind called for ");
+    print_ipv4_addr(temp->sin_addr);
+    print(" on port: ");
+    println($u64 temp->sin_port);
+
     i32 ret = sock->ops->bind#(sock, kaddr, copy_len);
 
     free($void* kaddr, sizeof(sockaddr));
+
+    pt_switch(user_pt);
     return ret;
 }
 
@@ -312,18 +396,29 @@ i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u64* 
     i32 ret = sock->ops->recieve#(sock, kbuf, size, flags, kaddr_src);
 
     if(ret >= 0) {
-        copy_to_user(user_pt, kbuf, buf, $u64 ret);
+        println($u64 ret);
+        u8* temp = $u8* malloc($u64 ret + 0x1);
+        memcpy($void* temp, $void* kbuf, $u64 ret);
+        temp[ret] = $u8 0;
+        println(temp);
+
+        i32 ok = copy_to_user(user_pt, kbuf, buf, $u64 ret);
+        assert(ok == 0, "FAILED TO COPY TO USER 1");
 
         u64 user_addr_len = 0x0;
-        copy_from_user(user_pt, $u8* @user_addr_len, $u8* addr_len, sizeof(u64));
+        ok = copy_from_user(user_pt, $u8* @user_addr_len, $u8* addr_len, sizeof(u64));
+        assert(ok == 0, "FAILED TO COPY TO USER 2");
 
         if(src_addr != nullptr) {
             u64 copy_amt = sizeof(sockaddr);
             if(copy_amt > user_addr_len) {
                 copy_amt = user_addr_len;
             }
-            copy_to_user(user_pt, $u8* kaddr_src, $u8* src_addr, copy_amt);
-            copy_to_user(user_pt, $u8* copy_amt, $u8* addr_len, sizeof(u64));
+            ok = copy_to_user(user_pt, $u8* kaddr_src, $u8* src_addr, copy_amt);
+            assert(ok == 0, "FAILED TO COPY TO USER 3");
+            
+            ok = copy_to_user(user_pt, $u8* @copy_amt, $u8* addr_len, sizeof(u64));
+            assert(ok == 0, "FAILED TO COPY TO USER 4");
         }
     }
 
