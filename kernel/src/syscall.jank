@@ -251,13 +251,13 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     // For later, rn i only support ipv4
     if(domain != AF_INET) {
         pt_switch(user_pt);
-        return -ERR_EAFNOSUPPORT;
+        return -ERR_AFNOSUPPORT;
     }
 
     // For later, only support udp and raw (?)
     if(type != SOCK_DGRAM && type != SOCK_RAW) {
         pt_switch(user_pt);
-        return -ERR_ESOCKTNOSUPPORT; 
+        return -ERR_SOCKTNOSUPPORT; 
     }
 
     process* proc = get_cur_proc();
@@ -270,7 +270,7 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     }
     if(fd_ind == -1) {
         pt_switch(user_pt);
-        return -ERR_ENFILE;
+        return -ERR_NFILE;
     }
 
     socket* socket = $socket* malloc(sizeof(socket));
@@ -1072,7 +1072,7 @@ i32 sys_pipe(i32[2]* fds) {
         }
     }
     if(fdind0 == -1 || fdind1 == -1) {
-        return -ERR_ENFILE; //file table overflow
+        return -ERR_NFILE; //file table overflow
     }
 
     //create the pipe
