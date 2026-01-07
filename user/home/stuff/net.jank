@@ -1,0 +1,39 @@
+#include <iostream>;
+#include <assert>;
+#include <string>;
+#include <vector>;
+
+i32 main(u64 argc, u8** argv) {
+    cout << "UDP test" << "\n";
+    cout.flush();
+
+    i32 fd = sys_socket(2, 2, 0);
+    assert(fd >= 0, "socket create failed");
+
+    sockaddr_in test;
+    test.sin_family = $u16 2;
+    test.sin_port = $u16 1234;
+    test.sin_addr = $u32 0;
+
+    i32 res = sys_bind(fd, $sockaddr* @test, sizeof(sockaddr_in));
+    assert(res >= 0, "failed to bind");
+
+    u64 buf_size = $u64 128;
+    u8* buf = $u8* malloc(buf_size);
+    memset($void* $u64 @buf[0], 0, buf_size);
+
+    sockaddr_in client_addr;
+    u64 addr_len = sizeof(sockaddr_in);
+
+    i32 len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
+    while(len <= 0) {
+        len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
+    }
+
+    cout << "got length: " << len << "\n";
+    buf[len] = $u8 0;
+    cout << $u8* @buf[0] << "\n";
+    cout.flush();
+
+    return 0;
+}
