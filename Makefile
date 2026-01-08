@@ -17,7 +17,7 @@ drive: user
 boot: drive 
 	@mkdir -p build
 	@cp /usr/share/OVMF/OVMF_VARS_4M.fd ./build/OVMF_VARS_4M.work.fd
-	sudo qemu-system-x86_64 \
+	sudo -E qemu-system-x86_64 \
 		-machine q35 \
 		-m 2G \
 		-no-reboot \
