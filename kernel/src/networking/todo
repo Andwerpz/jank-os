@@ -1,6 +1,6 @@
 NOW
 - TEST SYSCALLS AND FILE OPS
-- implement network stack...
+- add blocking, (flag, default behavior)
 - clean up syscalls, copy to and from user can fail. 
 - rewrite socket struct
 - add socketops struct
