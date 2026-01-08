@@ -688,7 +688,7 @@ i32 ahci_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
     while(ptr < count) {
         u32 startl = $u32 (lba_start & 0xFFFFFFFF);
         u32 starth = $u32 (lba_start >> $u64 32);
-        u64 amt = min(count, PAGE_SIZE / dev->block_size);
+        u64 amt = min(count - ptr, PAGE_SIZE / dev->block_size);
 
         i32 status = ahci_read(port, startl, starth, $u32 amt, $u16* pbuf);
         if(status) {

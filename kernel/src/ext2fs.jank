@@ -295,9 +295,17 @@ void ext2_print_dir_entry(ext2_dir_entry* dir) {
     cout << "========================\n\n";
 }
 
+i32 ext2_read_blocks(ext2_fs* fs, u32 start_block, u32 block_count, void* buf) {
+    println("ext2_read_blocks() : read : ", start_block, " ", block_count);
+    assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_blocks() : only support dev block size dividing ext2 block size");
+    u64 lba_start = ($u64 start_block * $u64 fs->block_size) / fs->dev->block_size;
+    u64 count = ($u64 fs->block_size / fs->dev->block_size) * $u64 block_count;
+    return blockdev_read(fs->dev, lba_start, count, buf);
+}
+
 //read a single ext2 block from the underlying block device
 i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
-    // println("ext2_read_block() : read : ", fs->block_size);
+    println("ext2_read_block() : read : ", block_number);
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
     u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = $u64 fs->block_size / fs->dev->block_size;
@@ -306,7 +314,7 @@ i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
 
 //write a single ext2 block to the underlying block device
 i32 ext2_write_block(ext2_fs* fs, u32 block_number, void* buf) {
-    // println("ext2_write_block() : write : ", fs->block_size);
+    // println("ext2_write_block() : write : ", block_number);
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
     u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = $u64 fs->block_size / fs->dev->block_size;
@@ -2073,34 +2081,43 @@ i32 ext2_get_size(vfs_inode* _node, u64& res) {
 //    specify the range of blocks to translate (file block -> LBA), and then we can sort the LBAs to get 
 //    contiguous transfers. Maybe only enable this for large transfers (>= 5 blocks)
 i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
-    // println("ext2_read_file() : start : ", _node->name);
+    println("ext2_read_file() : start : ", _node->name);
     ext2_inode* node = $ext2_inode* _node->node;
     ext2_fs* fs = $ext2_fs* _node->super;
     assert(_node->is_file(), "ext2_read_file() : only valid on files");
     assert(node->is_file(), "ext2_read_file() : only valid on files");
+    memset($void* buf, 0, amt);
 
-    u32 size = node->size;
+    //early out for null reads
+    if(amt == 0x0) {
+        res = 0x0;
+        return 0;
+    }
 
     //clamp read to file size
+    u32 size = node->size;
     if(off + amt > $u64 size) {
         amt = max(0x0, $u64 size - off);
     }
 
     //prefetch all block numbers of data blocks for this read
-    // TODO
-    // u32* block_nums = $u32* malloc(sizeof(u32) * )
-
-    void* tmp_buf = palloc();
+    u32 start_fblock = $u32 (off / $u64 fs->block_size);
+    u32 end_fblock = $u32 ((off + amt + $u64 fs->block_size - 0x1) / $u64 fs->block_size);
+    u32* block_nums = $u32* malloc(sizeof(u32) * $u64 (end_fblock - start_fblock));
+    u64 block_nums_ptr = 0x0;
+    ext2_traverse_block_map_range(fs, node, start_fblock, end_fblock - start_fblock, block_nums);
+    
     res = 0x0;
     u64 buf_ptr = 0x0;
 
     //if beginning is not aligned, special case for it
     if($u32 off % fs->block_size != $u32 0) {
         //read block
-        u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
+        void* tmp_buf = malloc($u64 fs->block_size);
+        u32 block_num = block_nums[block_nums_ptr ++];
         if(block_num == $u32 0) {
             //unmapped block, fill with '\0'
-            memset(tmp_buf, 0, PAGE_SIZE);
+            memset(tmp_buf, 0, $u64 fs->block_size);
         }
         else if(ext2_read_block(fs, block_num, tmp_buf)) {
             //read failed
@@ -2108,7 +2125,7 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
         }
 
         //copy over to output
-        u64 block_off = off - $u64 fs->block_size * (off / $u64 fs->block_size);
+        u64 block_off = off % $u64 fs->block_size;
         u64 cur_amt = min($u64 fs->block_size - block_off, amt);
         memcpy($void* buf, $void* ($u64 tmp_buf + block_off), cur_amt);
 
@@ -2116,24 +2133,39 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
         buf_ptr += cur_amt;
         res += cur_amt;
         amt -= cur_amt;
+        free(tmp_buf, $u64 fs->block_size);
     }   
 
-    //read rest of blocks
-    while(amt) {
-        //read block
-        u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
-        if(block_num == $u32 0) {
-            //unmapped block, fill with '\0'
-            memset(tmp_buf, 0, PAGE_SIZE);
+    //read middle blocks
+    while(amt >= $u64 fs->block_size) {
+        //see if block is unmapped
+        if(block_nums[block_nums_ptr] == $u32 0) {
+            block_nums_ptr ++;
+            off += $u64 fs->block_size;
+            buf_ptr += $u64 fs->block_size;
+            res += $u64 fs->block_size;
+            amt -= $u64 fs->block_size;
+            continue;
         }
-        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+
+        //read largest amount of contiguous chunks possible
+        u32 fblock_start = block_nums[block_nums_ptr ++];
+        u32 block_cnt = $u32 1;
+        while((amt - $u64 fs->block_size * $u64 block_cnt) >= $u64 fs->block_size) {
+            if(block_nums[block_nums_ptr] != block_nums[block_nums_ptr - 0x1] + $u32 1) {
+                // not contiguous
+                break;
+            }
+            block_cnt ++;
+            block_nums_ptr ++;
+        }
+
+        //read blocks
+        u64 cur_amt = $u64 block_cnt * $u64 fs->block_size;
+        if(ext2_read_blocks(fs, fblock_start, block_cnt, $void* ($u64 buf + buf_ptr))) {
             //read failed
             return 1;
         }
-
-        //copy over to output
-        u64 cur_amt = min($u64 fs->block_size, amt);
-        memcpy($void* ($u64 buf + buf_ptr), tmp_buf, cur_amt);
 
         off += cur_amt;
         buf_ptr += cur_amt;
@@ -2141,8 +2173,37 @@ i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
         amt -= cur_amt;
     }
 
-    // println("ext2_read_file() : done");
-    pfree(tmp_buf);
+    //if end is not aligned, special case for it
+    if(amt != 0x0) {
+        assert(amt < $u64 fs->block_size, "ext2_read_file() : remainder should be less than a block");
+
+        //read block
+        void* tmp_buf = malloc($u64 fs->block_size);
+        u32 block_num = block_nums[block_nums_ptr ++];
+        if(block_num == $u32 0) {
+            //unmapped block, fill with '\0'
+            memset(tmp_buf, 0, $u64 fs->block_size);
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
+
+        //copy over to output
+        u64 cur_amt = amt;
+        memcpy($void* ($u64 buf + buf_ptr), tmp_buf, cur_amt);
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+        free(tmp_buf, $u64 fs->block_size);
+    }
+
+    free($void* block_nums, sizeof(u32) * $u64 (end_fblock - start_fblock));
+    assert(amt == 0x0, "ext2_read_file() : should have read whole thing");
+    assert(block_nums_ptr == $u64 (end_fblock - start_fblock), "ext2_read_file() : should have visited every block");
+    println("ext2_read_file() : done");
     return 0;
 }
 
