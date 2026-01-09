@@ -267,7 +267,9 @@ i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {
     sockaddr* kaddr = $sockaddr* malloc(len);
     copy_from_user(user_pt, $u8* kaddr, $u8* addr, len);
 
+    println("callig socket ops connect");
     i32 ret = sock->ops->connect#(sock, kaddr, len);
+    println("done connect");
 
     free($void* kaddr, len);
 
@@ -443,7 +445,7 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     }
 
     // For later, only support udp and raw (?)
-    if(type != SOCK_DGRAM && type != SOCK_RAW) {
+    if(type != SOCK_DGRAM) {
         pt_switch(user_pt);
         return -ERR_SOCKTNOSUPPORT; 
     }
