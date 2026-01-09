@@ -10,7 +10,8 @@ struct EthernetHeader {
     u16     type;   // Protocol Type
 }
 
-void ethernet_handle_packet(u8* buffer, u16 length) {
+void ethernet_handle_frame(u8* buffer, u16 length) {
+    println("ethernet_handle_frame() : handling incoming frame");
     if($u64 length < sizeof(EthernetHeader)) return;
 
     EthernetHeader* eth = $EthernetHeader* buffer;
@@ -18,6 +19,7 @@ void ethernet_handle_packet(u8* buffer, u16 length) {
     u16 type = be_to_cpu(eth->type);
 
     if(type == ETHERNET_TYPE_ARP) {
+        println("ethernet_handle_frame() : ARP packet recieved");
         ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
         // snoop for free addresses for free!!!
         arp_update(be_to_cpu(arp->sender_ip), arp->sender_mac);
@@ -25,12 +27,33 @@ void ethernet_handle_packet(u8* buffer, u16 length) {
         arp_table_dump();
 
     } else if(type == ETHERNET_TYPE_IPV4) {
+        println("ethernet_handle_frame() : IPv4 packet recieved");
         IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
         ipv4_handle(ip);
 
     } else {
-        print("ethernet_handle_packet() : unknown packet type: ");
+        print("ethernet_handle_frame() : unknown packet type: ");
         print($void* ($u64 type));
         println("");
     }
+}
+
+void ethernet_send_frame(u8[6]& dst_mac, u8* data, u16 len, u16 eth_type) {
+    u64 frame_len = sizeof(EthernetHeader) + $u64 len;
+
+    void* buffer = malloc(frame_len);
+    memset(buffer, 0, frame_len);
+
+    EthernetHeader* eth = $EthernetHeader* buffer;
+    eth->type = cpu_to_be(eth_type);
+
+    set_mac(eth->src, CURRENT_INTERFACE->mac_address);
+    set_mac(eth->dst, dst_mac);
+
+    void* payload_ptr = $void* ($u64 buffer + sizeof(EthernetHeader));
+    memcpy(payload_ptr, $void* data, $u64 len);
+
+    CURRENT_INTERFACE->send#(buffer, $u16 frame_len);
+
+    free(buffer, frame_len);
 }

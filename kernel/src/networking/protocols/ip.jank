@@ -30,6 +30,9 @@ struct IPv4Header {
 
 [__GLOBAL_FIRST__] u32 IPv4_BROADCAST_ADDR = $u32 0xFFFFFFFF;
 
+[__GLOBAL_FIRST__] u32 IPv4_LOOPBACK_NETWORK = $u32 (127 << 24 | 0 << 16 | 0 << 8 | 0 << 0);
+[__GLOBAL_FIRST__] u32 IPv4_LOOPBACK_MASK = $u32 (255 << 24 | 0 << 16 | 0 << 8 | 0 << 0);
+
 void ipv4_handle(IPv4Header* ip) {
     u16 total_length = be_to_cpu(ip->total_length);
     if(total_length < $u16 20) {
@@ -59,7 +62,7 @@ void ipv4_handle(IPv4Header* ip) {
     }
 
     u32 dst_ip = be_to_cpu(ip->dst_ip);
-    if(!(dst_ip == CURRENT_INTERFACE->ip_address || dst_ip == IPv4_BROADCAST_ADDR)) {
+    if(!(dst_ip == CURRENT_INTERFACE->ip_address || dst_ip == IPv4_BROADCAST_ADDR || is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK))) {
         print("ipv4_handle() : destination ip ");
         print_ipv4_addr(dst_ip);
         println(" does not match with host, ignoring");
@@ -93,16 +96,11 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     println("");
 
     u64 ipv4_packet_len = sizeof(IPv4Header) + $u64 payload_len;
-    u64 ethernet_frame_len = sizeof(EthernetHeader) + ipv4_packet_len;
+    u8* ip_buffer = $u8* malloc(ipv4_packet_len);
+    memset($void* ip_buffer, 0, ipv4_packet_len);
 
-    void* buffer = malloc(ethernet_frame_len);
-    memset(buffer, 0, ethernet_frame_len);
-
-    EthernetHeader* eth = $EthernetHeader* buffer;
-    IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
-    void* dst_payload = $void* ($u64 buffer + sizeof(EthernetHeader) + sizeof(IPv4Header));
-
-    memcpy(dst_payload, payload, $u64 payload_len);
+    IPv4Header* ip = $IPv4Header* ip_buffer;
+    void* ip_payload = $void* ($u64 ip_buffer + sizeof(IPv4Header));
 
     ip->version_ihl = $u8 0x45; // ip ver 4 and len 5
     ip->tos = $u8 0;
@@ -117,37 +115,44 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     ip->header_checksum = $u16 0;
     ip->header_checksum = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
 
-    eth->type = cpu_to_be(ETHERNET_TYPE_IPV4);
-    set_mac(eth->src, CURRENT_INTERFACE->mac_address);
+    memcpy(ip_payload, payload, $u64 payload_len);
 
-    // routing
-
-    // check for broadcast
-    if(dst_ip == IPv4_BROADCAST_ADDR) {
-        println("ipv4_send_packet() : destination is broadcast");
-        // dst ip is a broadcast, change mac to broadcast and send
-        for(i32 i = 0; i < 6; i++) eth->dst[i] = $u8 0xFF;
-        CURRENT_INTERFACE->send#(buffer, $u16 ethernet_frame_len);
-        free(buffer, ethernet_frame_len);
+    // check loopback
+    if(is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK)) {
+        println("ipv4_send_packet() : Loopback detected");
+        ipv4_handle(ip);
+        free($void* ip_buffer, ipv4_packet_len);
         return;
     }
 
-    // checks if ip is local on subnet, if not set next hop to gateway, arp will set eth dst mac to gateway.
+    // check broadcast
+    if(dst_ip == IPv4_BROADCAST_ADDR) {
+        println("ipv4_send_packet() : destination is broadcast");
+        u8[6] broadcast_mac;
+        // dst ip is a broadcast, change mac to broadcast and send
+        for(i32 i = 0; i < 6; i++) broadcast_mac[i] = $u8 0xFF;
+        ethernet_send_frame(broadcast_mac, ip_buffer, $u16 ipv4_packet_len, ETHERNET_TYPE_IPV4);
+        free($void* ip_buffer, ipv4_packet_len);
+        return;
+    }
+
+    // routing
     u32 next_hop = dst_ip;
-    i32 is_local = ((CURRENT_INTERFACE->subnet_mask & dst_ip) == (CURRENT_INTERFACE->subnet_mask & CURRENT_INTERFACE->ip_address));
-    if(!is_local) {
+    // checks if ip is local on subnet, if not set next hop to gateway, arp will set eth dst mac to gateway.
+    if(!is_address_in_subnet(dst_ip, CURRENT_INTERFACE->ip_address, CURRENT_INTERFACE->subnet_mask)) {
         println("ipv4_send_packet() : destination is not in host subnet, sending it to default gateway");
         next_hop = CURRENT_INTERFACE->gateway_ip;
     }
 
+    u8[6] dst_mac;
     // do an ARP lookup.
-    if(!arp_lookup(next_hop, eth->dst)) {
-        println("ipv4_send_packet() : destination not in ARP table, packet not sent, sent ARP request instead");
+    if(arp_lookup(next_hop, dst_mac)) {
+        ethernet_send_frame(dst_mac, ip_buffer, $u16 ipv4_packet_len, ETHERNET_TYPE_IPV4);
+    } else {
+        println("ipv4_send_packet() : destination not in ARP table, packet queued, sent ARP request instead");
+        arp_queue_packet(next_hop, ip_buffer, $u16 ipv4_packet_len);
         send_arp_request(next_hop);
-        free(buffer, ethernet_frame_len);
-        return;
     }
 
-    CURRENT_INTERFACE->send#(buffer, $u16 ethernet_frame_len);
-    free(buffer, ethernet_frame_len);
+    free($void* ip_buffer, ipv4_packet_len);
 }
