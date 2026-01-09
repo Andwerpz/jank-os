@@ -1,19 +1,16 @@
 NOW
-- arp queuing time out ttl
 - TEST SYSCALLS AND FILE OPS
 - add blocking, (flag, default behavior)
 - clean up syscalls, copy to and from user can fail. 
-- rewrite socket struct
-- add socketops struct
-- make udp work in user land
-- DNS
-- TCP (make andrew do this cause im no good)
 
 LATER
+- DNS
+- TCP
 - make that arp entry lookup not suck
+- arp queuing time out ttl
 - add expirations for arp entries, probably 60 seconds?
-- generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards? void* for driver struct in net interface?
 - add lease time to dhcp
+- generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards? void* for driver struct in net interface?
 - clean up all the code.
 
 all the structs for networking that stay inside the kernel will keep everything in CPU order (little endian)
