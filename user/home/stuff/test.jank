@@ -21,8 +21,8 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in remote;
     remote.sin_family = AF_INET;
     remote.sin_port = $u16 4321;
-    // remote.sin_addr = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 15 << 0);
-    remote.sin_addr = $u32 (127 << 24 | 0 << 16 | 0 << 8 | 1 << 0);
+    remote.sin_addr = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 15 << 0);
+    // remote.sin_addr = $u32 (127 << 24 | 0 << 16 | 0 << 8 | 1 << 0);
     // remote.sin_addr = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 3 << 0);
 
     res = sys_connect(fd, $sockaddr* @remote, sizeof(sockaddr_in));

@@ -118,7 +118,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     memcpy(ip_payload, payload, $u64 payload_len);
 
     // check loopback
-    if(is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK)) {
+    if(is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK) || dst_ip == CURRENT_INTERFACE->ip_address) {
         println("ipv4_send_packet() : Loopback detected");
         ipv4_handle(ip);
         free($void* ip_buffer, ipv4_packet_len);
