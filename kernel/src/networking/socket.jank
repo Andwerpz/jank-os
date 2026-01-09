@@ -28,7 +28,7 @@ void init_port_tables() {
 
 }
 
-struct packet {
+struct Packet {
     u32 src_ip;
     u16 src_port;
     u32 dst_ip;
@@ -37,7 +37,7 @@ struct packet {
     u16 len;
     u8* data;
     
-    packet* next; 
+    Packet* next; 
 }
 
 struct proto_ops {
@@ -61,18 +61,20 @@ struct socket {
     u32 remote_addr;
     u16 remote_port;
     
-    packet* rx_head; 
-    packet* rx_tail;
+    waitq wait_queue;
+
+    Packet* rx_head; 
+    Packet* rx_tail;
     u64 rx_count;
 
     socket() {
-        this.rx_head = $packet* nullptr;
-        this.rx_tail = $packet* nullptr;
+        this.rx_head = $Packet* nullptr;
+        this.rx_tail = $Packet* nullptr;
     }
 }
 
-void socket_push_packet(socket* sock, packet* pkt) {
-    pkt->next = $packet* nullptr;
+void socket_push_packet(socket* sock, Packet* pkt) {
+    pkt->next = $Packet* nullptr;
     
     if(sock->rx_head == nullptr) {
         sock->rx_head = pkt;
@@ -84,7 +86,7 @@ void socket_push_packet(socket* sock, packet* pkt) {
     }
 }
 
-packet* socket_pop_packet(socket* sock) {
+Packet* socket_pop_packet(socket* sock) {
     // println("POPPING SOCKET: ");
     // print_ipv4_addr(sock->local_addr); println("");
     // println($u64 sock->local_port);
@@ -92,12 +94,12 @@ packet* socket_pop_packet(socket* sock) {
     // println($u64 sock->remote_port);
 
     if(sock->rx_head == nullptr) {
-        return $packet* nullptr;
+        return $Packet* nullptr;
     }
 
     println("HERE");
 
-    packet* pkt = sock->rx_head;
+    Packet* pkt = sock->rx_head;
 
     u8* temp = $u8* malloc($u64 pkt->len + 0x1);
     memcpy($void* temp, $void* pkt->data, $u64 pkt->len);
@@ -107,10 +109,10 @@ packet* socket_pop_packet(socket* sock) {
     sock->rx_head = pkt->next;
 
     if(sock->rx_head == nullptr) {
-        sock->rx_tail = $packet* nullptr;
+        sock->rx_tail = $Packet* nullptr;
     }
 
-    pkt->next = $packet* nullptr;
+    pkt->next = $Packet* nullptr;
 
     return pkt;
 }

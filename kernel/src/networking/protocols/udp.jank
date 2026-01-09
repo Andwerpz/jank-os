@@ -40,7 +40,7 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     println("udp_handle() : placing packet in socket rx queue");
     socket* sock = UDP_PORT_TABLE[dst_port];
 
-    packet* pkt = $packet* malloc(sizeof(packet));
+    Packet* pkt = $Packet* malloc(sizeof(Packet));
     pkt->src_ip = src_ip;
     pkt->src_port = src_port;
     pkt->dst_ip = CURRENT_INTERFACE->ip_address;
@@ -119,7 +119,7 @@ i32 udp_bind(socket* sock, sockaddr* addr, u64 len) {
 i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
     // println("udp_recieve() : udp receive called");
     
-    packet* pkt = socket_pop_packet(sock);
+    Packet* pkt = socket_pop_packet(sock);
 
     if($void* pkt == nullptr) {
         return -ERR_AGAIN;
@@ -153,7 +153,7 @@ i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
     println($u64 copy_len);
 
     free($void* pkt->data, $u64 pkt->len);
-    free($void* pkt, sizeof(packet));
+    free($void* pkt, sizeof(Packet));
 
     println($u64 copy_len);
 
@@ -200,11 +200,11 @@ i32 udp_close(socket* sock) {
     }
 
     while(1) {
-        packet* pkt = socket_pop_packet(sock);
+        Packet* pkt = socket_pop_packet(sock);
         if(pkt->next == nullptr) break;
 
         free($void* pkt->data, $u64 pkt->len);
-        free($void* pkt, sizeof(packet));
+        free($void* pkt, sizeof(Packet));
     }
 
     return 0;
@@ -218,6 +218,11 @@ i32 udp_connect(socket* sock, sockaddr* addr, u64 len) {
 
     sock->remote_addr = sin->sin_addr;
     sock->remote_port = sin->sin_port;
+
+    print("udp_connect() : connecting to ");
+    print_ipv4_addr(sock->remote_addr);
+    print(":");
+    println($u64 sock->remote_port);
 
     // update state...
 
