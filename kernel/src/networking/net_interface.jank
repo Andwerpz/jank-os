@@ -98,3 +98,9 @@ u16 ones_comp_checksum(void* data, u64 header_size, u64 checksum_index) {
 
     return ~($u16 sum);
 }
+
+// returns 1 if ip is in subnet
+// returns 0 if ip is not in subnet
+i32 is_address_in_subnet(u32 ip, u32 network, u32 mask) {
+    return (ip & mask) == (network & mask);
+}
