@@ -255,7 +255,6 @@ void e1000_startup() {
     println("e1000_startup() : beginning general intialization");
 
     // general configuration (14.3 in specs)
-    println("init_e1000() : general configuration begin");
 
     // disable flow control
     u32* fcal_ptr = $u32* (MMIO_BASE + $u64 REG_FCAL);
@@ -475,7 +474,7 @@ void e1000_recieve_poll() {
             u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
 
             println("e1000_recieve_poll() : packet recieved");
-            ethernet_handle_packet(buffer, len);
+            ethernet_handle_frame(buffer, len);
 
             RDESC_RING[CURR_RDESC].status = $u8 0;
             *rdt_ptr = $u32 CURR_RDESC;
@@ -498,12 +497,11 @@ void e1000_handle_receive() {
     u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
 
     while((RDESC_RING[CURR_RDESC].status & RDESC_STATUS_DD) != $u8 0) {
-        println("e1000_handle_receive() : spinning");
 
         u16 len = RDESC_RING[CURR_RDESC].length;
         u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
 
-        ethernet_handle_packet(buffer, len);
+        ethernet_handle_frame(buffer, len);
 
         RDESC_RING[CURR_RDESC].status = $u8 0;
         *rdt_ptr = $u32 CURR_RDESC;
@@ -520,8 +518,8 @@ void e1000_interrupt_handler(trapframe* tf) {
     }
 
     if(status & IMS_RXT0) {
-        e1000_handle_receive();
         println("e1000_interrupt_handler() : packet recieved");
+        e1000_handle_receive();
     }
 
     scheduler(tf);
