@@ -10,6 +10,54 @@ struct ARPEntry {
     u8[6]   mac;
 }
 
+[__GLOBAL_FIRST__] PendingPacket* ARP_WAIT_QUEUE_HEAD = $PendingPacket* nullptr;
+
+struct PendingPacket {
+    u32 target_ip;
+    u8* data;       // this is the entire packet, NOT packet->data (heh)
+    u16 len;        // this is the length of the entire packet, NOT packet->data (heh)
+    PendingPacket* next;
+}
+
+void arp_queue_packet(u32 target_ip, u8* packet, u16 len) {
+    PendingPacket* pp = $PendingPacket* malloc(sizeof(PendingPacket));
+    pp->target_ip = target_ip;
+    pp->len = len;
+
+    pp->data = $u8* malloc($u64 len);
+    memcpy($void* pp->data, $void* packet, $u64 len);
+
+    pp->next = ARP_WAIT_QUEUE_HEAD;
+    ARP_WAIT_QUEUE_HEAD = pp;
+}
+
+void arp_flush_pending(u32 resolved_ip, u8[6]& dst_mac) {
+    PendingPacket* curr = ARP_WAIT_QUEUE_HEAD;
+    PendingPacket* prev = $PendingPacket* nullptr;
+
+    while(curr != nullptr) {
+        if(curr->target_ip == resolved_ip) {
+            // there is now an arp table entry for this
+            ethernet_send_frame(dst_mac, curr->data, curr->len, ETHERNET_TYPE_IPV4);
+
+            PendingPacket* to_free = curr;
+            if(prev == nullptr) {
+                ARP_WAIT_QUEUE_HEAD = curr->next;
+                curr = ARP_WAIT_QUEUE_HEAD;
+            } else {
+                prev->next = curr->next;
+                curr = curr->next;
+            }
+
+            free($void* to_free->data, $u64 to_free->len);
+            free($void* to_free, sizeof(PendingPacket));
+        } else {
+            prev = curr;
+            curr = curr->next;
+        }
+    }
+}
+
 struct ARPHeader {
     u16     hw_type;        // Hardware Type
     u16     proto_type;     // Protocol Type
@@ -28,12 +76,15 @@ void arp_handle(ARPHeader* arp) {
 
     if(opcode == ARP_OPCODE_REPLY) {
         println("arp_handle() : received ARP reply");
-        
+        u32 sender_ip = be_to_cpu(arp->sender_ip);
+
         print("Sender IP: ");
-        print_ipv4_addr(be_to_cpu(arp->sender_ip));
+        print_ipv4_addr(sender_ip);
         print(" is at MAC: ");
         print_mac_addr(arp->sender_mac);
         println("");
+
+        arp_flush_pending(sender_ip, arp->sender_mac);
 
     } else if(opcode == ARP_OPCODE_REQUEST) {
         println("arp_handle() : received ARP request");
