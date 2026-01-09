@@ -3,6 +3,7 @@
 #include <jstring>;
 #include <vector>;
 #include <deque>;
+#include <hashmap>;
 
 #include "memlayout.jank";
 #include "panic.jank";
