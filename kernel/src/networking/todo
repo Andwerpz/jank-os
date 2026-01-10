@@ -1,4 +1,5 @@
 NOW
+- standardize void* vs u8*
 - TEST SYSCALLS AND FILE OPS
 - add blocking, (flag, default behavior)
 - clean up syscalls, copy to and from user can fail. 

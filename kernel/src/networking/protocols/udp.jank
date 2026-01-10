@@ -147,11 +147,6 @@ i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
         return -ERR_AGAIN;
     }
 
-    u8* temp = $u8* malloc($u64 pkt->len + 0x1);
-    memcpy($void* temp, $void* pkt->data, $u64 pkt->len);
-    temp[pkt->len] = $u8 0;
-    println(temp);
-
     u64 copy_len = len;
     if($u64 pkt->len < len) {
         copy_len = $u64 pkt->len;
@@ -167,17 +162,8 @@ i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
         memset($void* @sin->sin_zero[0], 0, sizeof(sockaddr_in) - $u64 6); // calculate padding, sockaddr_in and sockaddr should be the same size.
     }
 
-    u8* temp2 = $u8* malloc($u64 copy_len + 0x1);
-    memcpy($void* temp2, $void* buf, $u64 copy_len);
-    temp2[copy_len] = $u8 0;
-    println(temp2);
-
-    println($u64 copy_len);
-
     free($void* pkt->data, $u64 pkt->len);
     free($void* pkt, sizeof(Packet));
-
-    println($u64 copy_len);
 
     println("udp_recieve() : Finished UDP receive socket operation");
 

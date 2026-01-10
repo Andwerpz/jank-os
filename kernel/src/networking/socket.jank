@@ -86,17 +86,9 @@ void socket_push_packet(socket* sock, Packet* pkt) {
 }
 
 Packet* socket_pop_packet(socket* sock) {
-    // println("POPPING SOCKET: ");
-    // print_ipv4_addr(sock->local_addr); println("");
-    // println($u64 sock->local_port);
-    // print_ipv4_addr(sock->remote_addr); println("");
-    // println($u64 sock->remote_port);
-
     if(sock->rx_head == nullptr) {
         return $Packet* nullptr;
     }
-
-    println("HERE");
 
     Packet* pkt = sock->rx_head;
 
