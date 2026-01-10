@@ -55,8 +55,8 @@ void arp_handle(ARPHeader* arp) {
             println("arp_handle() : Target IP matched with host, sending reply back");
 
             u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
-            void* buffer = malloc(size);
-            memset(buffer, 0, size);
+            u8* buffer = $u8* malloc(size);
+            memset($void* buffer, 0, size);
 
             EthernetHeader* eth_reply = $EthernetHeader* buffer;
             ARPHeader* arp_reply = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
@@ -87,7 +87,7 @@ void arp_handle(ARPHeader* arp) {
 
             CURRENT_INTERFACE->send#(buffer, $u16 size);
             
-            free(buffer, size);
+            free($void* buffer, size);
         } else {
             print("arp_handle() : Target IP is [");
             print_ipv4_addr(target_ip);
@@ -104,8 +104,8 @@ void send_arp_request(u32 target_ip) {
     println("");
     
     u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
-    void* buffer = malloc(size);
-    memset(buffer, 0, size);
+    u8* buffer = $u8* malloc(size);
+    memset($void* buffer, 0, size);
 
     EthernetHeader* eth = $EthernetHeader* buffer;
     ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
@@ -137,7 +137,7 @@ void send_arp_request(u32 target_ip) {
     // send
     CURRENT_INTERFACE->send#(buffer, $u16 size);
     
-    free(buffer, size);
+    free($void* buffer, size);
 }
 
 void arp_update(u32 ip, u8[6]& mac) {

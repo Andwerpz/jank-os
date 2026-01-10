@@ -225,8 +225,8 @@ void dhcp_send_request(u32 offered_ip, u32 server_ip) {
     println("]");
 
     u64 total_len = sizeof(DHCPHeader) + sizeof(DHCPRequestOptions);
-    void* buffer = malloc(total_len);
-    memset(buffer, 0, total_len);
+    u8* buffer = $u8* malloc(total_len);
+    memset($void* buffer, 0, total_len);
 
     DHCPHeader* dhcp = $DHCPHeader* buffer;
     DHCPRequestOptions* options = $DHCPRequestOptions* ($u64 buffer + sizeof(DHCPHeader));
@@ -271,15 +271,15 @@ void dhcp_send_request(u32 offered_ip, u32 server_ip) {
 
     udp_send_packet(IPv4_BROADCAST_ADDR, DHCP_CLIENT_LISTEN_PORT, DHCP_SERVER_LISTEN_PORT, buffer, $u16 total_len);
 
-    free(buffer, total_len);
+    free($void* buffer, total_len);
 }
 
 void dhcp_send_discover() {
     println("dhcp_send_discover() : Sending DHCP discover");
 
     u64 total_len = sizeof(DHCPHeader) + sizeof(DHCPDiscoverOptions);
-    void* buffer = malloc(total_len);
-    memset(buffer, 0, total_len);
+    u8* buffer = $u8* malloc(total_len);
+    memset($void* buffer, 0, total_len);
 
     DHCPHeader* dhcp = $DHCPHeader* buffer;
     DHCPDiscoverOptions* options = $DHCPDiscoverOptions* ($u64 buffer + sizeof(DHCPHeader));
@@ -314,5 +314,5 @@ void dhcp_send_discover() {
 
     udp_send_packet(IPv4_BROADCAST_ADDR, DHCP_CLIENT_LISTEN_PORT, DHCP_SERVER_LISTEN_PORT, buffer, $u16 total_len);
 
-    free(buffer, total_len);
+    free($void* buffer, total_len);
 }

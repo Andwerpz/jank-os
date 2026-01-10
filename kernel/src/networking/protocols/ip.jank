@@ -72,7 +72,7 @@ void ipv4_handle(IPv4Header* ip) {
     }
 
     u32 src_ip = be_to_cpu(ip->src_ip);
-    void* payload = $void* ($u64 ip + $u64 header_len);
+    u8* payload = $u8* ($u64 ip + $u64 header_len);
     u16 payload_size = total_length - header_len;
 
     if(ip->protocol == IPv4_PROTOCOL_ICMP) {
@@ -92,7 +92,7 @@ void ipv4_handle(IPv4Header* ip) {
     }
 }
 
-void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
+void ipv4_send_packet(u32 dst_ip, u8 protocol, u8* payload, u16 payload_len) {
     print("ipv4_send_packet() : Sending IPv4 packet to [");
     print_ipv4_addr(dst_ip);
     println("]");
@@ -102,7 +102,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     memset($void* ip_buffer, 0, ipv4_packet_len);
 
     IPv4Header* ip = $IPv4Header* ip_buffer;
-    void* ip_payload = $void* ($u64 ip_buffer + sizeof(IPv4Header));
+    u8* ip_payload = $u8* ($u64 ip_buffer + sizeof(IPv4Header));
 
     ip->version_ihl = $u8 0x45; // ip ver 4 and len 5
     ip->tos = $u8 0;
@@ -117,7 +117,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     ip->header_checksum = $u16 0;
     ip->header_checksum = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
 
-    memcpy(ip_payload, payload, $u64 payload_len);
+    memcpy($void* ip_payload, $void* payload, $u64 payload_len);
 
     // check loopback
     if(is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK) || dst_ip == CURRENT_INTERFACE->ip_address) {

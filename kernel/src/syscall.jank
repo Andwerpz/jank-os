@@ -265,7 +265,11 @@ i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {
     }
 
     sockaddr* kaddr = $sockaddr* malloc(len);
-    copy_from_user(user_pt, $u8* kaddr, $u8* addr, len);
+    if(copy_from_user(user_pt, $u8* kaddr, $u8* addr, len) != 0) {
+        free($void* kaddr, len);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
 
     println("callig socket ops connect");
     i32 ret = sock->ops->connect#(sock, kaddr, len);
@@ -297,7 +301,11 @@ i32 sys_sendto(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* dest_addr, u64 ad
     socket* sock = $socket* f->resource_ptr;
 
     u8* kbuf = $u8* malloc(size);
-    copy_from_user(user_pt, kbuf, buf, size);
+    if(copy_from_user(user_pt, kbuf, buf, size) != 0) {
+        free($void* kbuf, size);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
 
     u64 copy_amt = addr_len;
     sockaddr* kaddr_dest = $sockaddr* nullptr;
@@ -306,7 +314,12 @@ i32 sys_sendto(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* dest_addr, u64 ad
         memset($void* kaddr_dest, 0, sizeof(sockaddr));
 
         if(copy_amt > sizeof(sockaddr)) copy_amt = sizeof(sockaddr);
-        copy_from_user(user_pt, $u8* kaddr_dest, $u8* dest_addr, copy_amt);
+        if(copy_from_user(user_pt, $u8* kaddr_dest, $u8* dest_addr, copy_amt) != 0) {
+            free($void* kbuf, size);
+            free($void* kaddr_dest, copy_amt);
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
     }
 
     i32 ret = sock->ops->send#(sock, kbuf, size, flags, kaddr_dest);
@@ -353,7 +366,11 @@ i32 sys_bind(i32 fd, sockaddr* addr, u64 addr_len) {
         copy_len = sizeof(sockaddr);
     }
 
-    copy_from_user(user_pt, $u8* kaddr, $u8* addr, copy_len);
+    if(copy_from_user(user_pt, $u8* kaddr, $u8* addr, copy_len) != 0) {
+        free($void* kaddr, sizeof(sockaddr));
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
 
     sockaddr_in* temp = $sockaddr_in* kaddr;
     print("sys_bind() : bind called for ");
@@ -398,23 +415,43 @@ i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u64* 
     i32 ret = sock->ops->recieve#(sock, kbuf, size, flags, kaddr_src);
 
     if(ret >= 0) {
-        i32 ok = copy_to_user(user_pt, kbuf, buf, $u64 ret);
-        assert(ok == 0, "FAILED TO COPY TO USER 1");
+        if(copy_to_user(user_pt, kbuf, buf, $u64 ret) != 0) {
+            free($void* kbuf, size);
+            if(src_addr != nullptr) {
+                free($void* kaddr_src, sizeof(sockaddr));
+            }
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
 
         u64 user_addr_len = 0x0;
-        ok = copy_from_user(user_pt, $u8* @user_addr_len, $u8* addr_len, sizeof(u64));
-        assert(ok == 0, "FAILED TO COPY TO USER 2");
+        if(copy_from_user(user_pt, $u8* @user_addr_len, $u8* addr_len, sizeof(u64)) != 0) {
+            free($void* kbuf, size);
+            if(src_addr != nullptr) {
+                free($void* kaddr_src, sizeof(sockaddr));
+            }
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
 
         if(src_addr != nullptr) {
             u64 copy_amt = sizeof(sockaddr);
             if(copy_amt > user_addr_len) {
                 copy_amt = user_addr_len;
             }
-            ok = copy_to_user(user_pt, $u8* kaddr_src, $u8* src_addr, copy_amt);
-            assert(ok == 0, "FAILED TO COPY TO USER 3");
+            if(copy_to_user(user_pt, $u8* kaddr_src, $u8* src_addr, copy_amt) != 0) {
+                free($void* kbuf, size);
+                free($void* kaddr_src, sizeof(sockaddr));
+                pt_switch(user_pt);
+                return -ERR_FAULT;
+            }
             
-            ok = copy_to_user(user_pt, $u8* @copy_amt, $u8* addr_len, sizeof(u64));
-            assert(ok == 0, "FAILED TO COPY TO USER 4");
+            if(copy_to_user(user_pt, $u8* @copy_amt, $u8* addr_len, sizeof(u64)) != 0) {
+                free($void* kbuf, size);
+                free($void* kaddr_src, sizeof(sockaddr));
+                pt_switch(user_pt);
+                return -ERR_FAULT;
+            }
         }
     }
 

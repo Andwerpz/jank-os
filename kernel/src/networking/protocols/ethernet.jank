@@ -45,8 +45,8 @@ void ethernet_send_frame(u8[6]& dst_mac, u8* data, u16 len, u16 eth_type) {
 
     u64 frame_len = sizeof(EthernetHeader) + $u64 len;
 
-    void* buffer = malloc(frame_len);
-    memset(buffer, 0, frame_len);
+    u8* buffer = $u8* malloc(frame_len);
+    memset($void* buffer, 0, frame_len);
 
     EthernetHeader* eth = $EthernetHeader* buffer;
     eth->type = cpu_to_be(eth_type);
@@ -54,10 +54,10 @@ void ethernet_send_frame(u8[6]& dst_mac, u8* data, u16 len, u16 eth_type) {
     set_mac(eth->src, CURRENT_INTERFACE->mac_address);
     set_mac(eth->dst, dst_mac);
 
-    void* payload_ptr = $void* ($u64 buffer + sizeof(EthernetHeader));
-    memcpy(payload_ptr, $void* data, $u64 len);
+    u8* payload_ptr = $u8* ($u64 buffer + sizeof(EthernetHeader));
+    memcpy($void* payload_ptr, $void* data, $u64 len);
 
     CURRENT_INTERFACE->send#(buffer, $u16 frame_len);
 
-    free(buffer, frame_len);
+    free($void* buffer, frame_len);
 }

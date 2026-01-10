@@ -137,7 +137,7 @@ void e1000_init(u64 addr) {
     nic->dhcp_server = $u32 0;
     nic->dns_server = $u32 0;
 
-    nic->send = #<e1000_send(void*, u16)>;
+    nic->send = #<e1000_send(u8*, u16)>;
 
     net_interfaces.push_back(nic);
     CURRENT_INTERFACE = nic;
@@ -444,7 +444,7 @@ void e1000_init_tx() {
 
 // hardware moves the head and software writes to tail
 // hardware will act when head != tail, otherwise it sleeps
-void e1000_send(void* data, u16 len) {
+void e1000_send(u8* data, u16 len) {
     println("e1000_send() : Beginning send operation");
 
     // get tail index from hardware
@@ -452,7 +452,7 @@ void e1000_send(void* data, u16 len) {
     u32 tx_idx = *tdt_ptr & TDT_TDT;
 
     // fill descriptor
-    memcpy($void* TDESC_RING[tx_idx].addr, data, $u64 len);
+    memcpy($void* TDESC_RING[tx_idx].addr, $void* data, $u64 len);
     TDESC_RING[tx_idx].length = len;
 
     // set command bits

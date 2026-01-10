@@ -29,7 +29,7 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
         return;
     }
 
-    void* payload = $void* ($u64 udp + sizeof(UDPHeader));
+    u8* payload = $u8* ($u64 udp + sizeof(UDPHeader));
     u16 payload_len = length - $u16 sizeof(UDPHeader);
 
     // probably things that the OS needs here, rn just dhcp hijacks
@@ -52,35 +52,35 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     pkt->len = payload_len;
     
     pkt->data = $u8* malloc($u64 payload_len);
-    memcpy($void* pkt->data, payload, $u64 payload_len);
+    memcpy($void* pkt->data, $void* payload, $u64 payload_len);
     
     socket_push_packet(sock, pkt);
 
     waitq_wake_all(@(sock->wait_queue));
 }
 
-void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 payload_len) {
+void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, u8* payload, u16 payload_len) {
     print("udp_send_packet() : Sending UDP packet to [");
     print_ipv4_addr(dst_ip);
     println("]");
 
     u64 udp_packet_len = sizeof(UDPHeader) + $u64 payload_len;
 
-    void* buffer = malloc(udp_packet_len);
-    memset(buffer, 0, udp_packet_len);
+    u8* buffer = $u8* malloc(udp_packet_len);
+    memset($void* buffer, 0, udp_packet_len);
 
     UDPHeader* udp = $UDPHeader* buffer;
-    void* dst_payload = $void* ($u64 buffer + sizeof(UDPHeader));
+    u8* dst_payload = $u8* ($u64 buffer + sizeof(UDPHeader));
 
     udp->src_port = cpu_to_be(src_port);
     udp->dst_port = cpu_to_be(dst_port);
     udp->length = cpu_to_be($u16 udp_packet_len);
     udp->checksum = $u16 0; // this is valid for ipv4, we can just not do it lol
 
-    memcpy(dst_payload, payload, $u64 payload_len);
+    memcpy($void* dst_payload, $void* payload, $u64 payload_len);
 
     ipv4_send_packet(dst_ip, IPv4_PROTOCOL_UDP, buffer, $u16 udp_packet_len);
-    free(buffer, udp_packet_len);
+    free($void* buffer, udp_packet_len);
 }
 
 void init_udp_ops() {
@@ -132,7 +132,7 @@ i32 udp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dest_addr) {
         sock->local_port = $u16 port;
     }
 
-    udp_send_packet(dst_ip, sock->local_port, dst_port, $void* buf, $u16 len);
+    udp_send_packet(dst_ip, sock->local_port, dst_port, buf, $u16 len);
 
     println("udp_send() : Finished UDP send socket operations");
 

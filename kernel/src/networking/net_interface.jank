@@ -15,7 +15,7 @@ struct NetInterface {
     u32 dns_server;
 
     // driver abstractions
-    fn<void(void*, u16)> send;
+    fn<void(u8*, u16)> send;
 }
 
 void set_mac(u8[6]& dst, u8[6]& src) {
