@@ -43,19 +43,11 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in client_addr;
     u64 addr_len = sizeof(sockaddr_in);
 
-    while(1) {
-        // i32 len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
-        i64 len = sys_read(fd, $void* buf, buf_size - 0x1);
-        while(len <= $i64 0) {
-            // len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
-            len = sys_read(fd, $void* buf, buf_size - 0x1);
-        }
-
-        cout << "got length: " << len << "\n";
-        buf[len] = $u8 0;
-        cout << $u8* @buf[0] << "\n";
-        cout.flush();
-    } 
+    i32 len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
+    cout << "got length: " << len << "\n";
+    buf[len] = $u8 0;
+    cout << $u8* @buf[0] << "\n";
+    cout.flush();
 
     return 0;
 }
