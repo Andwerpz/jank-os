@@ -398,12 +398,6 @@ i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u64* 
     i32 ret = sock->ops->recieve#(sock, kbuf, size, flags, kaddr_src);
 
     if(ret >= 0) {
-        println($u64 ret);
-        u8* temp = $u8* malloc($u64 ret + 0x1);
-        memcpy($void* temp, $void* kbuf, $u64 ret);
-        temp[ret] = $u8 0;
-        println(temp);
-
         i32 ok = copy_to_user(user_pt, kbuf, buf, $u64 ret);
         assert(ok == 0, "FAILED TO COPY TO USER 1");
 

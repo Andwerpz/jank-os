@@ -92,11 +92,6 @@ Packet* socket_pop_packet(socket* sock) {
 
     Packet* pkt = sock->rx_head;
 
-    u8* temp = $u8* malloc($u64 pkt->len + 0x1);
-    memcpy($void* temp, $void* pkt->data, $u64 pkt->len);
-    temp[pkt->len] = $u8 0;
-    println(temp);
-
     sock->rx_head = pkt->next;
 
     if(sock->rx_head == nullptr) {
