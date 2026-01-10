@@ -18,16 +18,6 @@ struct NetInterface {
     fn<void(void*, u16)> send;
 }
 
-i32 mac_address_is_equal(u8[6]& mac1, u8[6]& mac2) {
-    if( mac1[0] != mac2[0] || 
-        mac1[1] != mac2[1] ||
-        mac1[2] != mac2[2] ||
-        mac1[3] != mac2[3] ||
-        mac1[4] != mac2[4] ||
-        mac1[5] != mac2[5] ) return 0;
-    return 1;
-}
-
 void set_mac(u8[6]& dst, u8[6]& src) {
     memcpy($void* @dst[0], $void* @src[0], $u64 6);
 }

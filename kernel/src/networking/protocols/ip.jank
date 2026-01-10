@@ -34,15 +34,17 @@ struct IPv4Header {
 [__GLOBAL_FIRST__] u32 IPv4_LOOPBACK_MASK = $u32 (255 << 24 | 0 << 16 | 0 << 8 | 0 << 0);
 
 void ipv4_handle(IPv4Header* ip) {
+    println("ipv4_handle() : Handling incoming IP message");
+
     u16 total_length = be_to_cpu(ip->total_length);
     if(total_length < $u16 20) {
-        println("ipv4_handle() : packet length shorter than minimum (20 bytes)");
+        println("ipv4_handle() : Packet length shorter than minimum (20 bytes), dropping");
         return;
     }
 
     u8 version = (ip->version_ihl & IPv4_HEADER_VERSION_MASK) >> $u8 4;
     if(version != IPv4_VALID_VERSION) {
-        println("ipv4_handle() : invalid version in header");
+        println("ipv4_handle() : Invalid version in header, dropping");
         return;
     }
     
@@ -50,22 +52,22 @@ void ipv4_handle(IPv4Header* ip) {
     u8 ihl = ip->version_ihl & IPv4_HEADER_IHL_MASK;
     u16 header_len = $u16 ihl * $u16 4; // ihl * 32 bits = header length 
     if(header_len != $u16 20) {
-        println("ipv4_handle() : invalid ihl, header length not supported");
+        println("ipv4_handle() : Invalid IHL, header length not supported, dropping");
         return;
     }
 
     // u16 calc = calculate_ipv4_header_checksum(ip);
     u16 calc = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
     if(calc != ip->header_checksum) {
-        println("ipv4_handle() : checksum failed");
+        println("ipv4_handle() : Checksum failed, dropping");
         return;
     }
 
     u32 dst_ip = be_to_cpu(ip->dst_ip);
     if(!(dst_ip == CURRENT_INTERFACE->ip_address || dst_ip == IPv4_BROADCAST_ADDR || is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK))) {
-        print("ipv4_handle() : destination ip ");
+        print("ipv4_handle() : Destination IP [");
         print_ipv4_addr(dst_ip);
-        println(" does not match with host, ignoring");
+        println("] does not match with host, dropping");
         return;
     }
 
@@ -84,16 +86,16 @@ void ipv4_handle(IPv4Header* ip) {
         UDPHeader* udp = $UDPHeader* payload;
         udp_handle(udp, payload_size, src_ip);
     } else {
-        print("ipv4_handle() : unknown protocol ");
+        print("ipv4_handle() : Unknown protocol 0x");
         print_hex(ip->protocol);
         println("");
     }
 }
 
 void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
-    print("ipv4_send_packet() : sending IPv4 packet to: ");
+    print("ipv4_send_packet() : Sending IPv4 packet to [");
     print_ipv4_addr(dst_ip);
-    println("");
+    println("]");
 
     u64 ipv4_packet_len = sizeof(IPv4Header) + $u64 payload_len;
     u8* ip_buffer = $u8* malloc(ipv4_packet_len);
@@ -119,7 +121,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
 
     // check loopback
     if(is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK) || dst_ip == CURRENT_INTERFACE->ip_address) {
-        println("ipv4_send_packet() : Loopback detected");
+        println("ipv4_send_packet() : Loopback detected, routing back to handler");
         ipv4_handle(ip);
         free($void* ip_buffer, ipv4_packet_len);
         return;
@@ -127,7 +129,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
 
     // check broadcast
     if(dst_ip == IPv4_BROADCAST_ADDR) {
-        println("ipv4_send_packet() : destination is broadcast");
+        println("ipv4_send_packet() : Destination is broadcast");
         u8[6] broadcast_mac;
         // dst ip is a broadcast, change mac to broadcast and send
         for(i32 i = 0; i < 6; i++) broadcast_mac[i] = $u8 0xFF;
@@ -140,7 +142,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     u32 next_hop = dst_ip;
     // checks if ip is local on subnet, if not set next hop to gateway, arp will set eth dst mac to gateway.
     if(!is_address_in_subnet(dst_ip, CURRENT_INTERFACE->ip_address, CURRENT_INTERFACE->subnet_mask)) {
-        println("ipv4_send_packet() : destination is not in host subnet, sending it to default gateway");
+        println("ipv4_send_packet() : Destination is not in host subnet, sending it to the default gateway");
         next_hop = CURRENT_INTERFACE->gateway_ip;
     }
 
@@ -149,7 +151,7 @@ void ipv4_send_packet(u32 dst_ip, u8 protocol, void* payload, u16 payload_len) {
     if(arp_lookup(next_hop, dst_mac)) {
         ethernet_send_frame(dst_mac, ip_buffer, $u16 ipv4_packet_len, ETHERNET_TYPE_IPV4);
     } else {
-        println("ipv4_send_packet() : destination not in ARP table, packet queued, sent ARP request instead");
+        println("ipv4_send_packet() : Destination not in ARP table, queuing the packet and sending an ARP request instead");
         arp_queue_packet(next_hop, ip_buffer, $u16 ipv4_packet_len);
         send_arp_request(next_hop);
     }
