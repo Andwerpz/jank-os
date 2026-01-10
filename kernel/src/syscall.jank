@@ -531,6 +531,7 @@ i32 sys_open(u8* path, i32 flags, mode_t mode) {
 
             if(create_status) {
                 free($void* kpath, path_len + 0x1);
+                cout << "sys_open() : vfs create failed\n";
                 pt_switch(user_pt);
                 return -ERR_UNKNOWN;
             }
@@ -541,12 +542,15 @@ i32 sys_open(u8* path, i32 flags, mode_t mode) {
 
             if(walk_status) {
                 free($void* kpath, path_len + 0x1);
+                cout << "sys_open() : walk to new file failed\n";
                 pt_switch(user_pt);
                 return -ERR_UNKNOWN;
             }
         }
         else {
             free($void* kpath, path_len + 0x1);
+            cout << "sys_open() : wrong walk status\n";
+            cout << "sys_open() : walk status : " << walk_status << "\n";
             pt_switch(user_pt);
             return -ERR_UNKNOWN;
         }
@@ -555,6 +559,7 @@ i32 sys_open(u8* path, i32 flags, mode_t mode) {
         //O_EXCL requires that file not exist 
         if(flags & O_EXCL) {
             free($void* kpath, path_len + 0x1);
+            cout << "sys_open() : file already existing and O_EXCL\n";
             pt_switch(user_pt);
             return -ERR_UNKNOWN;
         }

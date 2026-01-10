@@ -296,20 +296,40 @@ void ext2_print_dir_entry(ext2_dir_entry* dir) {
 }
 
 i32 ext2_read_blocks(ext2_fs* fs, u32 start_block, u32 block_count, void* buf) {
-    println("ext2_read_blocks() : read : ", start_block, " ", block_count);
+    // println("ext2_read_blocks() : read : ", start_block, " ", block_count);
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_blocks() : only support dev block size dividing ext2 block size");
     u64 lba_start = ($u64 start_block * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = ($u64 fs->block_size / fs->dev->block_size) * $u64 block_count;
-    return blockdev_read(fs->dev, lba_start, count, buf);
+
+    void* bbuf;
+    i32 status;
+    for(u64 i = 0x0; i < count; i++) {
+        status = blockdev_bget(fs->dev, lba_start + i, bbuf);
+        if(status) return status;
+        memcpy($void* ($u64 buf + i * fs->dev->block_size), bbuf, fs->dev->block_size);
+        status = blockdev_bput(fs->dev, lba_start + i);
+        if(status) return status;
+    }
+    return 0;
 }
 
 //read a single ext2 block from the underlying block device
 i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
-    println("ext2_read_block() : read : ", block_number);
+    // println("ext2_read_block() : read : ", block_number);   
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
     u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = $u64 fs->block_size / fs->dev->block_size;
-    return blockdev_read(fs->dev, lba_start, count, buf);
+
+    void* bbuf;
+    i32 status;
+    for(u64 i = 0x0; i < count; i++) {
+        status = blockdev_bget(fs->dev, lba_start + i, bbuf);
+        if(status) return status;
+        memcpy($void* ($u64 buf + i * fs->dev->block_size), bbuf, fs->dev->block_size);
+        status = blockdev_bput(fs->dev, lba_start + i);
+        if(status) return status;
+    }
+    return 0;
 }
 
 //write a single ext2 block to the underlying block device
@@ -318,7 +338,18 @@ i32 ext2_write_block(ext2_fs* fs, u32 block_number, void* buf) {
     assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
     u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
     u64 count = $u64 fs->block_size / fs->dev->block_size;
-    return blockdev_write(fs->dev, lba_start, count, buf);
+
+    void* bbuf;
+    i32 status;
+    for(u64 i = 0x0; i < count; i++) {
+        status = blockdev_bget(fs->dev, lba_start + i, bbuf);
+        if(status) return status;
+        memcpy(bbuf, $void* ($u64 buf + i * fs->dev->block_size), fs->dev->block_size);
+        blockdev_bdirty(fs->dev, lba_start + i);
+        status = blockdev_bput(fs->dev, lba_start + i);
+        if(status) return status;
+    }
+    return 0;
 }
 
 //scans a block device to see if there is a ext2 filesystem on it
@@ -1363,60 +1394,132 @@ void ext2_traverse_block_map_range(ext2_fs* fs, ext2_inode* inode, u32 start_blo
     
     // singly
     if(start_block_index < B) {
-        if(ext2_read_block(fs, inode->singly_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
-        for(u64 i = 0x0; i < $u64 B; i++) {
-            if(buf_ptr == $u64 block_count) break;
-            if(start_block_index == $u32 0) {
-                out_buf[buf_ptr ++] = ($u32* buf1)[i];
+        if(inode->singly_ind_block_ptr == $u32 0) {
+            //nothing mapped here
+            for(u64 j = 0x0; j < $u64 B; j++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = $u32 0;
+                }
+                else start_block_index --;
             }
-            else start_block_index --;
+        }
+        else {
+            if(ext2_read_block(fs, inode->singly_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
+            for(u64 i = 0x0; i < $u64 B; i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = ($u32* buf1)[i];
+                }
+                else start_block_index --;
+            }
         }
     }
     else start_block_index -= B;
 
     // doubly
     if(start_block_index < (B * B)) {    
-        if(ext2_read_block(fs, inode->doubly_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
-        for(u64 i = 0x0; i < $u64 B; i++) {
-            if(buf_ptr == $u64 block_count) break;
-            if(start_block_index < B) {
-                if(ext2_read_block(fs, ($u32* buf1)[i], buf2)) panic("ext2_traverse_block_map_range() : read block failed");
-                for(u64 j = 0x0; j < $u64 B; j++) {
-                    if(buf_ptr == $u64 block_count) break;
-                    if(start_block_index == $u32 0) {
-                        out_buf[buf_ptr ++] = ($u32* buf2)[i];
-                    }   
-                    else start_block_index --;
+        if(inode->doubly_ind_block_ptr == $u32 0) {
+            //nothing mapped here
+            for(u64 i = 0x0; i < $u64 (B * B); i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = $u32 0;
                 }
+                else start_block_index --;
             }
-            else start_block_index -= B;
+        }
+        else {
+            if(ext2_read_block(fs, inode->doubly_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
+            for(u64 i = 0x0; i < $u64 B; i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index < B) {
+                    if(($u32* buf1)[i] == $u32 0) {
+                        //nothing mapped here
+                        for(u64 j = 0x0; j < $u64 B; j++) {
+                            if(buf_ptr == $u64 block_count) break;
+                            if(start_block_index == $u32 0) {
+                                out_buf[buf_ptr ++] = $u32 0;
+                            }
+                            else start_block_index --;
+                        }
+                    }
+                    else {
+                        if(ext2_read_block(fs, ($u32* buf1)[i], buf2)) panic("ext2_traverse_block_map_range() : read block failed");
+                        for(u64 j = 0x0; j < $u64 B; j++) {
+                            if(buf_ptr == $u64 block_count) break;
+                            if(start_block_index == $u32 0) {
+                                out_buf[buf_ptr ++] = ($u32* buf2)[j];
+                            }   
+                            else start_block_index --;
+                        }
+                    }
+                }
+                else start_block_index -= B;
+            }
         }
     }
     else start_block_index -= (B * B);
 
     // triply
     if(start_block_index < (B * B * B)) {   
-        if(ext2_read_block(fs, inode->triply_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
-        for(u64 i = 0x0; i < $u64 B; i++) {
-            if(buf_ptr == $u64 block_count) break;
-            if(start_block_index < B * B) {
-                if(ext2_read_block(fs, ($u32* buf1)[i], buf2)) panic("ext2_traverse_block_map_range() : read block failed");
-                for(u64 j = 0x0; j < $u64 B; j++) {
-                    if(buf_ptr == $u64 block_count) break;
-                    if(start_block_index < B) {
-                        if(ext2_read_block(fs, ($u32* buf2)[i], buf3)) panic("ext2_traverse_block_map_range() : read block failed");
-                        for(u64 k = 0x0; k < $u64 B; k++) {
+        if(inode->triply_ind_block_ptr == $u32 0) {
+            //nothing mapped here
+            for(u64 i = 0x0; i < $u64 (B * B * B); i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = $u32 0;
+                }
+                else start_block_index --;
+            }
+        }
+        else {
+            if(ext2_read_block(fs, inode->triply_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
+            for(u64 i = 0x0; i < $u64 B; i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index < B * B) {
+                    if(($u32* buf1)[i] == $u32 0) {
+                        //nothing mapped here
+                        for(u64 j = 0x0; j < $u64 (B * B); j++) {
                             if(buf_ptr == $u64 block_count) break;
                             if(start_block_index == $u32 0) {
-                                out_buf[buf_ptr ++] = ($u32* buf3)[i];
+                                out_buf[buf_ptr ++] = $u32 0;
                             }
                             else start_block_index --;
                         }
                     }
-                    else start_block_index -= B;
+                    else {
+                        if(ext2_read_block(fs, ($u32* buf1)[i], buf2)) panic("ext2_traverse_block_map_range() : read block failed");
+                        for(u64 j = 0x0; j < $u64 B; j++) {
+                            if(buf_ptr == $u64 block_count) break;
+                            if(start_block_index < B) {
+                                if(($u32* buf2)[j] == $u32 0) {
+                                    //nothing mapped here
+                                    for(u64 k = 0x0; k < $u64 B; k++) {
+                                        if(buf_ptr == $u64 block_count) break;
+                                        if(start_block_index == $u32 0) {
+                                            out_buf[buf_ptr ++] = $u32 0;
+                                        }
+                                        else start_block_index --;
+                                    }
+                                }
+                                else {
+                                    if(ext2_read_block(fs, ($u32* buf2)[j], buf3)) panic("ext2_traverse_block_map_range() : read block failed");
+                                    for(u64 k = 0x0; k < $u64 B; k++) {
+                                        if(buf_ptr == $u64 block_count) break;
+                                        if(start_block_index == $u32 0) {
+                                            out_buf[buf_ptr ++] = ($u32* buf3)[k];
+                                        }
+                                        else start_block_index --;
+                                    }
+                                }
+                            }
+                            else start_block_index -= B;
+                        }
+                    }
                 }
+                else start_block_index -= B * B;
             }
-            else start_block_index -= B * B;
         }
     }
     else start_block_index -= (B * B * B);
@@ -1643,7 +1746,7 @@ i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_i
     for(u32 i = $u32 0; i < block_count; i++) {
         u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
         if(block_num == $u32 0) break;
-        ext2_read_block(fs, block_num, buf);
+        if(ext2_read_block(fs, block_num, buf)) panic("ext2_lookup() : read block failed");
         
         u32 offset = $u32 0;
         while(offset < fs->block_size) {
@@ -1791,7 +1894,6 @@ i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
 
     //construct output and return
     ext2_construct_vfs_inode(_node->dev, child, child_node_num, fs, child_node, res);
-    // println("ext2_lookup() : done");
     return VFS_WALK_FOUND;
 }
 

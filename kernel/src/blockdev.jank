@@ -1,4 +1,10 @@
 // standard interface for block device drivers
+// has caching built-in via bget / bput / bdirty
+// to improve performance, you want to read blocks in bulk. 
+
+// TODO
+// - instead of always reading stuff in bulk on cache miss, maybe have a system to detect runs of reads, and
+//   only read in bulk if the run gets long enough. 
 
 [__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_PARTITION  = 0x1;
 [__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI       = 0x2;
@@ -61,6 +67,7 @@ i32 blockdev_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
 } 
 
 // flushes entry and deallocates any external memory related to the entry
+// also resets entry memory
 i32 blockdev_evict_ent(blockdev_cache_ent* ent) {
     assert(ent->refcount == 0x0, "blockdev_evict_ent() : trying to evict ent with non-zero refcount");
 
@@ -76,19 +83,21 @@ i32 blockdev_evict_ent(blockdev_cache_ent* ent) {
     if(!BLOCKDEV_CACHE_MAP->erase(key)) {
         panic("blockdev_evict_ent() : should contain entry");
     }   
+    assert(!BLOCKDEV_CACHE_MAP->contains(key), "blockdev_evict_ent() : failed to remove map entry");
 
-    ent->occupied = 0;
+    memset($void* ent, 0, sizeof(blockdev_cache_ent));
     return 0;
 }
 
-// allocates entry and populates buffer via input buffer
-blockdev_cache_ent* blockdev_alloc_ent(blockdev* dev, u64 lba, void* buf) {
+// places amt free ent inds into the provided buffer
+void blockdev_alloc_ents(u64 amt, u64* buf) {
     u64 itercnt = 0x0;
-    blockdev_cache_ent* ent;
+    u64 buf_ptr = 0x0;
     u64 ent_ind;
-    while(1) {
+    blockdev_cache_ent* ent;
+    while(buf_ptr < amt) {
         if(itercnt == BLOCKDEV_CACHE_SIZE * 0x2) {
-            //made two rounds but still no evictable cache slots
+            //made two rounds but not enough evictable entries
             panic("blockdev_alloc_ent() : blockdev cache full");
         }
         itercnt ++;
@@ -103,7 +112,6 @@ blockdev_cache_ent* blockdev_alloc_ent(blockdev* dev, u64 lba, void* buf) {
         while(1) {
             if(!ent->occupied) {
                 //unoccupied slot, go ahead and take this one
-                memset($void* ent, 0, sizeof(blockdev_cache_ent));
                 allocd = 1;
                 break;
             }
@@ -123,38 +131,37 @@ blockdev_cache_ent* blockdev_alloc_ent(blockdev* dev, u64 lba, void* buf) {
             if(blockdev_evict_ent(ent)) {
                 panic("blockdev_alloc_ent() : evict failed");
             }
-            memset($void* ent, 0, sizeof(blockdev_cache_ent));
             allocd = 1;
             break;
         }
-        if(allocd) break;
+        if(allocd) {
+            buf[buf_ptr ++] = ent_ind;
+            
+            //mark as not evictable for now so we don't double alloc
+            ent->occupied = 1;
+            ent->refcount = 0x1;
+        }
     }
 
-    //populate ent
-    ent->occupied = 1;
-    ent->clock = 1;
-    ent->refcount = 0x0;
-    ent->dirty = 0;
-    ent->dev = dev;
-    ent->lba = lba;
-    ent->buf = malloc(dev->block_size);
-    memcpy(ent->buf, buf, dev->block_size);
-
-    //add map entry
-    pair<blockdev*, u64> key = new pair<blockdev*, u64>(ent->dev, ent->lba);
-    assert(!BLOCKDEV_CACHE_MAP->contains(key), "blockdev_alloc_ent() : map should not contain this ent yet");
-    BLOCKDEV_CACHE_MAP->insert(key, ent_ind);
-
-    return ent;
+    //decrement all ents refcounts back to 0
+    for(u64 i = 0x0; i < amt; i++) {
+        ent = @(BLOCKDEV_CACHE[buf[i]]);
+        assert(ent->occupied == 1, "blockdev_alloc_ents() : should be occupied");
+        ent->occupied = 0;
+        ent->refcount = 0x0;
+    }
 }
 
 // writes the buffer back to the underlying block device and unmarks the entry as dirty
 i32 blockdev_flush_ent(blockdev_cache_ent* ent) {
     //see if we need to flush
     if(!ent->dirty) return 0;   
+
+    //do flush
     i32 status = blockdev_write(ent->dev, ent->lba, 0x1, ent->buf);
     if(status) return status;   //flush failed
     ent->dirty = 0; 
+    
     return 0;
 } 
 
@@ -179,26 +186,54 @@ blockdev_cache_ent* blockdev_get_ent(blockdev* dev, u64 lba, i32 assert_existing
         assert(dev->block_size <= amt_bytes, "blockdev_get_ent() : those are some big blocks D:");
         u64 amt_blocks = amt_bytes / dev->block_size;
         assert(amt_blocks * dev->block_size == amt_bytes, "blockdev_get_ent() : these should line up");
-        void* buf = malloc(amt_bytes);
+        assert(amt_blocks > 0x0, "blockdev_get_ent() : requested block amt should be > 0");
+
+        //allocate cache entries 
+        //need to do this before device read as this also flushes dirty cache blocks
+        u64* ent_inds = $u64* malloc(sizeof(u64) * amt_blocks);
+        blockdev_alloc_ents(amt_blocks, ent_inds);
 
         //read from device
+        void* buf = malloc(amt_bytes);
         i32 read_status = blockdev_read(dev, lba, amt_blocks, buf);
         if(read_status) panic("blockdev_get_ent() : read failed D:");
 
         //register blocks in cache
         for(u64 i = 0x0; i < amt_blocks; i++) {
-            blockdev_cache_ent* cent = blockdev_alloc_ent(dev, lba + i, $void* ($u64 buf + i * dev->block_size));
-            if(i == 0x0) {
-                //inc ref of returned ent so it doesn't get evicted
-                out_ent = cent;
-                out_ent->refcount ++;
+            //see if cache already has this block
+            key.second = lba + i;
+            if(BLOCKDEV_CACHE_MAP->contains(key)) {
+                assert(i != 0x0, "blockdev_get_ent() : cache should not already have first block");
+                continue;
             }
+
+            //populate ent
+            u64 ent_ind = ent_inds[i];
+            blockdev_cache_ent* ent = @(BLOCKDEV_CACHE[ent_ind]);
+            assert(ent->occupied == 0, "blockdev_get_ent() : occupied ent");
+            memset($void* ent, 0, sizeof(blockdev_cache_ent));
+            ent->occupied = 1;
+            ent->clock = 1;
+            ent->refcount = 0x0;
+            ent->dirty = 0;
+            ent->dev = dev;
+            ent->lba = lba + i;
+            ent->buf = malloc(dev->block_size);
+            memcpy(ent->buf, $void* ($u64 buf + i * dev->block_size), dev->block_size);
+
+            //add map entry
+            assert(!BLOCKDEV_CACHE_MAP->contains(key), "blockdev_get_ent() : map should not contain this ent yet");
+            BLOCKDEV_CACHE_MAP->insert(key, ent_ind);
         }
-        //this function shouldn't alloc ref, so dec ref back
-        out_ent->refcount --;
+
+        out_ent = @(BLOCKDEV_CACHE[ent_inds[0]]);
+        free($void* ent_inds, sizeof(u64) * amt_blocks);
         free(buf, amt_bytes);
     }
     assert(out_ent != nullptr, "blockdev_get_ent() : null out_ent");
+    assert(out_ent->occupied, "blockdev_get_ent() : out_ent not occupied");
+    assert(out_ent->dev == dev && out_ent->lba == lba, "blockdev_get_ent() : mismatching ent info");
+    assert(out_ent->buf != nullptr, "blockdev_get_ent() : null buf");
 
     //reset clock on hit
     out_ent->clock = 1;
@@ -208,6 +243,7 @@ blockdev_cache_ent* blockdev_get_ent(blockdev* dev, u64 lba, i32 assert_existing
 //returns a managed pointer to a buffer containing the requested block
 //increments the refcount for the requested block
 i32 blockdev_bget(blockdev* dev, u64 lba, void*& out_buf) {
+    u64 o_lba = lba;
     while(!(dev->is_root)) {
         lba += dev->lba_start;
         dev = dev->parent;
@@ -215,7 +251,6 @@ i32 blockdev_bget(blockdev* dev, u64 lba, void*& out_buf) {
     assert(dev->lba_start == 0x0, "blockdev_bget() : lba_start should be 0 for root block devices");
 
     blockdev_cache_ent* ent = blockdev_get_ent(dev, lba, 0);
-    assert(ent != nullptr, "blockdev_bget() : null ent");
     ent->refcount ++;
     out_buf = ent->buf;
 
@@ -243,6 +278,7 @@ i32 blockdev_bput(blockdev* dev, u64 lba) {
 //marks the buffer for the requested block as dirty
 //the requested block buffer will be flushed back to the underlying device at some point
 i32 blockdev_bdirty(blockdev* dev, u64 lba) {
+    assert(dev != nullptr, "blockdev_bdirty() : null dev");
     while(!(dev->is_root)) {
         lba += dev->lba_start;
         dev = dev->parent;
@@ -253,10 +289,27 @@ i32 blockdev_bdirty(blockdev* dev, u64 lba) {
     blockdev_cache_ent* ent = blockdev_get_ent(dev, lba, 1);
 
     //mark as dirty
-    assert(ent->refcount != 0x0, "blockdev_bput() : zero refcount");
+    assert(ent->refcount != 0x0, "blockdev_bdirty() : zero refcount");
     ent->dirty = 1;
 
     return 0;
+}
+
+//force flushes a cache entry back to the underlying device
+i32 blockdev_bflush(blockdev* dev, u64 lba) {
+    while(!(dev->is_root)) {
+        lba += dev->lba_start;
+        dev = dev->parent;
+    }
+    assert(dev->lba_start == 0x0, "blockdev_bflush() : lba_start should be 0 for root block devices");
+
+    //we must be able to find this block within the cache
+    blockdev_cache_ent* ent = blockdev_get_ent(dev, lba, 1);
+
+    //flush this entry
+    i32 status = blockdev_flush_ent(ent);
+    
+    return status;
 }
 
 [__GLOBAL_FIRST__] u64 BLOCKDEV_BUF_CNT = $u64 0;
