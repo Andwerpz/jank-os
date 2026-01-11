@@ -122,7 +122,7 @@ void test_unlink() {
 
     //this should succeed
     i32 fd = sys_open("test_unlink/a.txt", O_CREAT | O_WRONLY | O_EXCL, $mode_t 0o755);
-    assert(fd >= 0, "test_unlink() : this should succeed");
+    assert(fd >= 0, "test_unlink() : this should succeed 1");
     sys_close(fd);
 
     //remove a.txt
@@ -130,7 +130,7 @@ void test_unlink() {
 
     //this should succeed
     i32 fd2 = sys_open("test_unlink/a.txt", O_CREAT | O_WRONLY | O_EXCL, $mode_t 0o755);
-    assert(fd2 >= 0, "test_unlink() : this should succeed");
+    assert(fd2 >= 0, "test_unlink() : this should succeed 2");
     sys_close(fd2);
 
     cout << "test unlink passed\n";
@@ -141,7 +141,7 @@ void test_fail() {
 
     //this should succeed
     i32 fd = sys_open("test_fail/a.txt", O_CREAT | O_WRONLY | O_EXCL, $mode_t 0o755);
-    assert(fd >= 0, "test_fail() : this should succeed");
+    assert(fd >= 0, "test_fail() : this should succeed 1");
     sys_close(fd);
 
     //this should fail
@@ -150,7 +150,7 @@ void test_fail() {
 
     //this should succeed
     i32 fd3 = sys_open("test_fail/b.txt", O_CREAT | O_WRONLY | O_EXCL, $mode_t 0o755);
-    assert(fd3 >= 0, "test_fail() : this should succeed");
+    assert(fd3 >= 0, "test_fail() : this should succeed 2");
     sys_close(fd3);
 
     cout << "test fail passed\n";

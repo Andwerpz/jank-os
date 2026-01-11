@@ -1,6 +1,14 @@
 
 struct waitq {
     vector<process*> waiters;
+
+    waitq(waitq& other) {
+        panic("waitq : should not be copied");
+    }
+
+    ~waitq() {
+        assert(this.waiters.size() == 0x0, "waitq::~() : cannot be waiters when destructing");
+    }
 }
 
 void waitq_add_proc(waitq* q, process* proc) {

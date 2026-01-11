@@ -3,20 +3,6 @@
 
 [__GLOBAL_FIRST__] file_ops* FILE_OPS_SOCKET;
 
-[__GLOBAL_FIRST__] i32 AF_INET = 2;
-
-[__GLOBAL_FIRST__] i32 SOCK_STREAM  = 1; // TCP
-[__GLOBAL_FIRST__] i32 SOCK_DGRAM   = 2; // UDP
-[__GLOBAL_FIRST__] i32 SOCK_RAW     = 3;
-
-[__GLOBAL_FIRST__] i32 IPPROTO_ICMP = 1;
-[__GLOBAL_FIRST__] i32 IPPROTO_TCP  = 6;
-[__GLOBAL_FIRST__] i32 IPPROTO_UDP  = 17;
-
-struct sockaddr {
-
-}
-
 struct socket {
     i32 domain;
     i32 type;
