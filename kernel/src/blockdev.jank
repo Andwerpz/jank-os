@@ -5,13 +5,18 @@
 // TODO
 // - instead of always reading stuff in bulk on cache miss, maybe have a system to detect runs of reads, and
 //   only read in bulk if the run gets long enough. 
+// - device ejection logic (cache sync, update all block devices, etc.)
+// - somehow coalesce blockdev writes?
 
 [__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_PARTITION  = 0x1;
 [__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_AHCI       = 0x2;
 [__GLOBAL_FIRST__] u64 BLOCKDEV_TYPE_USB_SCSI   = 0x3;
 
+[__GLOBAL_FIRST__] i32 BLOCKDEV_CACHE_ENT_STATE_AVAILABLE   = 0;
+[__GLOBAL_FIRST__] i32 BLOCKDEV_CACHE_ENT_STATE_OCCUPIED    = 1;
+[__GLOBAL_FIRST__] i32 BLOCKDEV_CACHE_ENT_STATE_ALLOCD      = 2;
 struct blockdev_cache_ent {
-    i32 occupied;
+    i32 state;
     blockdev* dev;
     u64 lba;
     void* buf;
@@ -19,7 +24,9 @@ struct blockdev_cache_ent {
     i32 dirty;
     i32 clock;
 
-    // TODO add lock
+    //should obtain this lock before modifying any member of this entry
+    //only exception is the clock flag, that can be freely modified by the allocator
+    mutex lock;
 }
 
 //blockdev cache will be keyed by {blockdev*, lba}
@@ -27,6 +34,7 @@ struct blockdev_cache_ent {
 [__GLOBAL_FIRST__] u64 BLOCKDEV_CACHE_CLOCK_PTR;
 [__GLOBAL_FIRST__] blockdev_cache_ent* BLOCKDEV_CACHE;
 [__GLOBAL_FIRST__] hashmap<pair<blockdev*, u64>, u64>* BLOCKDEV_CACHE_MAP;  // maps {blockdev*, lba} -> cache entry ind
+mutex BLOCKDEV_CACHE_STATE_LOCK;        // process should obtain this lock when trying to add/remove stuff from the cache
 
 struct blockdev_ops {
     fn<i32(blockdev*, u64, u64, void*)> read;       //reads some sectors from the block device into the provided buffer. returns 0 on success
@@ -71,6 +79,9 @@ i32 blockdev_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
 i32 blockdev_evict_ent(blockdev_cache_ent* ent) {
     assert(ent->refcount == 0x0, "blockdev_evict_ent() : trying to evict ent with non-zero refcount");
 
+    //claim lock
+    ent->lock.lock();
+
     //flush 
     i32 status = blockdev_flush_ent(ent);
     if(status) return status;
@@ -85,7 +96,12 @@ i32 blockdev_evict_ent(blockdev_cache_ent* ent) {
     }   
     assert(!BLOCKDEV_CACHE_MAP->contains(key), "blockdev_evict_ent() : failed to remove map entry");
 
-    memset($void* ent, 0, sizeof(blockdev_cache_ent));
+    //mark ent as available
+    ent->state = BLOCKDEV_CACHE_ENT_STATE_AVAILABLE;
+    
+    //drop lock
+    ent->lock.unlock();
+
     return 0;
 }
 
@@ -110,9 +126,14 @@ void blockdev_alloc_ents(u64 amt, u64* buf) {
 
         i32 allocd = 0;
         while(1) {
-            if(!ent->occupied) {
+            if(ent->state == BLOCKDEV_CACHE_ENT_STATE_AVAILABLE) {
                 //unoccupied slot, go ahead and take this one
                 allocd = 1;
+                break;
+            }
+
+            //if the entry is in a state other than occupied, then can't alloc it
+            if(ent->state != BLOCKDEV_CACHE_ENT_STATE_OCCUPIED) {
                 break;
             }
 
@@ -137,18 +158,10 @@ void blockdev_alloc_ents(u64 amt, u64* buf) {
         if(allocd) {
             buf[buf_ptr ++] = ent_ind;
             
-            //mark as not evictable for now so we don't double alloc
-            ent->occupied = 1;
-            ent->refcount = 0x1;
+            //mark as alloc'd
+            new (ent) blockdev_cache_ent();
+            ent->state = BLOCKDEV_CACHE_ENT_STATE_ALLOCD;
         }
-    }
-
-    //decrement all ents refcounts back to 0
-    for(u64 i = 0x0; i < amt; i++) {
-        ent = @(BLOCKDEV_CACHE[buf[i]]);
-        assert(ent->occupied == 1, "blockdev_alloc_ents() : should be occupied");
-        ent->occupied = 0;
-        ent->refcount = 0x0;
     }
 }
 
@@ -165,6 +178,8 @@ i32 blockdev_flush_ent(blockdev_cache_ent* ent) {
     return 0;
 } 
 
+// retrieves an entry from the cache
+// if the entry does not exist, reads it back from the underlying block device
 blockdev_cache_ent* blockdev_get_ent(blockdev* dev, u64 lba, i32 assert_existing) {
     pair<blockdev*, u64> key = new pair<blockdev*, u64>(dev, lba);
     blockdev_cache_ent* out_ent;
@@ -200,30 +215,33 @@ blockdev_cache_ent* blockdev_get_ent(blockdev* dev, u64 lba, i32 assert_existing
 
         //register blocks in cache
         for(u64 i = 0x0; i < amt_blocks; i++) {
+            u64 ent_ind = ent_inds[i];
+            blockdev_cache_ent* ent = @(BLOCKDEV_CACHE[ent_ind]);
+            assert(ent->state == BLOCKDEV_CACHE_ENT_STATE_ALLOCD, "blockdev_get_ent() : wrong ent state");
+
             //see if cache already has this block
             key.second = lba + i;
             if(BLOCKDEV_CACHE_MAP->contains(key)) {
                 assert(i != 0x0, "blockdev_get_ent() : cache should not already have first block");
-                continue;
+
+                //make ent available
+                ent->state = BLOCKDEV_CACHE_ENT_STATE_AVAILABLE;
             }
+            else {
+                //populate ent
+                ent->state = BLOCKDEV_CACHE_ENT_STATE_OCCUPIED; 
+                ent->clock = 1;
+                ent->refcount = 0x0;
+                ent->dirty = 0;
+                ent->dev = dev;
+                ent->lba = lba + i;
+                ent->buf = malloc(dev->block_size);
+                memcpy(ent->buf, $void* ($u64 buf + i * dev->block_size), dev->block_size);
 
-            //populate ent
-            u64 ent_ind = ent_inds[i];
-            blockdev_cache_ent* ent = @(BLOCKDEV_CACHE[ent_ind]);
-            assert(ent->occupied == 0, "blockdev_get_ent() : occupied ent");
-            memset($void* ent, 0, sizeof(blockdev_cache_ent));
-            ent->occupied = 1;
-            ent->clock = 1;
-            ent->refcount = 0x0;
-            ent->dirty = 0;
-            ent->dev = dev;
-            ent->lba = lba + i;
-            ent->buf = malloc(dev->block_size);
-            memcpy(ent->buf, $void* ($u64 buf + i * dev->block_size), dev->block_size);
-
-            //add map entry
-            assert(!BLOCKDEV_CACHE_MAP->contains(key), "blockdev_get_ent() : map should not contain this ent yet");
-            BLOCKDEV_CACHE_MAP->insert(key, ent_ind);
+                //add map entry
+                assert(!BLOCKDEV_CACHE_MAP->contains(key), "blockdev_get_ent() : map should not contain this ent yet");
+                BLOCKDEV_CACHE_MAP->insert(key, ent_ind);
+            }
         }
 
         out_ent = @(BLOCKDEV_CACHE[ent_inds[0]]);
@@ -231,17 +249,18 @@ blockdev_cache_ent* blockdev_get_ent(blockdev* dev, u64 lba, i32 assert_existing
         free(buf, amt_bytes);
     }
     assert(out_ent != nullptr, "blockdev_get_ent() : null out_ent");
-    assert(out_ent->occupied, "blockdev_get_ent() : out_ent not occupied");
+    assert(out_ent->state == BLOCKDEV_CACHE_ENT_STATE_OCCUPIED, "blockdev_get_ent() : out_ent not occupied");
     assert(out_ent->dev == dev && out_ent->lba == lba, "blockdev_get_ent() : mismatching ent info");
     assert(out_ent->buf != nullptr, "blockdev_get_ent() : null buf");
 
     //reset clock on hit
     out_ent->clock = 1;
+
     return out_ent;
 }
 
 //returns a managed pointer to a buffer containing the requested block
-//increments the refcount for the requested block
+//increments the refcount for the requested block and claims the lock
 i32 blockdev_bget(blockdev* dev, u64 lba, void*& out_buf) {
     u64 o_lba = lba;
     while(!(dev->is_root)) {
@@ -250,14 +269,18 @@ i32 blockdev_bget(blockdev* dev, u64 lba, void*& out_buf) {
     }
     assert(dev->lba_start == 0x0, "blockdev_bget() : lba_start should be 0 for root block devices");
 
+    //get entry, obtain lock, increment refcount
+    BLOCKDEV_CACHE_STATE_LOCK.lock();
     blockdev_cache_ent* ent = blockdev_get_ent(dev, lba, 0);
+    ent->lock.lock();
     ent->refcount ++;
     out_buf = ent->buf;
+    BLOCKDEV_CACHE_STATE_LOCK.unlock();
 
     return 0;
 }
 
-//decrements the refcount for the requested block
+//decrements the refcount for the requested block and drops the lock
 i32 blockdev_bput(blockdev* dev, u64 lba) {
     while(!(dev->is_root)) {
         lba += dev->lba_start;
@@ -265,12 +288,15 @@ i32 blockdev_bput(blockdev* dev, u64 lba) {
     }
     assert(dev->lba_start == 0x0, "blockdev_bput() : lba_start should be 0 for root block devices");
 
-    //we must be able to find it within the cache
+    //get entry 
+    BLOCKDEV_CACHE_STATE_LOCK.lock();
     blockdev_cache_ent* ent = blockdev_get_ent(dev, lba, 1);
+    BLOCKDEV_CACHE_STATE_LOCK.unlock();
 
-    //decrement the refcount
+    //decrement refcount, drop lock
     assert(ent->refcount != 0x0, "blockdev_bput() : zero refcount");
     ent->refcount --;
+    ent->lock.unlock();
 
     return 0;
 }
@@ -286,7 +312,9 @@ i32 blockdev_bdirty(blockdev* dev, u64 lba) {
     assert(dev->lba_start == 0x0, "blockdev_bdirty() : lba_start should be 0 for root block devices");
 
     //we must be able to find this block within the cache
+    BLOCKDEV_CACHE_STATE_LOCK.lock();
     blockdev_cache_ent* ent = blockdev_get_ent(dev, lba, 1);
+    BLOCKDEV_CACHE_STATE_LOCK.unlock();
 
     //mark as dirty
     assert(ent->refcount != 0x0, "blockdev_bdirty() : zero refcount");
@@ -304,11 +332,14 @@ i32 blockdev_bflush(blockdev* dev, u64 lba) {
     assert(dev->lba_start == 0x0, "blockdev_bflush() : lba_start should be 0 for root block devices");
 
     //we must be able to find this block within the cache
+    BLOCKDEV_CACHE_STATE_LOCK.lock();
     blockdev_cache_ent* ent = blockdev_get_ent(dev, lba, 1);
+    BLOCKDEV_CACHE_STATE_LOCK.unlock();
 
     //flush this entry
+    assert(ent->refcount != 0x0, "blockdev_bflush() : zero refcount");
     i32 status = blockdev_flush_ent(ent);
-    
+
     return status;
 }
 
@@ -415,6 +446,11 @@ void init_blockdev() {
     BLOCKDEV_CACHE_CLOCK_PTR = 0x0;
     BLOCKDEV_CACHE = $blockdev_cache_ent* malloc(sizeof(blockdev_cache_ent) * BLOCKDEV_CACHE_SIZE);
     memset($void* BLOCKDEV_CACHE, 0, sizeof(blockdev_cache_ent) * BLOCKDEV_CACHE_SIZE);
+    for(u64 i = 0x0; i < BLOCKDEV_CACHE_SIZE; i++) {
+        blockdev_cache_ent* ent = $blockdev_cache_ent* ($u64 BLOCKDEV_CACHE + i * sizeof(blockdev_cache_ent));
+        new (ent) blockdev_cache_ent();
+        ent->state = BLOCKDEV_CACHE_ENT_STATE_AVAILABLE;
+    }
     BLOCKDEV_CACHE_MAP = $hashmap<pair<blockdev*, u64>, u64>* malloc(sizeof(hashmap<pair<blockdev*, u64>, u64>));
     new (BLOCKDEV_CACHE_MAP) hashmap<pair<blockdev*, u64>, u64>(BLOCKDEV_CACHE_SIZE * 0x2);
 
