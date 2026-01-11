@@ -114,18 +114,17 @@ u16 tcp_checksum(u32 src_ip, u32 dst_ip, u8* packet, u16 len) {
     sum += (dst_ip >> $u32 16) & $u32 0xFFFF;
     sum += dst_ip & $u32 0xFFFF;
 
-    sum += $u32 $u16 6; // protocol = tcp
-    // sum += $u32 cpu_to_be($u16 6); // protocol = tcp
+    sum += $u32 cpu_to_be($u16 6); // protocol = tcp
 
-    sum += $u32 len;
-    // sum += $u32 cpu_to_be(len);
+    sum += $u32 cpu_to_be(len);
 
+    // input packet is already in network byte order, no need to convert
     u16* ptr = $u16* packet;
     u32 i = $u32 0;
     u32 count = $u32 len;
     
     while(count > $u32 1) {
-        sum += $u32 cpu_to_be(ptr[i]);
+        sum += $u32 ptr[i];
         i++;
         count -= $u32 2;
     }
