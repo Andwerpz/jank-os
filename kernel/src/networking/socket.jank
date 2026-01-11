@@ -11,7 +11,7 @@
 [__GLOBAL_FIRST__] u32 RESERVED_PORT_START = $u32 1;
 [__GLOBAL_FIRST__] u32 RESERVED_PORT_END = $u32 1024;
 [__GLOBAL_FIRST__] u32 EPHEMERAL_PORT_START = $u32 49152;
-[__GLOBAL_FIRST__] u32 EPHEMERAL_PORT_END = $u32 65535;
+[__GLOBAL_FIRST__] u32 EPHEMERAL_PORT_END = $u32 (1 << 16);
 
 socket** UDP_PORT_TABLE;
 socket** TCP_PORT_TABLE;
@@ -59,7 +59,7 @@ struct proto_ops {
 
 i32 get_next_ephemeral_port(socket** port_table) {
     for(u32 p = EPHEMERAL_PORT_START; p < EPHEMERAL_PORT_END; p++) {
-        if(port_table[p] != nullptr) return $i32 p; 
+        if(port_table[p] == nullptr) return $i32 p;
     }
     return -1;
 }

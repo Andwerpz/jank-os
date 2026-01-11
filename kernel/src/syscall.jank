@@ -273,7 +273,7 @@ i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {
 
     i32 ret = sock->ops->connect#(sock, kaddr, len);
 
-    sock->state = SOCKET_STATE_CONNECTED;
+    // sock->state = SOCKET_STATE_CONNECTED;
 
     free($void* kaddr, len);
 
@@ -473,8 +473,8 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
         return -ERR_AFNOSUPPORT;
     }
 
-    // For later, only support udp and raw (?)
-    if(type != SOCK_DGRAM) {
+    // For later, rn i only support udp and tcp
+    if(type != SOCK_DGRAM && type != SOCK_STREAM) {
         pt_switch(user_pt);
         return -ERR_SOCKTNOSUPPORT; 
     }
@@ -499,7 +499,13 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     socket->type = type;
     socket->protocol = protocol;
 
-    if(type == SOCK_DGRAM) socket->ops = UDP_OPS;
+    if(type == SOCK_DGRAM) {
+        socket->ops = UDP_OPS;
+    } else if(type == SOCK_STREAM) {
+        socket->ops = TCP_OPS;
+    } else {
+        panic("sys_socket() : Should not get here");
+    }
 
     socket->state = SOCKET_STATE_CREATED;
 

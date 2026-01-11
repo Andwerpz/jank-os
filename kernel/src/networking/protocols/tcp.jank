@@ -1,6 +1,8 @@
 // https://en.wikipedia.org/wiki/Transmission_Control_Protocol#TCP_segment_structure
 // https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Protocol_operation
 
+[__GLOBAL_FIRST__] proto_ops* TCP_OPS;
+
 [__GLOBAL_FIRST__] i32 TCP_STATE_LISTEN         = 0;    // Server              Waiting for a connection request from any remote TCP end-point.
 [__GLOBAL_FIRST__] i32 TCP_STATE_SYN_SENT       = 1;    // Client              Waiting for a matching connection request after having sent a connection request.
 [__GLOBAL_FIRST__] i32 TCP_STATE_SYN_RECEIVED   = 2;    // Server              Waiting for a confirming connection request acknowledgment after having both received and sent a connection request.
@@ -78,11 +80,24 @@ void tcp_send_packet(socket* sock, u8* data, u16 len, u8 flags) {
 
     memcpy($void* ($u64 buf + sizeof(TCPHeader)), $void* data, $u64 len);
 
+    println(sock->local_addr);
+
     tcp->checksum = tcp_checksum(sock->local_addr, sock->remote_addr, buf, $u16 tcp_len);
 
     ipv4_send_packet(sock->remote_addr, IPv4_PROTOCOL_TCP, buf, $u16 tcp_len);
 
     free($void* buf, tcp_len);
+}
+
+void init_tcp_ops() {
+    TCP_OPS = $proto_ops* malloc(sizeof(proto_ops));
+    new (TCP_OPS) proto_ops();
+    TCP_OPS->connect    = #<tcp_connect(socket*, sockaddr*, u64)>;
+    TCP_OPS->close      = #<tcp_close(socket*)>;
+
+    // TCP_OPS->send       = #<udp_send(socket*, u8*, u64, i32, sockaddr*)>;
+    // TCP_OPS->recieve    = #<udp_recieve(socket*, u8*, u64, i32, sockaddr*)>;
+    // TCP_OPS->bind       = #<udp_bind(socket*, sockaddr*, u64)>;
 }
 
 // https://en.wikipedia.org/wiki/Transmission_Control_Protocol#TCP_checksum_for_IPv4
@@ -99,9 +114,11 @@ u16 tcp_checksum(u32 src_ip, u32 dst_ip, u8* packet, u16 len) {
     sum += (dst_ip >> $u32 16) & $u32 0xFFFF;
     sum += dst_ip & $u32 0xFFFF;
 
-    sum += $u32 cpu_to_be($u16 6); // protocol = tcp
+    sum += $u32 $u16 6; // protocol = tcp
+    // sum += $u32 cpu_to_be($u16 6); // protocol = tcp
 
-    sum += $u32 cpu_to_be(len);
+    sum += $u32 len;
+    // sum += $u32 cpu_to_be(len);
 
     u16* ptr = $u16* packet;
     u32 i = $u32 0;
@@ -127,6 +144,8 @@ u16 tcp_checksum(u32 src_ip, u32 dst_ip, u8* packet, u16 len) {
 }
 
 i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
+    println("tcp_connect() : Beginning TCP connect socket operation");
+
     if(len < sizeof(sockaddr_in)) {
         println("tcp_connect() : Invalid sockaddr size (too small), exiting");
         return -ERR_INVAL;
@@ -142,6 +161,9 @@ i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
 
     sock->remote_addr = sin->sin_addr;
     sock->remote_port = sin->sin_port;
+
+    // should this be here?
+    sock->local_addr = CURRENT_INTERFACE->ip_address;
 
     print("tcp_connect() : Connecting to [");
     print_ipv4_addr(sock->remote_addr);
@@ -172,6 +194,23 @@ i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
     tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_SYN);
 
     tcb->snd_nxt++;
+
+    // block until connected?
+
+    println("tcp_connect() : Finished TCP connect socket operation");
+
+    return 0;
+}
+
+i32 tcp_close(socket* sock) {
+    println("tcp_close() : Beginning TCP close socket operation");
+
+    if(sock->local_port != $u16 0) {
+        assert(TCP_PORT_TABLE[sock->local_port] == sock, "tcp_close() : Current socket in table does not match associated port");
+        TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
+    }
+
+    println("tcp_close() : Finished TCP close socket operation");
 
     return 0;
 }

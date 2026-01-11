@@ -1,5 +1,6 @@
 NOW
 - TCP
+- write in pseudoheader struct, fill in and calculate. (both tcp and udp)
 - fill in states for UDP
 - TEST SYSCALLS AND FILE OPS
 - add syscall flag handling
@@ -10,6 +11,7 @@ LATER
 - arp queuing time out ttl
 - add expirations for arp entries, probably 60 seconds?
 - add lease time to dhcp
+- add checks to prevent attempts for network activity when there is no network device present
 - generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards? void* for driver struct in net interface?
 
 all the structs for networking that stay inside the kernel will keep everything in CPU order (little endian)

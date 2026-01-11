@@ -274,6 +274,7 @@ i32 main() {
 
     init_port_tables();
     init_udp_ops();
+    init_tcp_ops();
 
     init_acpi();
     init_ps2();
