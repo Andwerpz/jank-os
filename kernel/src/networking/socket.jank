@@ -1,6 +1,10 @@
 // https://man7.org/linux/man-pages/man2/socket.2.html
 // https://man7.org/linux/man-pages/man7/address_families.7.html
 
+[__GLOBAL_FIRST__] i32 SOCKET_STATE_CREATED = 0;
+[__GLOBAL_FIRST__] i32 SOCKET_STATE_BOUND = 1;
+[__GLOBAL_FIRST__] i32 SOCKET_STATE_CONNECTED = 2;
+
 [__GLOBAL_FIRST__] file_ops* FILE_OPS_SOCKET;
 
 [__GLOBAL_FIRST__] u32 MAX_PORTS = $u32 (1 << 16);
@@ -18,8 +22,10 @@ struct socket {
     i32 protocol;
     
     proto_ops* ops;
-    
-    i32 state;
+
+    i32 state;          // this will be used for all types probably
+    void* proto_info;   // this will be used for protocol specific stuff
+
     u32 local_addr;
     u16 local_port;
     u32 remote_addr;
@@ -29,12 +35,6 @@ struct socket {
 
     Packet* rx_head; 
     Packet* rx_tail;
-    u64 rx_count;
-
-    socket() {
-        this.rx_head = $Packet* nullptr;
-        this.rx_tail = $Packet* nullptr;
-    }
 }
 
 struct Packet {
