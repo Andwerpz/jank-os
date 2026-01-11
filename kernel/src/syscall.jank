@@ -271,9 +271,9 @@ i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {
         return -ERR_FAULT;
     }
 
-    println("callig socket ops connect");
     i32 ret = sock->ops->connect#(sock, kaddr, len);
-    println("done connect");
+
+    sock->state = SOCKET_STATE_CONNECTED;
 
     free($void* kaddr, len);
 
@@ -373,12 +373,10 @@ i32 sys_bind(i32 fd, sockaddr* addr, u64 addr_len) {
     }
 
     sockaddr_in* temp = $sockaddr_in* kaddr;
-    print("sys_bind() : bind called for ");
-    print_ipv4_addr(temp->sin_addr);
-    print(" on port: ");
-    println($u64 temp->sin_port);
 
     i32 ret = sock->ops->bind#(sock, kaddr, copy_len);
+
+    sock->state = SOCKET_STATE_BOUND;
 
     free($void* kaddr, sizeof(sockaddr));
 
@@ -502,6 +500,8 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     socket->protocol = protocol;
 
     if(type == SOCK_DGRAM) socket->ops = UDP_OPS;
+
+    socket->state = SOCKET_STATE_CREATED;
 
     proc->fd_table[fd_ind] = file_create_socket($u64 O_RDWR, socket);
 
