@@ -81,6 +81,8 @@ void ipv4_handle(IPv4Header* ip) {
         icmp_handle(icmp, payload_size, src_ip);
     } else if(ip->protocol == IPv4_PROTOCOL_TCP) {
         println("ipv4_handle() : TCP packet recieved");
+        TCPHeader* tcp = $TCPHeader* payload;
+        tcp_handle(tcp, payload_size, src_ip);
     } else if(ip->protocol == IPv4_PROTOCOL_UDP) {
         println("ipv4_handle() : UDP packet recieved");
         UDPHeader* udp = $UDPHeader* payload;
