@@ -1,6 +1,6 @@
 NOW
 - TCP
-- write in pseudoheader struct, fill in and calculate. (both tcp and udp)
+- tcp connect timeout, added more error codes inside struct?
 - fill in states for UDP
 - TEST SYSCALLS AND FILE OPS
 - add syscall flag handling

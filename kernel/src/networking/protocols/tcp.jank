@@ -26,6 +26,8 @@
 
 [__GLOBAL_FIRST__] u32 TCP_DEFAULT_RECEIVE_WINDOW = $u32 4096; // check this later
 [__GLOBAL_FIRST__] u32 TCP_DEFAULT_ISS = $u32 67; // (heh)
+[__GLOBAL_FIRST__] u64 TCP_MSS = $u64 1460; // Default MTU (1500) - IPv4 (20) - TCP (20)
+[__GLOBAL_FIRST__] u64 TCP_RX_BUFFER_SIZE = $u64 8192;
 
 struct TCPHeader {
     u16 src_port;
@@ -50,6 +52,10 @@ struct TCPSock {
     u32 rcv_nxt;    // next expected seq
     u32 rcv_wnd;    // receive window
     u32 irs;        // initial receive seq num
+
+    u8* rx_buf;
+    u32 rx_head;
+    u32 rx_tail;
 }
 
 void tcp_send_reset(u32 target_ip, TCPHeader* incoming) {
@@ -153,7 +159,45 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
         }
 
     } else if(tcb->state == TCP_STATE_ESTABLISHED) {
+        u8 header_len = (tcp->data_offset >> $u8 4) * $u8 4;
+        u16 payload_len = len - $u16 header_len;
 
+        if(seq_num != tcb->rcv_nxt) {
+            if(payload_len > $u16 0) {
+                print("tcp_handle() : Out of order packet. Expected ");
+                print($u64 tcb->rcv_nxt);
+                print(", got ");
+                println($u64 seq_num);
+
+                tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+            }
+            return;
+        }
+
+        if(payload_len > $u16 0) {
+            u8* payload = $u8* ($u64 tcp + $u64 header_len);
+
+            for(u16 i = $u16 0; i < payload_len; i++) {
+                tcb->rx_buf[tcb->rx_head] = payload[i];
+                tcb->rx_head = (tcb->rx_head + $u32 1) % $u32 TCP_RX_BUFFER_SIZE;
+
+                // uh should check if head collides with tail
+            }
+
+            tcb->rcv_nxt += $u32 payload_len;
+
+            waitq_wake_all(@(sock->wait_queue));
+
+            // delay ack?
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+        }
+
+        if(flags & TCP_FLAG_FIN) {
+            println("tcp_handle() : Received FIN, connection closing");
+            tcb->rcv_nxt++;
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK | TCP_FLAG_FIN);
+            tcb->state = TCP_STATE_CLOSE_WAIT;
+        }
     } else {
         println("tcp_handle() : Unhandled path, current TCP state unable to handle incoming packet");
     }
@@ -162,7 +206,12 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
 void tcp_init(socket* sock) {
     TCPSock* tcb = $TCPSock* malloc(sizeof(TCPSock));
     memset($void* tcb, 0, sizeof(TCPSock));
-    tcb->state = TCP_STATE_CLOSED;    
+
+    tcb->rx_buf = $u8* malloc(TCP_RX_BUFFER_SIZE);
+    tcb->rx_head = $u32 0;
+    tcb->rx_tail = $u32 0;
+
+    tcb->state = TCP_STATE_CLOSED;
     sock->proto_info = $void* tcb;
 }
 
@@ -199,10 +248,9 @@ void init_tcp_ops() {
     new (TCP_OPS) proto_ops();
     TCP_OPS->connect    = #<tcp_connect(socket*, sockaddr*, u64)>;
     TCP_OPS->close      = #<tcp_close(socket*)>;
-
-    // TCP_OPS->send       = #<udp_send(socket*, u8*, u64, i32, sockaddr*)>;
-    // TCP_OPS->recieve    = #<udp_recieve(socket*, u8*, u64, i32, sockaddr*)>;
-    // TCP_OPS->bind       = #<udp_bind(socket*, sockaddr*, u64)>;
+    TCP_OPS->send       = #<tcp_send(socket*, u8*, u64, i32, sockaddr*)>;
+    TCP_OPS->receive    = #<tcp_receive(socket*, u8*, u64, i32, sockaddr*)>;
+    // TCP_OPS->bind       = #<tcp_bind(socket*, sockaddr*, u64)>;
 }
 
 // https://en.wikipedia.org/wiki/Transmission_Control_Protocol#TCP_checksum_for_IPv4
@@ -319,3 +367,73 @@ i32 tcp_close(socket* sock) {
 
     return 0;
 }
+
+i32 tcp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
+    if(sock->proto_info == nullptr) {
+        println("tcp_receive() : Socket missing additional TCP information, returning");
+        return -ERR_INVAL;
+    }
+
+    TCPSock* tcb = $TCPSock* sock->proto_info;
+
+    if(tcb->state != TCP_STATE_ESTABLISHED) {
+        println("tcp_receive() : TCP connection has not been established yet, returning");
+        return -ERR_NOTCONN;
+    }
+
+    while(tcb->rx_head == tcb->rx_tail) {
+        if(tcb->state == TCP_STATE_CLOSED || tcb->state == TCP_STATE_CLOSE_WAIT) {
+            return 0;
+        }
+
+        wait_on(@(sock->wait_queue));
+    }
+
+    u64 bytes_read = 0x0;
+    while(bytes_read < len && tcb->rx_head != tcb->rx_tail) {
+        buf[bytes_read] = tcb->rx_buf[tcb->rx_tail];
+        tcb->rx_tail = (tcb->rx_tail + $u32 1) % $u32 TCP_RX_BUFFER_SIZE;
+        bytes_read++;
+    }
+
+    return $i32 bytes_read;
+}
+
+i32 tcp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dst) {
+    if(sock->proto_info == nullptr) {
+        println("tcp_send() : Socket missing additional TCP information, returning");
+        return -ERR_INVAL;
+    }
+
+    TCPSock* tcb = $TCPSock* sock->proto_info;
+
+    if(tcb->state != TCP_STATE_ESTABLISHED) {
+        println("tcp_send() : TCP connection has not been established yet, returning");
+        return -ERR_NOTCONN;
+    }
+
+    u8* data_ptr = buf;
+    u64 bytes_left = len;
+
+    while(bytes_left > 0x0) {
+        u16 chunk_len = $u16 bytes_left;
+        if(chunk_len > $u16 TCP_MSS) {
+            chunk_len = $u16 TCP_MSS;
+        }
+
+        u8 tcp_flags = TCP_FLAG_ACK;
+        if(chunk_len == $u16 bytes_left) {
+            tcp_flags |= TCP_FLAG_PSH;
+        }
+
+        tcp_send_packet(sock, data_ptr, chunk_len, tcp_flags);
+
+        tcb->snd_nxt += $u32 chunk_len;
+
+        data_ptr = $u8* ($u64 data_ptr + $u64 chunk_len);
+        bytes_left -= $u64 chunk_len;
+    }
+
+    return $i32 len;
+}
+
