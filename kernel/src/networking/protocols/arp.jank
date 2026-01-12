@@ -101,7 +101,7 @@ void arp_handle(ARPHeader* arp) {
 void send_arp_request(u32 target_ip) {
     print("send_arp_request() : Sending ARP request to [");
     print_ipv4_addr(target_ip);
-    println("");
+    println("]");
     
     u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
     u8* buffer = $u8* malloc(size);
