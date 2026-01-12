@@ -76,15 +76,15 @@ void ipv4_handle(IPv4Header* ip) {
     u16 payload_size = total_length - header_len;
 
     if(ip->protocol == IPv4_PROTOCOL_ICMP) {
-        println("ipv4_handle() : ICMP packet recieved");
+        println("ipv4_handle() : ICMP packet received");
         ICMPHeader* icmp = $ICMPHeader* payload;
         icmp_handle(icmp, payload_size, src_ip);
     } else if(ip->protocol == IPv4_PROTOCOL_TCP) {
-        println("ipv4_handle() : TCP packet recieved");
+        println("ipv4_handle() : TCP packet received");
         TCPHeader* tcp = $TCPHeader* payload;
         tcp_handle(tcp, payload_size, src_ip);
     } else if(ip->protocol == IPv4_PROTOCOL_UDP) {
-        println("ipv4_handle() : UDP packet recieved");
+        println("ipv4_handle() : UDP packet received");
         UDPHeader* udp = $UDPHeader* payload;
         udp_handle(udp, payload_size, src_ip);
     } else {

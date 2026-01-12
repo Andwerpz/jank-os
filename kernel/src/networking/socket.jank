@@ -53,7 +53,7 @@ struct proto_ops {
     fn<i32(socket*, sockaddr*, u64)> bind;
     fn<i32(socket*, sockaddr*, u64)> connect;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> send;
-    fn<i32(socket*, u8*, u64, i32, sockaddr*)> recieve;
+    fn<i32(socket*, u8*, u64, i32, sockaddr*)> receive;
     fn<i32(socket*)> close;
 }
 
@@ -117,7 +117,7 @@ void init_socket_file_ops() {
 
 i64 socket_read(file* f, u8* buf, u64 len) {
     socket* sock = $socket* f->resource_ptr;
-    i32 ret = sock->ops->recieve#(sock, buf, len, 0, $sockaddr* nullptr);
+    i32 ret = sock->ops->receive#(sock, buf, len, 0, $sockaddr* nullptr);
     return $i64 ret;
 }
 

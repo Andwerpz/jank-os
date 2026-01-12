@@ -87,7 +87,7 @@ void init_udp_ops() {
     UDP_OPS = $proto_ops* malloc(sizeof(proto_ops));
     new (UDP_OPS) proto_ops();
     UDP_OPS->send       = #<udp_send(socket*, u8*, u64, i32, sockaddr*)>;
-    UDP_OPS->recieve    = #<udp_recieve(socket*, u8*, u64, i32, sockaddr*)>;
+    UDP_OPS->receive    = #<udp_receive(socket*, u8*, u64, i32, sockaddr*)>;
     UDP_OPS->connect    = #<udp_connect(socket*, sockaddr*, u64)>;
     UDP_OPS->bind       = #<udp_bind(socket*, sockaddr*, u64)>;
     UDP_OPS->close      = #<udp_close(socket*)>;
@@ -139,8 +139,8 @@ i32 udp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dest_addr) {
     return $i32 len;
 }
 
-i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
-    println("udp_recieve() : Begin UDP receive socket operation");
+i32 udp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
+    println("udp_receive() : Begin UDP receive socket operation");
     
     while(1) {
         Packet* pkt = socket_pop_packet(sock);
@@ -164,7 +164,7 @@ i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
             free($void* pkt->data, $u64 pkt->len);
             free($void* pkt, sizeof(Packet));
 
-            println("udp_recieve() : Finished UDP receive socket operation");
+            println("udp_receive() : Finished UDP receive socket operation");
 
             return $i32 copy_len;
         }
@@ -175,7 +175,7 @@ i32 udp_recieve(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
         wait_on(@(sock->wait_queue));
     }
 
-    panic("udp_recieve() : Should not be here");
+    panic("udp_receive() : Should not be here");
     return -ERR_UNKNOWN;
 }
 

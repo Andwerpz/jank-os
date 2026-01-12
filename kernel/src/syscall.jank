@@ -410,7 +410,7 @@ i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u64* 
         kaddr_src = $sockaddr* malloc(sizeof(sockaddr));
     }
 
-    i32 ret = sock->ops->recieve#(sock, kbuf, size, flags, kaddr_src);
+    i32 ret = sock->ops->receive#(sock, kbuf, size, flags, kaddr_src);
 
     if(ret >= 0) {
         if(copy_to_user(user_pt, kbuf, buf, $u64 ret) != 0) {
@@ -503,6 +503,7 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
         socket->ops = UDP_OPS;
     } else if(type == SOCK_STREAM) {
         socket->ops = TCP_OPS;
+        tcp_init(socket);
     } else {
         panic("sys_socket() : Should not get here");
     }

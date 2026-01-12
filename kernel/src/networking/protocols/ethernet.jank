@@ -19,7 +19,7 @@ void ethernet_handle_frame(u8* buffer, u16 length) {
     u16 type = be_to_cpu(eth->type);
 
     if(type == ETHERNET_TYPE_ARP) {
-        println("ethernet_handle_frame() : ARP packet recieved");
+        println("ethernet_handle_frame() : ARP packet received");
         ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
         // snoop for free addresses for free!!!
         arp_update(be_to_cpu(arp->sender_ip), arp->sender_mac);
@@ -27,7 +27,7 @@ void ethernet_handle_frame(u8* buffer, u16 length) {
         arp_table_dump();
 
     } else if(type == ETHERNET_TYPE_IPV4) {
-        println("ethernet_handle_frame() : IPv4 packet recieved");
+        println("ethernet_handle_frame() : IPv4 packet received");
         IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
         ipv4_handle(ip);
 

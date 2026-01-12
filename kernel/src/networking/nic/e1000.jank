@@ -91,7 +91,7 @@
 // TDT bits
 [__GLOBAL_FIRST__] u32 TDT_TDT = $u32 0xFFFF;           // Transmit Descriptor Tail.
 
-// recieve descriptor (3.2.3)
+// receive descriptor (3.2.3)
 struct E1000_RDESC {
     u64 addr;
     u16 length;
@@ -147,7 +147,7 @@ void e1000_init(u64 addr) {
     // REMOVE_ME_LATER
     if(0) {
         init_dhcp();
-        e1000_recieve_poll();
+        e1000_receive_poll();
     }
 }
 
@@ -468,8 +468,8 @@ void e1000_send(u8* data, u16 len) {
     println("e1000_send() : Beginning send operation");
 }
 
-void e1000_recieve_poll() {
-    println("e1000_recieve_poll() : Polling recieve");
+void e1000_receive_poll() {
+    println("e1000_receive_poll() : Polling receive");
 
     u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
     
@@ -480,7 +480,7 @@ void e1000_recieve_poll() {
             u16 len = RDESC_RING[CURR_RDESC].length;
             u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
 
-            println("e1000_recieve_poll() : Frame recieved");
+            println("e1000_receive_poll() : Frame received");
             ethernet_handle_frame(buffer, len);
 
             RDESC_RING[CURR_RDESC].status = $u8 0;
@@ -516,7 +516,7 @@ void e1000_interrupt_handler(trapframe* tf) {
     }
 
     if(status & IMS_RXT0) {
-        println("e1000_interrupt_handler() : Frame recieved");
+        println("e1000_interrupt_handler() : Frame received");
         e1000_handle_receive();
     }
 
