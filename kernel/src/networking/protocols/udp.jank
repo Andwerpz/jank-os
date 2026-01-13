@@ -1,5 +1,7 @@
 // https://en.wikipedia.org/wiki/User_Datagram_Protocol#UDP_datagram_structure
 
+[__GLOBAL_FIRST__] proto_ops* UDP_OPS;
+
 struct UDPHeader {
     u16 src_port;
     u16 dst_port;
@@ -7,58 +9,270 @@ struct UDPHeader {
     u16 checksum;
 }
 
-struct UDPPseudoHeader {
-    u32 src_ip;
-    u32 dst_ip;
-    u8 zeroes;
-    u8 protocol;
-    u16 udp_length;
-}
-
 void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
+    println("udp_handle() : Handling incoming UDP message");
     u16 src_port = be_to_cpu(udp->src_port);
     u16 dst_port = be_to_cpu(udp->dst_port);
     u16 length   = be_to_cpu(udp->length);
 
     if(length < $u16 sizeof(UDPHeader)) {
-        println("udp_handle() : udp length shorter than header");
+        println("udp_handle() : UDP length shorter than header, dropping");
         return;
     }
 
-    void* payload = $void* ($u64 udp + sizeof(UDPHeader));
+    if($u32 dst_port >= MAX_PORTS || dst_port == $u16 0) {
+        println("udp_handle() : Invalid destination port (outside allowed range), dropping");
+        return;
+    }
+    if(UDP_PORT_TABLE[dst_port] == nullptr) {
+        println("udp_handle() : Nothing listening on port, dropping");
+        return;
+    }
+
+    u8* payload = $u8* ($u64 udp + sizeof(UDPHeader));
     u16 payload_len = length - $u16 sizeof(UDPHeader);
 
-    if(be_to_cpu(udp->dst_port) == DHCP_CLIENT_LISTEN_PORT) {
+    // probably things that the OS needs here, rn just dhcp hijacks
+    if(dst_port == DHCP_CLIENT_LISTEN_PORT) {
+        println("udp_handle() : Detected DHCP port");
         DHCPHeader* dhcp = $DHCPHeader* payload; 
         dhcp_handle(dhcp, payload_len);
-    }
-}
-
-void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, void* payload, u16 payload_len) {
-    if(net_interfaces.size() == 0x0) {
-        println("udp_send_packet() : no network interfaces initialized, not sending");
         return;
     }
 
-    print("udp_send_packet() : sending UDP packet to: ");
+    // place packet into socket queue
+    println("udp_handle() : Placing packet in associated socket receive queue");
+    socket* sock = UDP_PORT_TABLE[dst_port];
+
+    Packet* pkt = $Packet* malloc(sizeof(Packet));
+    pkt->src_ip = src_ip;
+    pkt->src_port = src_port;
+    pkt->dst_ip = CURRENT_INTERFACE->ip_address;
+    pkt->dst_port = dst_port;
+    pkt->len = payload_len;
+    
+    pkt->data = $u8* malloc($u64 payload_len);
+    memcpy($void* pkt->data, $void* payload, $u64 payload_len);
+    
+    socket_push_packet(sock, pkt);
+
+    waitq_wake_all(@(sock->wait_queue));
+}
+
+void udp_send_packet(u32 dst_ip, u16 src_port, u16 dst_port, u8* payload, u16 payload_len) {
+    print("udp_send_packet() : Sending UDP packet to [");
     print_ipv4_addr(dst_ip);
-    println("");
+    println("]");
 
     u64 udp_packet_len = sizeof(UDPHeader) + $u64 payload_len;
 
-    void* buffer = malloc(udp_packet_len);
-    memset(buffer, 0, udp_packet_len);
+    u8* buffer = $u8* malloc(udp_packet_len);
+    memset($void* buffer, 0, udp_packet_len);
 
     UDPHeader* udp = $UDPHeader* buffer;
-    void* dst_payload = $void* ($u64 buffer + sizeof(UDPHeader));
+    u8* dst_payload = $u8* ($u64 buffer + sizeof(UDPHeader));
 
     udp->src_port = cpu_to_be(src_port);
     udp->dst_port = cpu_to_be(dst_port);
     udp->length = cpu_to_be($u16 udp_packet_len);
     udp->checksum = $u16 0; // this is valid for ipv4, we can just not do it lol
 
-    memcpy(dst_payload, payload, $u64 payload_len);
+    memcpy($void* dst_payload, $void* payload, $u64 payload_len);
 
     ipv4_send_packet(dst_ip, IPv4_PROTOCOL_UDP, buffer, $u16 udp_packet_len);
-    free(buffer, udp_packet_len);
+    free($void* buffer, udp_packet_len);
+}
+
+void init_udp_ops() {
+    UDP_OPS = $proto_ops* malloc(sizeof(proto_ops));
+    new (UDP_OPS) proto_ops();
+    UDP_OPS->send       = #<udp_send(socket*, u8*, u64, i32, sockaddr*)>;
+    UDP_OPS->receive    = #<udp_receive(socket*, u8*, u64, i32, sockaddr*)>;
+    UDP_OPS->connect    = #<udp_connect(socket*, sockaddr*, u64)>;
+    UDP_OPS->bind       = #<udp_bind(socket*, sockaddr*, u64)>;
+    UDP_OPS->close      = #<udp_close(socket*)>;
+}
+
+i32 udp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dest_addr) {
+    println("udp_send() : Beginning UDP send socket operation");
+
+    if(len > $u64 65507) {
+        println("udp_send() : Length exceeds max UDP payload size, exiting");
+        return -ERR_MSGSIZE; // max UDP payload size
+    }
+
+    u32 dst_ip = $u32 0;
+    u16 dst_port = $u16 0;
+
+    if(dest_addr != nullptr) {
+        sockaddr_in* sin = $sockaddr_in* dest_addr;
+        if(sin->sin_family != AF_INET) {
+            println("udp_send() : Address family does not match IPv4 (no support for anything else currently), exiting");
+            return -ERR_AFNOSUPPORT;
+        }
+
+        dst_ip = sin->sin_addr;
+        dst_port = sin->sin_port;
+    } else {
+        if(sock->remote_addr == $u32 0) return -ERR_DESTADDRREQ;
+
+        dst_ip = sock->remote_addr;
+        dst_port = sock->remote_port;
+    }
+
+    // if didnt call bind before
+    if(sock->local_port == $u16 0) {
+        i32 port = get_next_ephemeral_port(UDP_PORT_TABLE);
+        if(port < 0) {
+            println("udp_send() : Unable to find an open ephemeral port, exiting");
+            return -ERR_ADDRINUSE;
+        }
+
+        UDP_PORT_TABLE[port] = sock;
+        sock->local_port = $u16 port;
+    }
+
+    udp_send_packet(dst_ip, sock->local_port, dst_port, buf, $u16 len);
+
+    println("udp_send() : Finished UDP send socket operations");
+
+    return $i32 len;
+}
+
+i32 udp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
+    println("udp_receive() : Begin UDP receive socket operation");
+    
+    while(1) {
+        Packet* pkt = socket_pop_packet(sock);
+
+        if($void* pkt != nullptr) {
+            u64 copy_len = len;
+            if($u64 pkt->len < len) {
+                copy_len = $u64 pkt->len;
+            }
+
+            memcpy($void* buf, $void* pkt->data, copy_len);
+
+            if($void* src_addr != nullptr) {
+                sockaddr_in* sin = $sockaddr_in* src_addr;
+                sin->sin_family = AF_INET;
+                sin->sin_port = pkt->src_port;
+                sin->sin_addr = pkt->src_ip;
+                memset($void* @sin->sin_zero[0], 0, sizeof(sockaddr_in) - $u64 6); // calculate padding, sockaddr_in and sockaddr should be the same size.
+            }
+
+            free($void* pkt->data, $u64 pkt->len);
+            free($void* pkt, sizeof(Packet));
+
+            println("udp_receive() : Finished UDP receive socket operation");
+
+            return $i32 copy_len;
+        }
+
+        // handle non block flags here
+        // if()
+
+        wait_on(@(sock->wait_queue));
+    }
+
+    panic("udp_receive() : Should not be here");
+    return -ERR_UNKNOWN;
+}
+
+i32 udp_connect(socket* sock, sockaddr* addr, u64 len) {
+    println("udp_connect() : Beginning UDP connnect socket operation");
+
+    if(len < sizeof(sockaddr_in)) {
+        println("udp_connect() : Invalid sockaddr size (too small), exiting");
+        return -ERR_INVAL;
+    }
+
+    sockaddr_in* sin = $sockaddr_in* addr;
+    if(sin->sin_family != AF_INET) {
+        println("udp_connect() : Address family does not match IPv4 (no support for anything else currently), exiting");
+        return -ERR_AFNOSUPPORT;
+    }
+
+    sock->remote_addr = sin->sin_addr;
+    sock->remote_port = sin->sin_port;
+
+    print("udp_connect() : Connecting to [");
+    print_ipv4_addr(sock->remote_addr);
+    print(":");
+    print($u64 sock->remote_port);
+    println("]");
+
+    // TODO update socket state
+
+    println("udp_connect() : Finished UDP connnect socket operation");
+
+    return 0;
+}
+
+i32 udp_bind(socket* sock, sockaddr* addr, u64 len) {
+    println("udp_bind() : Beginning UDP bind socket operation");
+
+    // check if incoming sockaddr len is valid ipv4 udp
+    if(len < sizeof(sockaddr_in)) {
+        println("udp_bind() : Invalid sockaddr size (too small), exiting");
+        return -ERR_INVAL;
+    }
+
+    sockaddr_in* sin = $sockaddr_in* addr;
+    if(sin->sin_family != AF_INET) return -ERR_AFNOSUPPORT;
+
+    // if no port selected, map an ephemeral port
+    if(sin->sin_port == $u16 0) {
+        i32 port = get_next_ephemeral_port(UDP_PORT_TABLE);
+        if(port < 0) {
+            println("udp_bind() : Unable to find an open ephemeral port, exiting");
+            return -ERR_ADDRINUSE;
+        }
+        sin->sin_port = $u16 port;
+    } else {
+        if($u32 sin->sin_port >= MAX_PORTS) {
+            println("udp_bind() : Port outside allowed range, exiting");
+            return -ERR_INVAL;
+        }
+
+        if(UDP_PORT_TABLE[sin->sin_port] != nullptr) {
+            println("udp_bind() : Port already in use, exiting");
+            return -ERR_ADDRINUSE;
+        }
+    }
+
+    print("udp_bind() : UDP bind called for [");
+    print_ipv4_addr(sin->sin_addr);
+    print(":");
+    print($u64 sin->sin_port);
+    println("]");
+
+    UDP_PORT_TABLE[sin->sin_port] = sock;
+    sock->local_port = sin->sin_port;
+    sock->local_addr = sin->sin_addr;
+
+    println("udp_bind() : Finished UDP bind socket operation");
+
+    return 0;
+}
+
+i32 udp_close(socket* sock) {
+    println("udp_close() : Beginning UDP close socket operation");
+
+    if(sock->local_port != $u16 0) {
+        assert(UDP_PORT_TABLE[sock->local_port] == sock, "udp_close() : Current socket in table does not match associated port");
+        UDP_PORT_TABLE[sock->local_port] = $socket* nullptr;
+    }
+
+    while(1) {
+        Packet* pkt = socket_pop_packet(sock);
+        if(pkt->next == nullptr) break;
+
+        free($void* pkt->data, $u64 pkt->len);
+        free($void* pkt, sizeof(Packet));
+    }
+
+    println("udp_close() : Finished UDP close socket operation");
+
+    return 0;
 }

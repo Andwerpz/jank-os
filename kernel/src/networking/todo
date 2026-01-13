@@ -1,14 +1,20 @@
 NOW
-- implement network stack...
-- UDP
-- DHCP
-- DNS
-- TCP (make andrew do this cause im no good)
+- tcp connect timeout, added more error codes inside struct?
+- fill in states for UDP
+- move packet stuff inside udp, we will be using void* to hold protocol specifics
+- TEST SYSCALLS AND FILE OPS
+- add syscall flag handling
+- make a way to prevent kerenl faults when a networking device DNE. (mostly user mode?)
 
 LATER
-- how i handle buffers for the tx rx, rn i just pre alloc the buffers and keep using them, i should copy phys hardware buffer to a malloc'd buffer and set the hardware flag so that it can keep recieving?
-- configure Interrupt Mask for later...
+- DNS
 - make that arp entry lookup not suck
+- arp queuing time out ttl
 - add expirations for arp entries, probably 60 seconds?
-- generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards?
 - add lease time to dhcp
+- add checks to prevent attempts for network activity when there is no network device present
+- generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards? void* for driver struct in net interface?
+
+all the structs for networking that stay inside the kernel will keep everything in CPU order (little endian)
+all functions will take in CPU order (little endian)
+all the protocol structs that get sent over the wire will be network order (big endian)

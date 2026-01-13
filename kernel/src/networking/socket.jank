@@ -1,24 +1,106 @@
 // https://man7.org/linux/man-pages/man2/socket.2.html
 // https://man7.org/linux/man-pages/man7/address_families.7.html
 
+[__GLOBAL_FIRST__] i32 SOCKET_STATE_CREATED = 0;
+[__GLOBAL_FIRST__] i32 SOCKET_STATE_BOUND = 1;
+[__GLOBAL_FIRST__] i32 SOCKET_STATE_CONNECTED = 2;
+
 [__GLOBAL_FIRST__] file_ops* FILE_OPS_SOCKET;
+
+[__GLOBAL_FIRST__] u32 MAX_PORTS = $u32 (1 << 16);
+[__GLOBAL_FIRST__] u32 RESERVED_PORT_START = $u32 1;
+[__GLOBAL_FIRST__] u32 RESERVED_PORT_END = $u32 1024;
+[__GLOBAL_FIRST__] u32 EPHEMERAL_PORT_START = $u32 49152;
+[__GLOBAL_FIRST__] u32 EPHEMERAL_PORT_END = $u32 (1 << 16);
+
+socket** UDP_PORT_TABLE;
+socket** TCP_PORT_TABLE;
 
 struct socket {
     i32 domain;
     i32 type;
     i32 protocol;
+    
+    proto_ops* ops;
 
-    i32 state;
+    i32 state;          // this will be used for all types probably
+    void* proto_info;   // this will be used for protocol specific stuff
+
     u32 local_addr;
-    u32 remote_addr;
     u16 local_port;
+    u32 remote_addr;
     u16 remote_port;
+    
+    waitq wait_queue;
 
-    deque<u8> rx_queue;
+    Packet* rx_head; 
+    Packet* rx_tail;
+}
 
-    void push_rx_data() {
-        
+struct Packet {
+    u32 src_ip;
+    u16 src_port;
+    u32 dst_ip;
+    u16 dst_port;
+    
+    u16 len;
+    u8* data;
+    
+    Packet* next; 
+}
+
+struct proto_ops {
+    fn<i32(socket*, sockaddr*, u64)> bind;
+    fn<i32(socket*, sockaddr*, u64)> connect;
+    fn<i32(socket*, u8*, u64, i32, sockaddr*)> send;
+    fn<i32(socket*, u8*, u64, i32, sockaddr*)> receive;
+    fn<i32(socket*)> close;
+}
+
+i32 get_next_ephemeral_port(socket** port_table) {
+    for(u32 p = EPHEMERAL_PORT_START; p < EPHEMERAL_PORT_END; p++) {
+        if(port_table[p] == nullptr) return $i32 p;
     }
+    return -1;
+}
+
+void init_port_tables() {
+    // init tables
+    UDP_PORT_TABLE = $socket** malloc($u64 MAX_PORTS * sizeof(socket*));
+    memset($void* UDP_PORT_TABLE, 0, $u64 MAX_PORTS * sizeof(socket*));
+    TCP_PORT_TABLE = $socket** malloc($u64 MAX_PORTS * sizeof(socket*));
+    memset($void* TCP_PORT_TABLE, 0, $u64 MAX_PORTS * sizeof(socket*));
+}
+
+void socket_push_packet(socket* sock, Packet* pkt) {
+    pkt->next = $Packet* nullptr;
+    
+    if(sock->rx_head == nullptr) {
+        sock->rx_head = pkt;
+        sock->rx_tail = pkt;
+    } else {
+        // queue, pkt->next is the next packet in line.
+        sock->rx_tail->next = pkt;
+        sock->rx_tail = pkt;
+    }
+}
+
+Packet* socket_pop_packet(socket* sock) {
+    if(sock->rx_head == nullptr) {
+        return $Packet* nullptr;
+    }
+
+    Packet* pkt = sock->rx_head;
+
+    sock->rx_head = pkt->next;
+
+    if(sock->rx_head == nullptr) {
+        sock->rx_tail = $Packet* nullptr;
+    }
+
+    pkt->next = $Packet* nullptr;
+
+    return pkt;
 }
 
 void init_socket_file_ops() {
@@ -34,17 +116,15 @@ void init_socket_file_ops() {
 }
 
 i64 socket_read(file* f, u8* buf, u64 len) {
-    // TODO
-    socket* socket = $socket* f->resource_ptr;
-
-    return $i64 123;
+    socket* sock = $socket* f->resource_ptr;
+    i32 ret = sock->ops->receive#(sock, buf, len, 0, $sockaddr* nullptr);
+    return $i64 ret;
 }
 
 i64 socket_write(file* f, u8* buf, u64 len) {
-    // TODO
-    socket* socket = $socket* f->resource_ptr;
-
-    return $i64 123;
+    socket* sock = $socket* f->resource_ptr;
+    i32 ret = sock->ops->send#(sock, buf, len, 0, $sockaddr* nullptr);
+    return $i64 ret;
 }
 
 i64 socket_lseek(file* f, i64 offset, i32 whence) {
@@ -58,11 +138,11 @@ i64 socket_getdents(file* f, u8* buf, u64 len) {
 }
 
 i32 socket_close(file* f) {
-    // TODO
-    socket* socket = $socket* f->resource_ptr;
-    socket->~();
-    free($void* socket, sizeof(socket));
-    return 123;
+    socket* sock = $socket* f->resource_ptr;
+    i32 ret = sock->ops->close#(sock);
+    sock->~();
+    free($void* sock, sizeof(socket));
+    return ret;
 }
 
 i32 socket_truncate(file* f, u64 len) {

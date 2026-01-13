@@ -3,12 +3,9 @@
 [__GLOBAL_FIRST__] u16 ARP_OPCODE_REQUEST       = $u16 0x0001;
 [__GLOBAL_FIRST__] u16 ARP_OPCODE_REPLY         = $u16 0x0002;
 
-vector<ARPEntry*> arp_entries;
+[__GLOBAL_FIRST__] PendingPacket* ARP_WAIT_QUEUE_HEAD = $PendingPacket* nullptr;
 
-struct ARPEntry {
-    u32     ip;
-    u8[6]   mac;
-}
+vector<ARPEntry*> arp_entries;
 
 struct ARPHeader {
     u16     hw_type;        // Hardware Type
@@ -22,27 +19,44 @@ struct ARPHeader {
     u32     target_ip;      // Target Protocol Address
 }
 
+struct ARPEntry {
+    u32     ip;
+    u8[6]   mac;
+}
+
+struct PendingPacket {
+    u32 target_ip;
+    u8* data;       // this is the entire packet, NOT packet->data (heh)
+    u16 len;        // this is the length of the entire packet, NOT packet->data (heh)
+    PendingPacket* next;
+}
+
 void arp_handle(ARPHeader* arp) {
+    println("arp_handle() : Handling incoming ARP message");
+
     u16 opcode = be_to_cpu(arp->opcode);
     u32 target_ip = be_to_cpu(arp->target_ip);
 
     if(opcode == ARP_OPCODE_REPLY) {
-        println("arp_handle() : received ARP reply");
-        
-        print("Sender IP: ");
-        print_ipv4_addr(be_to_cpu(arp->sender_ip));
-        print(" is at MAC: ");
+        println("arp_handle() : Detected ARP reply");
+        u32 sender_ip = be_to_cpu(arp->sender_ip);
+
+        print("arp_handle() : Sender IP [");
+        print_ipv4_addr(sender_ip);
+        print("] is at MAC [");
         print_mac_addr(arp->sender_mac);
-        println("");
+        println("]");
+
+        arp_flush_pending(sender_ip, arp->sender_mac);
 
     } else if(opcode == ARP_OPCODE_REQUEST) {
-        println("arp_handle() : received ARP request");
+        println("arp_handle() : Detected ARP request");
         if(target_ip == CURRENT_INTERFACE->ip_address) {
-            println("arp_handle() : target ip matched with host, sending reply");
+            println("arp_handle() : Target IP matched with host, sending reply back");
 
             u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
-            void* buffer = malloc(size);
-            memset(buffer, 0, size);
+            u8* buffer = $u8* malloc(size);
+            memset($void* buffer, 0, size);
 
             EthernetHeader* eth_reply = $EthernetHeader* buffer;
             ARPHeader* arp_reply = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
@@ -73,28 +87,25 @@ void arp_handle(ARPHeader* arp) {
 
             CURRENT_INTERFACE->send#(buffer, $u16 size);
             
-            free(buffer, size);
+            free($void* buffer, size);
         } else {
-            print("arp_handle() : target ip is ");
+            print("arp_handle() : Target IP is [");
             print_ipv4_addr(target_ip);
-            println(" which does not match with host, ignoring");
+            println("], no match with host IP, ignoring");
         }
     } else {
-        println("arp_handle() : unknown ARP opcode");
+        println("arp_handle() : Unknown ARP opcode");
     }
 }
 
 void send_arp_request(u32 target_ip) {
-    if(net_interfaces.size() == 0x0) {
-        println("send_arp_request() : no network interfaces initialized, not sending");
-        return;
-    }
-
-    println("send_arp_request() : sending arp packet");
-
+    print("send_arp_request() : Sending ARP request to [");
+    print_ipv4_addr(target_ip);
+    println("]");
+    
     u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
-    void* buffer = malloc(size);
-    memset(buffer, 0, size);
+    u8* buffer = $u8* malloc(size);
+    memset($void* buffer, 0, size);
 
     EthernetHeader* eth = $EthernetHeader* buffer;
     ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
@@ -126,7 +137,7 @@ void send_arp_request(u32 target_ip) {
     // send
     CURRENT_INTERFACE->send#(buffer, $u16 size);
     
-    free(buffer, size);
+    free($void* buffer, size);
 }
 
 void arp_update(u32 ip, u8[6]& mac) {
@@ -154,11 +165,56 @@ i32 arp_lookup(u32 ip, u8[6]& mac) {
 }
 
 void arp_table_dump() {
+    println("=-----=");
     println("Current ARP Table:");
     for(u64 i = 0x0; i < arp_entries.size(); i++) {
         print_ipv4_addr(arp_entries[i]->ip);
         print(" - ");
         print_mac_addr(arp_entries[i]->mac);
         println("");
+    }
+    println("=-----=");
+}
+
+void arp_queue_packet(u32 target_ip, u8* packet, u16 len) {
+    PendingPacket* pp = $PendingPacket* malloc(sizeof(PendingPacket));
+    pp->target_ip = target_ip;
+    pp->len = len;
+
+    pp->data = $u8* malloc($u64 len);
+    memcpy($void* pp->data, $void* packet, $u64 len);
+
+    pp->next = ARP_WAIT_QUEUE_HEAD;
+    ARP_WAIT_QUEUE_HEAD = pp;
+}
+
+void arp_flush_pending(u32 resolved_ip, u8[6]& dst_mac) {
+    println("arp_flush_pending() : Checking ARP queue for resolved IP");
+
+    PendingPacket* curr = ARP_WAIT_QUEUE_HEAD;
+    PendingPacket* prev = $PendingPacket* nullptr;
+
+    while(curr != nullptr) {
+        if(curr->target_ip == resolved_ip) {
+            println("arp_flush_pending() : Found a match, sending queued packet out");
+
+            // there is now an arp table entry for this
+            ethernet_send_frame(dst_mac, curr->data, curr->len, ETHERNET_TYPE_IPV4);
+
+            PendingPacket* to_free = curr;
+            if(prev == nullptr) {
+                ARP_WAIT_QUEUE_HEAD = curr->next;
+                curr = ARP_WAIT_QUEUE_HEAD;
+            } else {
+                prev->next = curr->next;
+                curr = curr->next;
+            }
+
+            free($void* to_free->data, $u64 to_free->len);
+            free($void* to_free, sizeof(PendingPacket));
+        } else {
+            prev = curr;
+            curr = curr->next;
+        }
     }
 }

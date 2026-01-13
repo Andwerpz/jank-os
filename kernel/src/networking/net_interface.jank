@@ -15,17 +15,7 @@ struct NetInterface {
     u32 dns_server;
 
     // driver abstractions
-    fn<void(void*, u16)> send;
-}
-
-i32 mac_address_is_equal(u8[6]& mac1, u8[6]& mac2) {
-    if( mac1[0] != mac2[0] || 
-        mac1[1] != mac2[1] ||
-        mac1[2] != mac2[2] ||
-        mac1[3] != mac2[3] ||
-        mac1[4] != mac2[4] ||
-        mac1[5] != mac2[5] ) return 0;
-    return 1;
+    fn<void(u8*, u16)> send;
 }
 
 void set_mac(u8[6]& dst, u8[6]& src) {
@@ -51,6 +41,8 @@ void print_ipv4_addr(u32 ip) {
 }
 
 void dump_network_interface(NetInterface* net) {
+    println("=-----=");
+
     print("Device Name      ");
     print(net->name);
     println("");
@@ -78,6 +70,8 @@ void dump_network_interface(NetInterface* net) {
     print("dns_server:      ");
     print_ipv4_addr(net->dns_server);
     println("");
+
+    println("=-----=");
 }
 
 // group header into 16 bit words, sum them all up excluding the checksum field.
@@ -97,4 +91,10 @@ u16 ones_comp_checksum(void* data, u64 header_size, u64 checksum_index) {
     }
 
     return ~($u16 sum);
+}
+
+// returns 1 if ip is in subnet
+// returns 0 if ip is not in subnet
+i32 is_address_in_subnet(u32 ip, u32 network, u32 mask) {
+    return (ip & mask) == (network & mask);
 }
