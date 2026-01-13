@@ -24,28 +24,43 @@ struct mutex {
     }
     
     void lock() {
-        //check if currently locked
-        if(this.locked) {
-            //block process, if mutex becomes unlocked, will unblock a process from queue
-            assert(this.owner != $pid_t 0, "mutex::lock() : must have owner when locked");
-            wait_on(@(this.wait_queue));
-            assert(!this.locked, "mutex::lock() : should be unlocked when woken up");
-        }
+        if(SCHEDULER_STARTED) {
+            //check if currently locked
+            if(this.locked) {
+                //block process, if mutex becomes unlocked, will unblock a process from queue
+                assert(this.owner != $pid_t 0, "mutex::lock() : must have owner when locked");
+                wait_on(@(this.wait_queue));
+                assert(!this.locked, "mutex::lock() : should be unlocked when woken up");
+            }
 
-        //acquire lock
-        assert(this.owner == $pid_t 0, "mutex::lock() : must not have owner");
-        this.locked = 1;
-        this.owner = get_cur_pid();
+            //acquire lock
+            assert(this.owner == $pid_t 0, "mutex::lock() : must not have owner");
+            this.locked = 1;
+            this.owner = get_cur_pid();
+        } 
+        else {
+            //should be able to immediately take lock
+            assert(!this.locked, "mutex::lock() : kernel should be uncontended when obtaining locks pre-scheduler");
+            this.locked = 1;
+            this.owner = $pid_t -1;
+        }
     }
 
     void unlock() {
         assert(this.locked, "mutex::unlock() : should be locked when trying to unlock");
         assert(this.owner != $pid_t 0, "mutex::unlock() : there has to be an owner");
-        assert(this.owner == get_cur_pid(), "mutex::unlock() : only owner can unlock");
-        this.locked = 0;
-        this.owner = $pid_t 0;
+        if(SCHEDULER_STARTED) {
+            assert(this.owner == get_cur_pid(), "mutex::unlock() : only owner can unlock");
+            this.locked = 0;
+            this.owner = $pid_t 0;
 
-        //if there are blocked processes, unblock one
-        waitq_wake_one(@(this.wait_queue));
+            //if there are blocked processes, unblock one
+            waitq_wake_one(@(this.wait_queue));
+        }
+        else {
+            assert(this.owner == $pid_t -1, "mutex::unlock() : owner should be -1");
+            this.locked = 0;
+            this.owner = $pid_t 0;
+        }
     }
 }

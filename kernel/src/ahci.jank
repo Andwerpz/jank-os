@@ -368,7 +368,7 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 	if(slot == -1) return 1;
 
 	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
-	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
+	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot * sizeof(HBA_CMD_HEADER));
 
 	cmdheader->DW0 &= $u32 ~0x1f;  // Command FIS size (cfl)
 	cmdheader->DW0 |= $u32 (0x1f & (sizeof(FIS_REG_H2D) / sizeof(u32)));  // Command FIS size (cfl)
@@ -460,7 +460,7 @@ i32 ahci_write(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 	if(slot == -1) return 1;
 
 	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
-	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot);
+	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot * sizeof(HBA_CMD_HEADER));
 
 	cmdheader->DW0 &= $u32 ~0x1f;  // Command FIS size (cfl)
 	cmdheader->DW0 |= $u32 (0x1f & (sizeof(FIS_REG_H2D) / sizeof(u32)));  // Command FIS size (cfl)
@@ -688,14 +688,14 @@ i32 ahci_read(blockdev* dev, u64 lba_start, u64 count, void* buf) {
     while(ptr < count) {
         u32 startl = $u32 (lba_start & 0xFFFFFFFF);
         u32 starth = $u32 (lba_start >> $u64 32);
-        u64 amt = min(count, PAGE_SIZE / dev->block_size);
+        u64 amt = min(count - ptr, PAGE_SIZE / dev->block_size);
 
         i32 status = ahci_read(port, startl, starth, $u32 amt, $u16* pbuf);
         if(status) {
             pfree(pbuf);
             return status;
         }
-        memcpy($void* @(($u8* buf)[ptr * dev->block_size]), pbuf, amt * dev->block_size);
+        memcpy($void* ($u64 buf + ptr * dev->block_size), pbuf, amt * dev->block_size);
 
         ptr += amt;
         lba_start += amt;
@@ -719,7 +719,7 @@ i32 ahci_write(blockdev* dev, u64 lba_start, u64 count, void* buf) {
         u32 starth = $u32 (lba_start >> $u64 32);
         u64 amt = min(count, PAGE_SIZE / dev->block_size);
 
-        memcpy(pbuf, $void* @(($u8* buf)[ptr * dev->block_size]), amt * dev->block_size);
+        memcpy(pbuf, $void* ($u64 buf + ptr * dev->block_size), amt * dev->block_size);
         i32 status = ahci_write(port, startl, starth, $u32 amt, $u16* pbuf);
         if(status) {
             pfree(pbuf);

@@ -259,6 +259,10 @@ i32 vfs_lookup(vfs_inode* node, string child, i32 create, vfs_inode*& res) {
 
     //after this point, must ensure that the current node is a directory
     if(!node->is_directory()) {
+        cout << "vfs_lookup() : not a directory : " << node->type << "\n";
+        if(node->type == DT_UNKNOWN) {
+            ext2_print_inode($ext2_inode* node->node);
+        }
         return VFS_WALK_ERR;
     }
 
@@ -346,7 +350,7 @@ i32 vfs_walk(vfs_inode* root, string path, i32 create, vfs_inode*& res) {
 
             assert(lookup_status != VFS_WALK_FOUND, "vfs_walk() : status should be some error at this point");
             if(lookup_status == VFS_WALK_MISSING) {
-                if(i + 0x1 == parts.size()) return VFS_WALK_MISSING;
+                if(i + 0x1 == parts.size()) return VFS_WALK_MISSING;    //every other component except for last was found
                 else return VFS_WALK_ERR;
             }
             else return VFS_WALK_ERR;

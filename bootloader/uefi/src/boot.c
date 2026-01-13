@@ -15,8 +15,8 @@
 #define MB 0x100000
 
 #define FRAMEBUFFER_VADDR   0xfffffffffc000000
-#define BOOTINFO_VADDR      0xffffffffffe00000
-#define KERNEL_CODE_VADDR   0xffffffffffe02000
+#define BOOTINFO_VADDR      0xffffffffff000000
+#define KERNEL_CODE_VADDR   0xffffffffff001000
 #define KERNEL_STACK_VADDR  0xfffffffffffff000
 
 VOID *alloc_pages(EFI_BOOT_SERVICES *BS, UINTN pages) {
@@ -523,11 +523,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
             Print(L"Kernel size : %u\r\n", ksz);
             Print(L"Kernel addr : 0x%lx\r\n", (UINT64)(UINTN)kbuf);
             
-            // UINTN nr_pages = (ksz + PAGE_SIZE - 1) / PAGE_SIZE;
-            UINTN nr_pages = MB / PAGE_SIZE;
+            UINTN nr_pages = (8 * MB) / PAGE_SIZE;
             for(UINTN ptr = 0; ptr < nr_pages; ptr ++) {
                 map_4k(BS, pml4, KERNEL_CODE_VADDR + ptr * PAGE_SIZE, (UINTN) kbuf + ptr * PAGE_SIZE, PTE_RW);
             }
+            Print(L"Mapped %u pages for kernel code\r\n", nr_pages);
             Print(L"Done mapping kernel code\r\n");
         }
 
