@@ -1,10 +1,10 @@
 NOW
-- TCP
 - tcp connect timeout, added more error codes inside struct?
 - fill in states for UDP
 - move packet stuff inside udp, we will be using void* to hold protocol specifics
 - TEST SYSCALLS AND FILE OPS
 - add syscall flag handling
+- make a way to prevent kerenl faults when a networking device DNE. (mostly user mode?)
 
 LATER
 - DNS

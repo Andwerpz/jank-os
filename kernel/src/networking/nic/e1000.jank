@@ -232,7 +232,6 @@ void e1000_get_mac_address(u8[6]& mac) {
     // check if eeprom exists
     e1000_eeprom_check();
     if(!EEPROM_EXISTS) {
-        // TODO: handle this later
         panic("e1000_get_mac_address() : No EEPROM detected");
     }
 

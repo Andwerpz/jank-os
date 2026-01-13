@@ -100,10 +100,12 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
     if(flags & TCP_FLAG_RST) {
         println("tcp_handle() : Received RST");
         if(tcb->state == TCP_STATE_SYN_SENT) {
+            println("tcp_handle() : Destination server refused connection");
             // basically we tried to connect and they refused
             tcb->state = TCP_STATE_CLOSED;
             waitq_wake_all(@(sock->wait_queue));
         } else {
+            println("tcp_handle() : Destination server connection killed?");
             // maybe theres more states to handle but for now
             // if we are here, ig we were connected but they killed it
             tcb->state = TCP_STATE_CLOSED;
@@ -120,7 +122,7 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
         if(is_syn && is_ack) {
             println("tcp_handle() : Received the SYN-ACK, attempting to complete handshake");
             if(ack_num != tcb->iss + $u32 1) {
-                println("tcp_handle() : ACK number invalid");
+                println("tcp_handle() : ACK number invalid, not completing the handshake");
                 return;
             }
 
@@ -137,11 +139,12 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
         
             println("tcp_handle() : Connection established");
 
-            // wake here?
             waitq_wake_all(@(sock->wait_queue));
         }
 
     } else if(tcb->state == TCP_STATE_ESTABLISHED) {
+        println("tcp_handle() : Recieved payload");
+
         u8 header_len = (tcp->data_offset >> $u8 4) * $u8 4;
         u16 payload_len = len - $u16 header_len;
 
@@ -164,14 +167,13 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
                 tcb->rx_buf[tcb->rx_head] = payload[i];
                 tcb->rx_head = (tcb->rx_head + $u32 1) % $u32 TCP_RX_BUFFER_SIZE;
 
-                // uh should check if head collides with tail
+                // TODO uh should check if head collides with tail
             }
 
             tcb->rcv_nxt += $u32 payload_len;
 
             waitq_wake_all(@(sock->wait_queue));
 
-            // delay ack?
             tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
         }
 

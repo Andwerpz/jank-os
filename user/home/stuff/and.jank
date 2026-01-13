@@ -25,23 +25,24 @@ i32 main(u64 argc, u8** argv) {
     u8* req = "GET / HTTP/1.0\r\nHost: www.motherfuckingwebsite.com\r\n\r\n";
     u64 len = strlen(req);
 
-    // res = sys_send(fd, req, $u16 len, 0);
     i64 r = sys_write(fd, $void* req, len);
+    // i64 r = sys_write(fd, $void* req, len);
     assert(r > $i64 0, "send failed");
 
     u64 size = $u64 1024;
     u8* buf = $u8* malloc(size);
-    // res = sys_recvfrom(fd, buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
-    // if(res > 0) {
-    //     cout << buf << "\n";
-    //     cout.flush();
-    // }
 
-    res = sys_recvfrom(fd, buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
-    while(res > 0) {
+    r = sys_read(fd, $void* buf, size);
+    while(r > $i64 0) {
         cout << buf;
-        res = sys_recvfrom(fd, buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
+        r = sys_read(fd, $void* buf, size);
     }
+
+    // res = sys_recvfrom(fd, buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
+    // while(res > 0) {
+    //     cout << buf;
+    //     res = sys_recvfrom(fd, buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
+    // }
     cout << "\n";
     cout.flush();
 

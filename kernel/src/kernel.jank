@@ -272,10 +272,6 @@ i32 main() {
     init_pit();
     init_kb();
 
-    init_port_tables();
-    init_udp_ops();
-    init_tcp_ops();
-
     init_acpi();
     init_ps2();
     init_file();
@@ -303,7 +299,13 @@ i32 main() {
 
     //tests();    
 
-    init_dhcp();
+    if(net_interfaces.size() != $u64 0) {
+        // should be after init acpi.
+        init_port_tables();
+        init_udp_ops();
+        init_tcp_ops();
+        init_dhcp();
+    }
 
     init_scheduler();
 
