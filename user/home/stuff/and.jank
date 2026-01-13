@@ -11,7 +11,7 @@ i32 main(u64 argc, u8** argv) {
     assert(fd >= 0, "socket create failed");
 
     sockaddr_in remote;
-    remote.sin_family = AF_INET;
+    remote.sin_family = $u16 AF_INET;
     remote.sin_port = $u16 80;
     remote.sin_addr = $u32 (70 << 24 | 38 << 16 | 95 << 8 | 141 << 0);
 
