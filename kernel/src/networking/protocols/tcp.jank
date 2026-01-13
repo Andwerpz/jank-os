@@ -316,7 +316,7 @@ i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
     }
 
     sockaddr_in* sin = $sockaddr_in* addr;
-    if(sin->sin_family != AF_INET) {
+    if(sin->sin_family != $u16 AF_INET) {
         println("tcp_connect() : Address family does not match IPv4 (no support for anything else currently), exiting");
         return -ERR_AFNOSUPPORT;
     }
@@ -470,7 +470,7 @@ i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     }
     
     sockaddr_in* sin = $sockaddr_in* addr;
-    if(sin->sin_family != AF_INET) return -ERR_AFNOSUPPORT;
+    if(sin->sin_family != $u16 AF_INET) return -ERR_AFNOSUPPORT;
 
     // if no port selected, map an ephemeral port
     if(sin->sin_port == $u16 0) {

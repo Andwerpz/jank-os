@@ -106,7 +106,7 @@ i32 udp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dest_addr) {
 
     if(dest_addr != nullptr) {
         sockaddr_in* sin = $sockaddr_in* dest_addr;
-        if(sin->sin_family != AF_INET) {
+        if(sin->sin_family != $u16 AF_INET) {
             println("udp_send() : Address family does not match IPv4 (no support for anything else currently), exiting");
             return -ERR_AFNOSUPPORT;
         }
@@ -155,7 +155,7 @@ i32 udp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
 
             if($void* src_addr != nullptr) {
                 sockaddr_in* sin = $sockaddr_in* src_addr;
-                sin->sin_family = AF_INET;
+                sin->sin_family = $u16 AF_INET;
                 sin->sin_port = pkt->src_port;
                 sin->sin_addr = pkt->src_ip;
                 memset($void* @sin->sin_zero[0], 0, sizeof(sockaddr_in) - $u64 6); // calculate padding, sockaddr_in and sockaddr should be the same size.
@@ -188,7 +188,7 @@ i32 udp_connect(socket* sock, sockaddr* addr, u64 len) {
     }
 
     sockaddr_in* sin = $sockaddr_in* addr;
-    if(sin->sin_family != AF_INET) {
+    if(sin->sin_family != $u16 AF_INET) {
         println("udp_connect() : Address family does not match IPv4 (no support for anything else currently), exiting");
         return -ERR_AFNOSUPPORT;
     }
@@ -219,7 +219,7 @@ i32 udp_bind(socket* sock, sockaddr* addr, u64 len) {
     }
 
     sockaddr_in* sin = $sockaddr_in* addr;
-    if(sin->sin_family != AF_INET) return -ERR_AFNOSUPPORT;
+    if(sin->sin_family != $u16 AF_INET) return -ERR_AFNOSUPPORT;
 
     // if no port selected, map an ephemeral port
     if(sin->sin_port == $u16 0) {
