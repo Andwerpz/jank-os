@@ -22,6 +22,7 @@ struct E1000 {
 // registers
 // table 13-2 contains the list of registers
 [__GLOBAL_FIRST__] u32 E1000_REG_CTRL = $u32 0x00;            // Device Control
+[__GLOBAL_FIRST__] u32 E1000_REG_STATUS = $u32 0x08;          // Device Status
 [__GLOBAL_FIRST__] u32 E1000_REG_EERD = $u32 0x14;            // EEPROM/Flash Control/Data
 [__GLOBAL_FIRST__] u32 E1000_REG_FCAL = $u32 0x28;            // Flow Control Address Low 
 [__GLOBAL_FIRST__] u32 E1000_REG_FCAH = $u32 0x2C;            // Flow Control Address High
@@ -53,6 +54,9 @@ struct E1000 {
 [__GLOBAL_FIRST__] u32 E1000_CTRL_SLU = $u32 0x40;            // Set Link Up
 [__GLOBAL_FIRST__] u32 E1000_CTRL_VME = $u32 0x40000000;      // VLAN Mode Enable
 [__GLOBAL_FIRST__] u32 E1000_CTRL_PHY_RST = $u32 0x80000000;  // PHY Reset, 0b = Normal. 1b = Assert hardware reset to the internal PHY
+
+// STATUS bits
+[__GLOBAL_FIRST__] u32 E1000_STATUS_LU = $u32 (1 << 1);         // Link Up Indication, 0b = no link config; 1b = link config.
 
 // EERD bits
 [__GLOBAL_FIRST__] u32 E1000_EERD_START = $u32 0x0;           // Start Read, write 1b to read word in address field and write to data field. self clearing
@@ -150,11 +154,19 @@ void e1000_init(u64 addr) {
     nic->dns_server = $u32 0;
 
     nic->send = #<e1000_send(u8*, u16)>;
+    nic->get_link_state = #<e1000_get_link_status()>;
 
     net_interfaces.push_back(nic);
     CURRENT_INTERFACE = nic;
 
     println("e1000_init() : Finished NIC initialization");
+}
+
+i32 e1000_get_link_status() {
+    u32* status_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_STATUS);
+    u32 temp = *status_ptr & E1000_STATUS_LU;
+    if(temp) return 1;
+    return 0;
 }
 
 void e1000_pci_setup(u64 addr) {

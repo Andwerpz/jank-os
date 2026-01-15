@@ -16,6 +16,7 @@ struct NetInterface {
 
     // driver abstractions
     fn<void(u8*, u16)> send;
+    fn<i32()> get_link_state;
 }
 
 void set_mac(u8[6]& dst, u8[6]& src) {

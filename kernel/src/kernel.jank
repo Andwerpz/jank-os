@@ -306,6 +306,9 @@ i32 main() {
         init_port_tables();
         init_udp_ops();
         init_tcp_ops();
+
+        // wait for link up.
+        while(CURRENT_INTERFACE->get_link_state#() == 0) {}
         init_dhcp();
     }
 
