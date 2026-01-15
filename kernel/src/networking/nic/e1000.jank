@@ -471,7 +471,7 @@ void e1000_send(u8* data, u16 len) {
     u32 next_idx = (tx_idx + $u32 1) % $u32 e1000->num_tdesc;
     *tdt_ptr = next_idx;
 
-    println("e1000_send() : Beginning send operation");
+    println("e1000_send() : Finished send operation");
 }
 
 void e1000_receive_poll() {
