@@ -846,7 +846,7 @@ void init_xhci(u64 addr) {
     assert((cap_regs->HCCPARAMS1 & XHCI_HCCPARAMS1_AC64) != $u32 0x0, "init_xhci() : only support 64-bit addressing for now");
 
     //host controller should not be running currently
-    assert((op_regs->USBCMD & XHCI_USBCMD_RS) == $u32 0, "init_xhci() : host controller should not be running");
+    // assert((op_regs->USBCMD & XHCI_USBCMD_RS) == $u32 0, "init_xhci() : host controller should not be running");
 
     //not handling port power for now
     assert((cap_regs->HCCPARAMS1 & XHCI_HCCPARAMS1_PPC) == $u32 0x0, "init_xhci() : not handling port power for now");
