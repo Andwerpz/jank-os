@@ -15,42 +15,47 @@ struct RTL8111 {
     u64 curr_tdesc;
 }
 
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_CR = 0x37;                       // Command Register
-[__GLOBAL_FIRST__] u8 RTL8111_MAC_CR_RST = $u8 (1 << 4);            // Reset: Set this bit to 1 to force the RTL8111B/RTL8168B into a software reset state
-[__GLOBAL_FIRST__] u8 RTL8111_MAC_CR_RE = $u8 (1 << 3);             // Receiver Enable
-[__GLOBAL_FIRST__] u8 RTL8111_MAC_CR_TE = $u8 (1 << 2);             // Transmitter Enable
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_CR = 0x37;                           // Command Register
+[__GLOBAL_FIRST__] u8 RTL8111_MAC_CR_RST = $u8 (1 << 4);                // Reset: Set this bit to 1 to force the RTL8111B/RTL8168B into a software reset state
+[__GLOBAL_FIRST__] u8 RTL8111_MAC_CR_RE = $u8 (1 << 3);                 // Receiver Enable
+[__GLOBAL_FIRST__] u8 RTL8111_MAC_CR_TE = $u8 (1 << 2);                 // Transmitter Enable
 
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_RDSAR = 0xE4;                    // Receive Descriptor Start Address Register (256-byte alignment)
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_RCR = 0x44;                      // Receive (Rx) Configuration Register
-[__GLOBAL_FIRST__] u32 RTL8111_MAC_RCR_AB = $u32 (1 << 3);          // Accept Broadcast Packets
-[__GLOBAL_FIRST__] u32 RTL8111_MAC_RCR_AM = $u32 (1 << 2);          // Accept Multicast Packets
-[__GLOBAL_FIRST__] u32 RTL8111_MAC_RCR_APM = $u32 (1 << 1);         // Accept Physical Match Packets
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_CR_PHYAR = 0x60;                     // PHY Access Register
+[__GLOBAL_FIRST__] u32 RTL8111_MAC_CR_PHYAR_Flag = $u32 (1 << 31);      // 1: Write data to MII register. 0: Read data from MII register. bit will flip when done.
+[__GLOBAL_FIRST__] u8 RTL8111_PHY_BMSR = $u8 0x1;                       // Basic mode status register
+[__GLOBAL_FIRST__] u16 RTL8111_PHY_BMSR_Link_Status = $u16 (1 << 2);    // Basic mode status register
 
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_TNPDS = 0x20;                    // Transmit Normal Priority Descriptors: Start address (64-bit). (256-byte alignment)
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_TCR = 0x40;                      // Transmit (Tx) Configuration Register
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_RDSAR = 0xE4;                        // Receive Descriptor Start Address Register (256-byte alignment)
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_RCR = 0x44;                          // Receive (Rx) Configuration Register
+[__GLOBAL_FIRST__] u32 RTL8111_MAC_RCR_AB = $u32 (1 << 3);              // Accept Broadcast Packets
+[__GLOBAL_FIRST__] u32 RTL8111_MAC_RCR_AM = $u32 (1 << 2);              // Accept Multicast Packets
+[__GLOBAL_FIRST__] u32 RTL8111_MAC_RCR_APM = $u32 (1 << 1);             // Accept Physical Match Packets
 
-[__GLOBAL_FIRST__] u32 RTL8111_RDESC_OPT1_OWN = $u32 (1 << 31);     // When set, indicates that the descriptor is owned by the NIC, and is ready to receive a packet.
-[__GLOBAL_FIRST__] u32 RTL8111_RDESC_OPT1_EOR = $u32 (1 << 30);     // End of Rx descriptor Ring.
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_TNPDS = 0x20;                        // Transmit Normal Priority Descriptors: Start address (64-bit). (256-byte alignment)
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_TCR = 0x40;                          // Transmit (Tx) Configuration Register
 
-[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_OWN = $u32 (1 << 31);     // When set, this bit indicates that the descriptor is owned by the NIC, and the data relative to this descriptor is ready to be transmitted.
-[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_EOR = $u32 (1 << 30);     // End of Rx descriptor Ring.
-[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_FS = $u32 (1 << 29);      // First Segment Descriptor.
-[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_LS = $u32 (1 << 28);      // Last Segment Descriptor.
+[__GLOBAL_FIRST__] u32 RTL8111_RDESC_OPT1_OWN = $u32 (1 << 31);         // When set, indicates that the descriptor is owned by the NIC, and is ready to receive a packet.
+[__GLOBAL_FIRST__] u32 RTL8111_RDESC_OPT1_EOR = $u32 (1 << 30);         // End of Rx descriptor Ring.
 
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_TPPoll = 0x38;                   // Transmit Priority Polling register
-[__GLOBAL_FIRST__] u8 RTL8111_MAC_TPPoll_NPQ = $u8 (1 << 6);        // Normal Priority Queue polling: Writing a 1 to this bit will notify the RTL8111B/RTL8168B that there is a normal priority packet(s) waiting to be transmitted
+[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_OWN = $u32 (1 << 31);         // When set, this bit indicates that the descriptor is owned by the NIC, and the data relative to this descriptor is ready to be transmitted.
+[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_EOR = $u32 (1 << 30);         // End of Rx descriptor Ring.
+[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_FS = $u32 (1 << 29);          // First Segment Descriptor.
+[__GLOBAL_FIRST__] u32 RTL8111_TDESC_OPT1_LS = $u32 (1 << 28);          // Last Segment Descriptor.
 
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_IMR = 0x3C;                      // Interrupt Mask Register
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_ISR = 0x3E;                      // Interrupt Status Register
-[__GLOBAL_FIRST__] u16 RTL8111_MAC_IMR_LinkChg = $u16 (1 << 5);     // Link Change Interrupt
-[__GLOBAL_FIRST__] u16 RTL8111_MAC_IMR_ROK = $u16 (1 << 0);         // Rx OK Interrupt
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_TPPoll = 0x38;                       // Transmit Priority Polling register
+[__GLOBAL_FIRST__] u8 RTL8111_MAC_TPPoll_NPQ = $u8 (1 << 6);            // Normal Priority Queue polling: Writing a 1 to this bit will notify the RTL8111B/RTL8168B that there is a normal priority packet(s) waiting to be transmitted
 
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR0 = 0x0;                      // ID Register 0
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR1 = 0x1;                      // ID Register 1
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR2 = 0x2;                      // ID Register 2
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR3 = 0x3;                      // ID Register 3
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR4 = 0x4;                      // ID Register 4
-[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR5 = 0x5;                      // ID Register 5
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IMR = 0x3C;                          // Interrupt Mask Register
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_ISR = 0x3E;                          // Interrupt Status Register
+[__GLOBAL_FIRST__] u16 RTL8111_MAC_IMR_LinkChg = $u16 (1 << 5);         // Link Change Interrupt
+[__GLOBAL_FIRST__] u16 RTL8111_MAC_IMR_ROK = $u16 (1 << 0);             // Rx OK Interrupt
+
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR0 = 0x0;                          // ID Register 0
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR1 = 0x1;                          // ID Register 1
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR2 = 0x2;                          // ID Register 2
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR3 = 0x3;                          // ID Register 3
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR4 = 0x4;                          // ID Register 4
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR5 = 0x5;                          // ID Register 5
 
 struct RTL8111_RDESC {
     u32 opts1;
@@ -94,6 +99,7 @@ void rtl8111_init(u64 addr) {
     nic->dns_server = $u32 0;
 
     nic->send = #<rtl8111_send(u8*, u16)>;
+    nic->get_link_state = #<rtl8111_get_link_status()>;
 
     net_interfaces.push_back(nic);
     CURRENT_INTERFACE = nic;
@@ -302,6 +308,37 @@ void rtl8111_startup() {
     *cr |= (RTL8111_MAC_CR_RE | RTL8111_MAC_CR_TE);
 
     println("rtl8111_startup() : Finished general intialization");
+}
+
+// returns 1 for up, 0 for down.
+i32 rtl8111_get_link_status() {
+    u16 temp = rtl8111_read_phy(RTL8111_PHY_BMSR) & RTL8111_PHY_BMSR_Link_Status;
+    if(temp) return 1;
+    return 0;
+}
+
+u16 rtl8111_read_phy(u8 reg) {
+    // flag bit 0 to read
+    u32* phyar = $u32* (rtl8111->mmio_base + RTL8111_MAC_CR_PHYAR);
+
+    *phyar = ($u32 (reg & $u8 0b11111) << $u32 16); // mask off register number (5 bit) and shift up
+
+    while((*phyar & RTL8111_MAC_CR_PHYAR_Flag) == $u32 0) {}
+
+    return $u16 *phyar;
+}
+
+void rtl8111_write_phy(u8 reg, u16 data) {
+    // flag bit 1 to write
+    u32* phyar = $u32* (rtl8111->mmio_base + RTL8111_MAC_CR_PHYAR);
+
+    u32 temp = $u32 0;
+    temp |= ($u32 (reg & $u8 0b11111) << $u32 16); // mask off register number (5 bit) and shift up
+    temp |= $u32 data;
+    temp |= RTL8111_MAC_CR_PHYAR_Flag;
+    *phyar = temp;
+
+    while((*phyar & RTL8111_MAC_CR_PHYAR_Flag) == $u32 1) {}
 }
 
 void rtl8111_pci_setup(u64 addr) {
