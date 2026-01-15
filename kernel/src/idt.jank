@@ -31,9 +31,11 @@ struct IDTEntry {
 //PIC interrupts : 0x20 - 0x2F
 [__GLOBAL_FIRST__] u64 INTNO_TIMER              = 0x20;
 [__GLOBAL_FIRST__] u64 INTNO_KEYBOARD           = 0x21;
+[__GLOBAL_FIRST__] u64 INTNO_E1000;
 
 //APIC interrupts : 0x30 - 0xEF
 [__GLOBAL_FIRST__] u64 INTNO_XHCI               = 0x30;
+[__GLOBAL_FIRST__] u64 INTNO_RTL8111            = 0x31;
 
 //Reserved interrupts (?) : 0xF0 - 0xFF
 [__GLOBAL_FIRST__] u64 INTNO_SPURIOUS           = 0xFF;     // accidental interrupts arriving from APIC due to electrical faults (?)
