@@ -62,6 +62,7 @@ i32 init_idt() {
     idt_set_entry(INTNO_TIMER, $u64 @timer_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
     idt_set_entry(INTNO_KEYBOARD, $u64 @keyboard_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
     idt_set_entry(INTNO_XHCI, $u64 @xhci_event_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
+    idt_set_entry(INTNO_RTL8111, $u64 @network_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
     idt_set_entry(INTNO_SPURIOUS, $u64 @spurious_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, idt);
 
     //flush changes
@@ -264,6 +265,7 @@ export void interrupt_handler_disambiguator(trapframe* tf, u64 trap_id, u64 erro
     if(trap_id == INTNO_TIMER) timer_interrupt_handler(tf);
     if(trap_id == INTNO_KEYBOARD) keyboard_interrupt_handler(tf);
     if(trap_id == INTNO_E1000) e1000_interrupt_handler(tf);
+    if(trap_id == INTNO_RTL8111) rtl8111_interrupt_handler(tf);
     if(trap_id == INTNO_XHCI) xhci_interrupt_handler(tf);
     if(trap_id == INTNO_SPURIOUS) spurious_interrupt_handler(tf);
     panic("interrupt_handler_disambiguator() : should not be here");
