@@ -48,6 +48,7 @@
 #include "networking/protocols/dhcp.jank";
 #include "networking/protocols/tcp.jank";
 #include "networking/nic/e1000.jank";
+#include "networking/nic/rtl_8111_8168.jank";
 #include "waitq.jank";
 #include "apic.jank";
 

@@ -471,6 +471,11 @@ void init_mcfg(MCFG* mcfg) {
                         e1000_init(addr);
                     }
 
+                    if(vendor_id == REALTEK_VEND && device_id == RTL8168_DEV) {
+                        // found realtek ethernet
+                        rtl8111_init(addr);
+                    }
+
                     if(class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
                         if(progif == $u8 0x30) {
                             // found xHCI controller

@@ -1,0 +1,122 @@
+[__GLOBAL_FIRST__] u16 REALTEK_VEND = $u16 0x10EC;
+[__GLOBAL_FIRST__] u16 RTL8168_DEV = $u16 0x8168;
+
+[__GLOBAL_FIRST__] RTL8111* rtl8111;
+
+struct RTL8111 {
+    u64 mmio_base;
+}
+
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR0 = 0x0;
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR1 = 0x1;
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR2 = 0x2;
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR3 = 0x3;
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR4 = 0x4;
+[__GLOBAL_FIRST__] u64 RTL8111_MAC_IDR5 = 0x5;
+
+void rtl8111_init(u64 addr) {
+    println("rtl8111_init() : Beginning NIC initialization");
+
+    rtl8111 = $RTL8111* malloc(sizeof(RTL8111));
+    rtl8111->mmio_base = 0x0;
+
+    NetInterface* nic = $NetInterface* malloc(sizeof(NetInterface));
+    memset($void* nic, 0, sizeof(NetInterface));
+    nic->name = "eth0"; // temp name for now
+
+    rtl8111_pci_setup(addr);
+    rtl8111_get_mac_address(nic->mac_address);
+
+    while(1) {
+
+    }
+}
+
+void rtl8111_get_mac_address(u8[6]& mac) {
+    println("rtl8111_get_mac_address() : Begin getting NIC MAC address");
+
+    mac[0] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR0));
+    mac[1] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR1));
+    mac[2] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR2));
+    mac[3] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR3));
+    mac[4] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR4));
+    mac[5] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR5));
+
+    print("rtl8111_get_mac_address() : NIC MAC address is ");
+    print("[");
+    print_mac_addr(mac);
+    print("]");
+    println("");
+
+    println("rtl8111_get_mac_address() : Finished getting NIC MAC address");
+}
+
+void rtl8111_pci_setup(u64 addr) {
+    println("rtl8111_pci_setup() : Beginning PCI setup");
+
+    PCIHeader0* pci_hdr = $PCIHeader0* addr;
+
+    u64 BAR2 = $u64 pci_hdr->BAR2;
+    u64 BAR3 = $u64 pci_hdr->BAR3;
+    
+    assert((BAR2 & 0x1) == 0x0, "rtl8111_pci_setup() : BAR2 is not a memory space");
+    // in the docs, 5.2, IO is BAR2, and MMIO is BAR2 
+
+    u64 mmio_base_addr = 0x0;
+    u64 mmio_size = 0x0;
+
+    u64 type = (BAR2 & 0x6) >> 0x1;
+    if(type == 0x0) {
+        // 32 bit
+        println("rtl8111_pci_setup() : Detected 32-bit memory register base address");
+        mmio_base_addr = $u64 (BAR2 & 0xFFFFFFF0);
+
+        // get size
+        pci_hdr->BAR2 = $u32 0xFFFFFFFF;
+        u32 mask = pci_hdr->BAR2;
+        pci_hdr->BAR2 = $u32 BAR2;
+
+        mask = ~(mask & $u32 0xFFFFFFF0);
+        mmio_size = $u64 mask + 0x1;
+    } else if(type == 0x2) {
+        // 64 bit
+        println("rtl8111_pci_setup() : Detected 64-bit memory register base address");
+        u64 lower = $u64 (BAR2 & 0xFFFFFFF0);
+        u64 upper = BAR3 << $u64 32;
+        mmio_base_addr = upper | lower;
+
+        // get size
+        pci_hdr->BAR2 = $u32 0xFFFFFFFF;
+        u64 mask_lower = $u64 pci_hdr->BAR2;
+        pci_hdr->BAR2 = $u32 BAR2;
+
+        pci_hdr->BAR3 = $u32 0xFFFFFFFF;
+        u64 mask_upper = $u64 pci_hdr->BAR3;
+        pci_hdr->BAR3 = $u32 BAR3;
+
+        u64 mask = (mask_upper << $u64 32) | (mask_lower & 0xFFFFFFF0);
+        mmio_size = ~mask + 0x1;
+    } else {
+        panic("rtl8111_pci_setup() : Unknown memory register base address space size");
+    }
+
+    // identity map
+    pagetable_t pt = pt_get_current();
+    for(u64 vaddr = mmio_base_addr; vaddr < mmio_base_addr + mmio_size; vaddr += PAGE_SIZE) {
+        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
+    }
+    rtl8111->mmio_base = mmio_base_addr;
+
+    // command register modifications
+    u16 command = pci_hdr->command;
+    command |= $u16 0x2; // Memory Access Enable
+    command |= $u16 0x4; // Enable Mastering
+    command |= $u16 0x400; // Disable Legacy Interrupts
+    pci_hdr->command = command;
+
+    // Enabling MSI-(X?)
+    // assert(pci_enable_msix(pci_hdr, $u8 INTNO_RTL8111) == 0, "rtl8111_pci_setup() : Failed to enable MSI-X");
+    assert(pci_enable_msi(pci_hdr, $u8 INTNO_RTL8111) == 0, "rtl8111_pci_setup() : Failed to enable MSI");
+
+    println("rtl8111_pci_setup() : Finished PCI setup");
+}
