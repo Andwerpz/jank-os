@@ -220,7 +220,7 @@ void e1000_pci_setup(u64 addr) {
     // identity map
     pagetable_t pt = pt_get_current();
     for(u64 vaddr = mmio_base_addr; vaddr < mmio_base_addr + mmio_size; vaddr += PAGE_SIZE) {
-        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
+        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | pte_pat_bits(PAT_UC));
     }
     e1000->mmio_base = mmio_base_addr;
 
