@@ -228,7 +228,7 @@ void cpu_cache_flush(void* addr, u64 size) {
     asm!("mfence");
 }
 
-[__GLOBAL_FIRST__] i32 DEBUG_MODE = 0;
+[__GLOBAL_FIRST__] i32 DEBUG_MODE = 1; 
 [__GLOBAL_FIRST__] i32 DO_VGA_PRINT = 1;
 void disable_vga_print() {
     if(!DEBUG_MODE) {
