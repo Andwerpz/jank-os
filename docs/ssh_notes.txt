@@ -1,0 +1,48 @@
+
+Secure Shell (SSH) Protocol
+essentially an encrypted bytestream
+
+the SSH connection goes through a few states during its lifetime:
+ - TCP connection
+ - Identification exchange
+   - confirm ssh version. 
+   - send something like "SSH-2.0 ..." in plaintext
+ - Algorithm negotiation
+   - decide what encryption algorithms to use 
+   - still using plaintext
+   - client and server send eachother list of supported algorithms
+   - both deterministically select the first mutually supported algorithms
+ - Key EXchange (KEX)
+   - create shared secret key using the chosen KEX algorithm
+   - using the new secret, both sides derive symmetric keys
+   - from now on, all packets are encrypted using these symmetric keys
+ - Host Verification
+   - host uses its private key to generate a message using the shared H generated during KEX
+   - host sends message + host public key to client
+   - client decrypts message using H to get the host public key, see if they match
+ - User Authentication
+   - client sends "ssh-userauth" request with selected key algorithm, client public key, and signature generated from private key
+   - host verifies signature, and then checks that the public key is in its trusted public keys list
+   - may have to try multiple times if the first algorithms the client suggests are not supported
+ - Connection Phase
+   - finally, can do actual work
+   - during the connection, either side can initiate a new KEX, which replaces the existing keys
+ - Disconnection
+   - either side sends SSH_MSG_DISCONNECT
+
+we need some cryptographic algorithms :
+ - Keygen
+   - provides a way to generate a public/private key pair, and use the private key to create signatures
+ - Key EXchange (KEX)
+   - establishes a shared secret
+ - ciphers
+   - uses the shared secret to encode messages
+ - Message Authentication Code (MAC)
+   - used to authenticate the message
+SSH also supports the use of compression algorithms, but for now supporting 'none' is fine. 
+
+for now, I'll just support one commonly supported algorithm for each type
+ - KEX : curve25519
+ - Hostkey / Userkey : ed25519
+ - Cipher + MAC : chacha20-poly1305
+

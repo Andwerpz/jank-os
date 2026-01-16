@@ -35,6 +35,16 @@ struct psf_header {
     u8 glyphs;  //glyph starting byte
 }
 
+//takes up a contiguous horizontal section of the screen
+struct vga_scroll_buffer {
+    u64 width;
+    u64 offset;
+
+    vga_scroll_buffer() {
+        
+    }
+}
+
 [__GLOBAL_FIRST__] i32 VGA_DID_INIT = 0;
 void init_vga() {
     //set VGA framebuffer MMIO to be WC
@@ -83,15 +93,23 @@ void vga_debug_draw_char(u8 c) {
 //flush whatever is in the staging buffer into the actual VGA buffer
 void vga_flush() {
     assert(VGA_STAGING_LINE_OFF < VGA_STAGING_HEIGHT, "vga_flush() : invalid staging offset");
-    if(VGA_STAGING_LINE_OFF + VGA_FB_HEIGHT > VGA_STAGING_HEIGHT) {
-        // wrapping
-        u64 bef_wrap = VGA_STAGING_HEIGHT - VGA_STAGING_LINE_OFF;
-        memcpy($void* VGA_FB, $void* (@VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * bef_wrap);
-        memcpy($void* @(VGA_FB[bef_wrap * VGA_FB_SCANLINE]), $void* VGA_STAGING_BUF, sizeof(u32) * VGA_FB_SCANLINE * (VGA_FB_HEIGHT - bef_wrap));
-    }
-    else {
-        // no wrap
-        memcpy($void* VGA_FB, $void* @(VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * VGA_FB_HEIGHT);
+    // if(VGA_STAGING_LINE_OFF + VGA_FB_HEIGHT > VGA_STAGING_HEIGHT) {
+    //     // wrapping
+    //     u64 bef_wrap = VGA_STAGING_HEIGHT - VGA_STAGING_LINE_OFF;
+    //     memcpy($void* VGA_FB, $void* (@VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * bef_wrap);
+    //     memcpy($void* @(VGA_FB[bef_wrap * VGA_FB_SCANLINE]), $void* VGA_STAGING_BUF, sizeof(u32) * VGA_FB_SCANLINE * (VGA_FB_HEIGHT - bef_wrap));
+    // }
+    // else {
+    //     // no wrap
+    //     memcpy($void* VGA_FB, $void* @(VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * VGA_FB_HEIGHT);
+    // }
+
+    for(u64 i = 0x0; i < VGA_FB_HEIGHT; i++) {
+        memcpy(
+            $void* ($u64 VGA_FB + sizeof(u32) * VGA_FB_SCANLINE * i), 
+            $void* @(VGA_STAGING_BUF[((VGA_STAGING_LINE_OFF + i) % VGA_STAGING_HEIGHT) * VGA_FB_SCANLINE]), 
+            sizeof(u32) * VGA_FB_SCANLINE
+        );
     }
 }
 
