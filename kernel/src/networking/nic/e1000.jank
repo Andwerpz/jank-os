@@ -4,92 +4,98 @@
 [__GLOBAL_FIRST__] u16 INTEL_VEND = $u16 0x8086;
 [__GLOBAL_FIRST__] u16 E1000_DEV = $u16 0x100E;
 
-[__GLOBAL_FIRST__] u8 EEPROM_EXISTS = $u8 0;
-[__GLOBAL_FIRST__] u64 MMIO_BASE = 0x0;
-[__GLOBAL_FIRST__] u8 E1000_IRQ = $u8 0;
-[__GLOBAL_FIRST__] u64 INTNO_E1000 = 0x1000;
+[__GLOBAL_FIRST__] E1000* e1000; 
 
-[__GLOBAL_FIRST__] u64 E1000_NUM_RDESC = $u64 32;
-[__GLOBAL_FIRST__] E1000_RDESC* RDESC_RING;
-[__GLOBAL_FIRST__] u16 CURR_RDESC = $u16 0;
-
-[__GLOBAL_FIRST__] u64 E1000_NUM_TX_DESC = $u64 32;
-[__GLOBAL_FIRST__] E1000_TDESC* TDESC_RING;
-[__GLOBAL_FIRST__] u16 CURR_TDESC = $u16 0;
+struct E1000 {
+    u8 eeprom_exists;
+    u64 mmio_base;
+    u8 irq;
+    u64 intno; 
+    u64 num_rdesc;
+    E1000_RDESC* rdesc_ring;
+    u16 curr_rdesc;   
+    u64 num_tdesc;
+    E1000_TDESC* TDESC_RING;
+    u16 curr_tdesc;
+}
 
 // registers
 // table 13-2 contains the list of registers
-[__GLOBAL_FIRST__] u32 REG_CTRL = $u32 0x00;            // Device Control
-[__GLOBAL_FIRST__] u32 REG_EERD = $u32 0x14;            // EEPROM/Flash Control/Data
-[__GLOBAL_FIRST__] u32 REG_FCAL = $u32 0x28;            // Flow Control Address Low 
-[__GLOBAL_FIRST__] u32 REG_FCAH = $u32 0x2C;            // Flow Control Address High
-[__GLOBAL_FIRST__] u32 REG_FCT = $u32 0x30;             // Flow Control Type
-[__GLOBAL_FIRST__] u32 REG_FCTTV = $u32 0x170;          // Flow Control Transmit Timer Value
-[__GLOBAL_FIRST__] u32 REG_ICR = $u32 0xC0;             // Interrupt Cause Read
-[__GLOBAL_FIRST__] u32 REG_IMS = $u32 0xD0;             // Interrupt Mask Set/Read
-[__GLOBAL_FIRST__] u32 REG_IMC = $u32 0xD8;             // Interrupt Mask Clear
+[__GLOBAL_FIRST__] u32 E1000_REG_CTRL = $u32 0x00;            // Device Control
+[__GLOBAL_FIRST__] u32 E1000_REG_STATUS = $u32 0x08;          // Device Status
+[__GLOBAL_FIRST__] u32 E1000_REG_EERD = $u32 0x14;            // EEPROM/Flash Control/Data
+[__GLOBAL_FIRST__] u32 E1000_REG_FCAL = $u32 0x28;            // Flow Control Address Low 
+[__GLOBAL_FIRST__] u32 E1000_REG_FCAH = $u32 0x2C;            // Flow Control Address High
+[__GLOBAL_FIRST__] u32 E1000_REG_FCT = $u32 0x30;             // Flow Control Type
+[__GLOBAL_FIRST__] u32 E1000_REG_FCTTV = $u32 0x170;          // Flow Control Transmit Timer Value
+[__GLOBAL_FIRST__] u32 E1000_REG_ICR = $u32 0xC0;             // Interrupt Cause Read
+[__GLOBAL_FIRST__] u32 E1000_REG_IMS = $u32 0xD0;             // Interrupt Mask Set/Read
+[__GLOBAL_FIRST__] u32 E1000_REG_IMC = $u32 0xD8;             // Interrupt Mask Clear
 
-[__GLOBAL_FIRST__] u32 REG_RCTL = $u32 0x100;           // Receive Control
-[__GLOBAL_FIRST__] u32 REG_RDBAL = $u32 0x2800;         // Receive Descriptor Base Low
-[__GLOBAL_FIRST__] u32 REG_RDBAH = $u32 0x2804;         // Receive Descriptor Base High
-[__GLOBAL_FIRST__] u32 REG_RDLEN = $u32 0x2808;         // Receive Descriptor Length
-[__GLOBAL_FIRST__] u32 REG_RDH = $u32 0x2810;           // Receive Descriptor Head
-[__GLOBAL_FIRST__] u32 REG_RDT = $u32 0x2818;           // Receive Descriptor Tail
+[__GLOBAL_FIRST__] u32 E1000_REG_RCTL = $u32 0x100;           // Receive Control
+[__GLOBAL_FIRST__] u32 E1000_REG_RDBAL = $u32 0x2800;         // Receive Descriptor Base Low
+[__GLOBAL_FIRST__] u32 E1000_REG_RDBAH = $u32 0x2804;         // Receive Descriptor Base High
+[__GLOBAL_FIRST__] u32 E1000_REG_RDLEN = $u32 0x2808;         // Receive Descriptor Length
+[__GLOBAL_FIRST__] u32 E1000_REG_RDH = $u32 0x2810;           // Receive Descriptor Head
+[__GLOBAL_FIRST__] u32 E1000_REG_RDT = $u32 0x2818;           // Receive Descriptor Tail
 
-[__GLOBAL_FIRST__] u32 REG_TCTL = $u32 0x400;           // Transmit Control 
-[__GLOBAL_FIRST__] u32 REG_TDBAL = $u32 0x3800;         // Transmit Descriptor Base Low 
-[__GLOBAL_FIRST__] u32 REG_TDBAH = $u32 0x3804;         // Transmit Descriptor Base Low 
-[__GLOBAL_FIRST__] u32 REG_TDLEN = $u32 0x3808;         // Transmit Descriptor Base Low 
-[__GLOBAL_FIRST__] u32 REG_TDH = $u32 0x3810;           // Transmit Descriptor Base Low 
-[__GLOBAL_FIRST__] u32 REG_TDT = $u32 0x3818;           // Transmit Descriptor Base Low 
+[__GLOBAL_FIRST__] u32 E1000_REG_TCTL = $u32 0x400;           // Transmit Control 
+[__GLOBAL_FIRST__] u32 E1000_REG_TDBAL = $u32 0x3800;         // Transmit Descriptor Base Low 
+[__GLOBAL_FIRST__] u32 E1000_REG_TDBAH = $u32 0x3804;         // Transmit Descriptor Base Low 
+[__GLOBAL_FIRST__] u32 E1000_REG_TDLEN = $u32 0x3808;         // Transmit Descriptor Base Low 
+[__GLOBAL_FIRST__] u32 E1000_REG_TDH = $u32 0x3810;           // Transmit Descriptor Base Low 
+[__GLOBAL_FIRST__] u32 E1000_REG_TDT = $u32 0x3818;           // Transmit Descriptor Base Low 
 
-[__GLOBAL_FIRST__] u32 REG_MTA = $u32 0x5200;           // Multicast Table Array
+[__GLOBAL_FIRST__] u32 E1000_REG_MTA = $u32 0x5200;           // Multicast Table Array
 
 // CTRL bits
-[__GLOBAL_FIRST__] u32 CTRL_LRST = $u32 0x8;            // Link Reset, 0b = Normal; 1b = Link Reset
-[__GLOBAL_FIRST__] u32 CTRL_ASDE = $u32 0x20;           // Auto-Speed Detection Enable, needs to be set together with SLU
-[__GLOBAL_FIRST__] u32 CTRL_SLU = $u32 0x40;            // Set Link Up
-[__GLOBAL_FIRST__] u32 CTRL_VME = $u32 0x40000000;      // VLAN Mode Enable
-[__GLOBAL_FIRST__] u32 CTRL_PHY_RST = $u32 0x80000000;  // PHY Reset, 0b = Normal. 1b = Assert hardware reset to the internal PHY
+[__GLOBAL_FIRST__] u32 E1000_CTRL_LRST = $u32 0x8;            // Link Reset, 0b = Normal; 1b = Link Reset
+[__GLOBAL_FIRST__] u32 E1000_CTRL_ASDE = $u32 0x20;           // Auto-Speed Detection Enable, needs to be set together with SLU
+[__GLOBAL_FIRST__] u32 E1000_CTRL_SLU = $u32 0x40;            // Set Link Up
+[__GLOBAL_FIRST__] u32 E1000_CTRL_VME = $u32 0x40000000;      // VLAN Mode Enable
+[__GLOBAL_FIRST__] u32 E1000_CTRL_PHY_RST = $u32 0x80000000;  // PHY Reset, 0b = Normal. 1b = Assert hardware reset to the internal PHY
+
+// STATUS bits
+[__GLOBAL_FIRST__] u32 E1000_STATUS_LU = $u32 (1 << 1);         // Link Up Indication, 0b = no link config; 1b = link config.
 
 // EERD bits
-[__GLOBAL_FIRST__] u32 EERD_START = $u32 0x0;           // Start Read, write 1b to read word in address field and write to data field. self clearing
-[__GLOBAL_FIRST__] u32 EERD_DONE = $u32 0x10;           // Read Done, set to 1b when done, set to 0b when in progess. software writes ignored.
-[__GLOBAL_FIRST__] u32 EERD_DATA = $u32 0xFFFF0000;     // Read Data, Data returned from EEPROM read.
+[__GLOBAL_FIRST__] u32 E1000_EERD_START = $u32 0x0;           // Start Read, write 1b to read word in address field and write to data field. self clearing
+[__GLOBAL_FIRST__] u32 E1000_EERD_DONE = $u32 0x10;           // Read Done, set to 1b when done, set to 0b when in progess. software writes ignored.
+[__GLOBAL_FIRST__] u32 E1000_EERD_DATA = $u32 0xFFFF0000;     // Read Data, Data returned from EEPROM read.
 
 // ICR, IMS, IMC bits
-[__GLOBAL_FIRST__] u32 IMS_LSC = $u32 0x2;              // Link Status Change, This bit is set each time the link status changes (either from up to down, or from down to up)
-[__GLOBAL_FIRST__] u32 IMS_RXT0 = $u32 0x80;            // Receiver Timer Interrupt, Set when the receiver timer expires.
+[__GLOBAL_FIRST__] u32 E1000_IMS_LSC = $u32 0x2;              // Link Status Change, This bit is set each time the link status changes (either from up to down, or from down to up)
+[__GLOBAL_FIRST__] u32 E1000_IMS_RXT0 = $u32 0x80;            // Receiver Timer Interrupt, Set when the receiver timer expires.
 
 // RCTL bits
-[__GLOBAL_FIRST__] u32 RCTL_EN = $u32 0x2;              // Receiver Enable, The receiver is enabled when this bit is 1b. Writing this bit to 0b stops reception after receipt of any in-progress packets
-[__GLOBAL_FIRST__] u32 RCTL_MPE = $u32 0x10;            // Multicast Promiscuous Enabled, 0b = Disabled. 1b = Enabled.
-[__GLOBAL_FIRST__] u32 RCTL_BAM = $u32 0x8000;          // Broadcast Accept Mode. 0 = ignore broadcast; 1 = accept broadcast packets
-[__GLOBAL_FIRST__] u32 RCTL_BSIZE = $u32 0x30000;       // Receive Buffer Size
-[__GLOBAL_FIRST__] u32 RCTL_BSEX = $u32 0x2000000;      // Buffer Size Extension, When set to one, the original BSIZE values are multiplied by 16
-[__GLOBAL_FIRST__] u32 RCTL_SECRC = $u32 0x4000000;     // Strip Ethernet CRC from incoming packet, 0b = Do not strip CRC field. 1b = Strip CRC field.
+[__GLOBAL_FIRST__] u32 E1000_RCTL_EN = $u32 0x2;              // Receiver Enable, The receiver is enabled when this bit is 1b. Writing this bit to 0b stops reception after receipt of any in-progress packets
+[__GLOBAL_FIRST__] u32 E1000_RCTL_MPE = $u32 0x10;            // Multicast Promiscuous Enabled, 0b = Disabled. 1b = Enabled.
+[__GLOBAL_FIRST__] u32 E1000_RCTL_BAM = $u32 0x8000;          // Broadcast Accept Mode. 0 = ignore broadcast; 1 = accept broadcast packets
+[__GLOBAL_FIRST__] u32 E1000_RCTL_BSIZE = $u32 0x30000;       // Receive Buffer Size
+[__GLOBAL_FIRST__] u32 E1000_RCTL_BSEX = $u32 0x2000000;      // Buffer Size Extension, When set to one, the original BSIZE values are multiplied by 16
+[__GLOBAL_FIRST__] u32 E1000_RCTL_SECRC = $u32 0x4000000;     // Strip Ethernet CRC from incoming packet, 0b = Do not strip CRC field. 1b = Strip CRC field.
 
 // RDBAL bits
-[__GLOBAL_FIRST__] u32 RDBAL_RDBAL = $u32 0xFFFFFFF0;   // Receive Descriptor Base Address Low.
+[__GLOBAL_FIRST__] u32 E1000_RDBAL_RDBAL = $u32 0xFFFFFFF0;   // Receive Descriptor Base Address Low.
 
 // RDH bits
-[__GLOBAL_FIRST__] u32 RDH_RDH = $u32 0xFFFF;           // Receive Descriptor Head.
+[__GLOBAL_FIRST__] u32 E1000_RDH_RDH = $u32 0xFFFF;           // Receive Descriptor Head.
 
 // RDT bits
-[__GLOBAL_FIRST__] u32 RDT_RDT = $u32 0xFFFF;           // Receive Descriptor Tail.
+[__GLOBAL_FIRST__] u32 E1000_RDT_RDT = $u32 0xFFFF;           // Receive Descriptor Tail.
 
 // TCTL bits
-[__GLOBAL_FIRST__] u32 TCTL_EN = $u32 0x2;              // Transmit Enable, The transmitter is enabled when this bit is set to 1b. Writing 0b to this bit stops transmission after any in progress packets are sent.
-[__GLOBAL_FIRST__] u32 TCTL_PSP = $u32 0x8;             // Pad Short Packets, 0b = Do not pad. 1b = Pad short packets.
+[__GLOBAL_FIRST__] u32 E1000_TCTL_EN = $u32 0x2;              // Transmit Enable, The transmitter is enabled when this bit is set to 1b. Writing 0b to this bit stops transmission after any in progress packets are sent.
+[__GLOBAL_FIRST__] u32 E1000_TCTL_PSP = $u32 0x8;             // Pad Short Packets, 0b = Do not pad. 1b = Pad short packets.
 
 // TDBAL bits
-[__GLOBAL_FIRST__] u32 TDBAL_TDBAL = $u32 0xFFFFFFF0;   // Transmit Descriptor Base Address Low [31:4].
+[__GLOBAL_FIRST__] u32 E1000_TDBAL_TDBAL = $u32 0xFFFFFFF0;   // Transmit Descriptor Base Address Low [31:4].
 
 // TDH bits
-[__GLOBAL_FIRST__] u32 TDH_TDH = $u32 0xFFFF;           // Transmit Descriptor Head.
+[__GLOBAL_FIRST__] u32 E1000_TDH_TDH = $u32 0xFFFF;           // Transmit Descriptor Head.
 
 // TDT bits
-[__GLOBAL_FIRST__] u32 TDT_TDT = $u32 0xFFFF;           // Transmit Descriptor Tail.
+[__GLOBAL_FIRST__] u32 E1000_TDT_TDT = $u32 0xFFFF;           // Transmit Descriptor Tail.
 
 // receive descriptor (3.2.3)
 struct E1000_RDESC {
@@ -101,7 +107,7 @@ struct E1000_RDESC {
     u16 special;
 }
 
-[__GLOBAL_FIRST__] u8 RDESC_STATUS_DD = $u8 0x1;        // Descriptor Done, Indicates whether hardware is done with the descriptor. When set along with EOP, the received packet is complete in main memory.
+[__GLOBAL_FIRST__] u8 E1000_RDESC_STATUS_DD = $u8 0x1;        // Descriptor Done, Indicates whether hardware is done with the descriptor. When set along with EOP, the received packet is complete in main memory.
 
 // transmit descriptor (3.3.3)
 struct E1000_TDESC {
@@ -114,11 +120,21 @@ struct E1000_TDESC {
     u16 special;
 }
 
-[__GLOBAL_FIRST__] u8 TDESC_CMD_EOP = $u8 0x1;          // End Of Packet, When set, indicates the last descriptor making up the packet. One or many descriptors can be used to form a packet.
-[__GLOBAL_FIRST__] u8 TDESC_CMD_IFCS = $u8 0x2;         // Insert FCS, Controls the insertion of the FCS/CRC field in normal Ethernet packets. IFCS is valid only when EOP is set.
+[__GLOBAL_FIRST__] u8 E1000_TDESC_CMD_EOP = $u8 0x1;          // End Of Packet, When set, indicates the last descriptor making up the packet. One or many descriptors can be used to form a packet.
+[__GLOBAL_FIRST__] u8 E1000_TDESC_CMD_IFCS = $u8 0x2;         // Insert FCS, Controls the insertion of the FCS/CRC field in normal Ethernet packets. IFCS is valid only when EOP is set.
 
 void e1000_init(u64 addr) {
     println("e1000_init() : Beginning NIC initialization");
+
+    e1000 = $E1000* malloc(sizeof(E1000));
+    e1000->eeprom_exists = $u8 0;
+    e1000->mmio_base = 0x0;
+    e1000->irq = $u8 0;
+    e1000->intno = 0x1000;
+    e1000->num_rdesc = $u64 32;
+    e1000->curr_rdesc = $u16 0;
+    e1000->num_tdesc = $u64 32;
+    e1000->curr_tdesc = $u16 0;
 
     NetInterface* nic = $NetInterface* malloc(sizeof(NetInterface));
     memset($void* nic, 0, sizeof(NetInterface));
@@ -138,17 +154,19 @@ void e1000_init(u64 addr) {
     nic->dns_server = $u32 0;
 
     nic->send = #<e1000_send(u8*, u16)>;
+    nic->get_link_state = #<e1000_get_link_status()>;
 
     net_interfaces.push_back(nic);
     CURRENT_INTERFACE = nic;
 
     println("e1000_init() : Finished NIC initialization");
+}
 
-    // REMOVE_ME_LATER
-    if(0) {
-        init_dhcp();
-        e1000_receive_poll();
-    }
+i32 e1000_get_link_status() {
+    u32* status_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_STATUS);
+    u32 temp = *status_ptr & E1000_STATUS_LU;
+    if(temp) return 1;
+    return 0;
 }
 
 void e1000_pci_setup(u64 addr) {
@@ -202,25 +220,26 @@ void e1000_pci_setup(u64 addr) {
     // identity map
     pagetable_t pt = pt_get_current();
     for(u64 vaddr = mmio_base_addr; vaddr < mmio_base_addr + mmio_size; vaddr += PAGE_SIZE) {
-        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
+        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | pte_pat_bits(PAT_UC));
     }
-    MMIO_BASE = mmio_base_addr;
+    e1000->mmio_base = mmio_base_addr;
 
     // command register modifications
     u16 command = pci_hdr->command;
-    command |= $u16 0x2; // Memory Access Enable
-    command |= $u16 0x4; // Enable Mastering
+    command |= $u16 (1 << 1); // Memory Access Enable
+    command |= $u16 (1 << 2); // Enable Mastering
     pci_hdr->command = command;
 
     // read irq line, no safety checks here
-    E1000_IRQ = pci_hdr->interrupt_line;
+    e1000->irq = pci_hdr->interrupt_line;
     print("e1000_pci_setup() : Using IRQ: 0x");
-    print_hex(E1000_IRQ);
+    print_hex(e1000->irq);
     println("");
-    IRQ_clear_mask(E1000_IRQ);
+    IRQ_clear_mask(e1000->irq);
 
     // convert the irq to int vec
-    INTNO_E1000 = IRQ_to_int_vec(E1000_IRQ);
+    e1000->intno = IRQ_to_int_vec(e1000->irq);
+    INTNO_E1000 = e1000->intno;
 
     println("e1000_pci_setup() : Finished PCI setup");
 }
@@ -231,7 +250,7 @@ void e1000_get_mac_address(u8[6]& mac) {
 
     // check if eeprom exists
     e1000_eeprom_check();
-    if(!EEPROM_EXISTS) {
+    if(!e1000->eeprom_exists) {
         panic("e1000_get_mac_address() : No EEPROM detected");
     }
 
@@ -244,7 +263,7 @@ void e1000_get_mac_address(u8[6]& mac) {
         mac[mac_idx++] = $u8 (temp >> $u16 8);
     }
 
-    print("init_e1000() : NIC MAC address is ");
+    print("e1000_get_mac_address() : NIC MAC address is ");
     print("[");
     print_mac_addr(mac);
     print("]");
@@ -259,31 +278,31 @@ void e1000_startup() {
     // general configuration (14.3 in specs)
 
     // disable flow control
-    u32* fcal_ptr = $u32* (MMIO_BASE + $u64 REG_FCAL);
+    u32* fcal_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_FCAL);
     *fcal_ptr = $u32 0x0;
-    u32* fcah_ptr = $u32* (MMIO_BASE + $u64 REG_FCAH);
+    u32* fcah_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_FCAH);
     *fcah_ptr = $u32 0x0;
-    u32* fct_ptr = $u32* (MMIO_BASE + $u64 REG_FCT);
+    u32* fct_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_FCT);
     *fct_ptr = $u32 0x0;
-    u32* fcttv_ptr = $u32* (MMIO_BASE + $u64 REG_FCTTV);
+    u32* fcttv_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_FCTTV);
     *fcttv_ptr = $u32 0x0;
 
     // enable auto speed detection and set link up
     // disable vlans
     // clear link reset
     // clear phy reset
-    u32* ctrl_ptr = $u32* (MMIO_BASE + $u64 REG_CTRL);
+    u32* ctrl_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_CTRL);
     u32 ctrl = *ctrl_ptr;
-    ctrl |= CTRL_ASDE;
-    ctrl |= CTRL_SLU;
-    ctrl &= ~CTRL_VME;
-    ctrl &= ~CTRL_LRST;
-    ctrl &= ~CTRL_PHY_RST;
+    ctrl |= E1000_CTRL_ASDE;
+    ctrl |= E1000_CTRL_SLU;
+    ctrl &= ~E1000_CTRL_VME;
+    ctrl &= ~E1000_CTRL_LRST;
+    ctrl &= ~E1000_CTRL_PHY_RST;
     *ctrl_ptr = ctrl;
 
     // zero out Multicast Table Array
     for(i32 i = 0; i < 128; i++) {
-        u32* mta_ptr = $u32* (MMIO_BASE + $u64 REG_MTA + $u64 (i * 4));
+        u32* mta_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_MTA + $u64 (i * 4));
         *mta_ptr = $u32 0;
     }
 
@@ -294,22 +313,22 @@ void e1000_enable_interrupts() {
     println("e1000_enable_interrupts() : Beginning enabling interrupts");
 
     // register the interrupt vector
-    idt_set_entry($u64 INTNO_E1000, $u64 @network_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
+    idt_set_entry($u64 e1000->intno, $u64 @e1000_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
 
     // register the pic bit
-    IRQ_clear_mask(E1000_IRQ);
+    IRQ_clear_mask(e1000->irq);
 
     // disable all interrupts
-    u32* imc_ptr = $u32* (MMIO_BASE + $u64 REG_IMC);
+    u32* imc_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_IMC);
     *imc_ptr = $u32 0xFFFF;
 
     // clear pending interrupts
-    u32* icr_ptr = $u32* (MMIO_BASE + $u64 REG_ICR);
+    u32* icr_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_ICR);
     u32 dummy = *icr_ptr;
 
     // configure Interrupt Mask
-    u32* ims_ptr = $u32* (MMIO_BASE + $u64 REG_IMS);
-    u32 ims = IMS_LSC | IMS_RXT0;
+    u32* ims_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_IMS);
+    u32 ims = E1000_IMS_LSC | E1000_IMS_RXT0;
     *ims_ptr = ims;
 
     println("e1000_enable_interrupts() : Finished enabling interrupts");
@@ -317,16 +336,16 @@ void e1000_enable_interrupts() {
 
 void e1000_eeprom_check() {
     println("e1000_eeprom_check() : Beginning checking NIC EEPROM");
-    u32* eerd_ptr = $u32* (MMIO_BASE + $u64 REG_EERD + $u64 EERD_START);
+    u32* eerd_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_EERD + $u64 E1000_EERD_START);
     *eerd_ptr = $u32 0x1; // set start bit
     for(i32 i = 0; i < 10000; i++) {
         u32 val = *eerd_ptr;
-        if(val & EERD_DONE) { // check for done bit
-            EEPROM_EXISTS = $u8 0x1;
+        if(val & E1000_EERD_DONE) { // check for done bit
+            e1000->eeprom_exists = $u8 0x1;
         }
     }
 
-    if(EEPROM_EXISTS) {
+    if(e1000->eeprom_exists) {
         println("e1000_eeprom_check() : EEPROM found");
     } else {
         println("e1000_eeprom_check() : EEPROM not found");
@@ -336,24 +355,24 @@ void e1000_eeprom_check() {
 }
 
 u16 e1000_eeprom_read(u8 addr) {
-    if(!EEPROM_EXISTS) {
+    if(!e1000->eeprom_exists) {
         return $u16 0x0;
     }
 
     u16 data = $u16 0x0;
-    u32* eerd_ptr = $u32* (MMIO_BASE + $u64 REG_EERD + $u64 EERD_START);
+    u32* eerd_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_EERD + $u64 E1000_EERD_START);
     u32 command = (($u32 addr) << $u32 8) | $u32 0x1; // set address bits and start bit
     *eerd_ptr = command;
 
     u32 temp = $u32 0x0;
     while(0x1) {
         temp = *eerd_ptr;
-        if(temp & EERD_DONE) {
+        if(temp & E1000_EERD_DONE) {
             break;
         }
     }
 
-    data = $u16 ((temp & EERD_DATA) >> $u32 16);
+    data = $u16 ((temp & E1000_EERD_DATA) >> $u32 16);
     return data;
 }
 
@@ -363,37 +382,37 @@ void e1000_init_rx() {
     // allocate ring memory
     void* ring_base = palloc();
     memset(ring_base, 0, PAGE_SIZE);
-    RDESC_RING = $E1000_RDESC* ring_base;
+    e1000->rdesc_ring = $E1000_RDESC* ring_base;
 
     // fill ring with buffer addresses
-    for(u64 i = 0x0; i < E1000_NUM_RDESC; i++) {
+    for(u64 i = 0x0; i < e1000->num_rdesc; i++) {
         void* buffer_page = palloc();
         memset(buffer_page, 0, PAGE_SIZE);
 
-        RDESC_RING[i].addr = $u64 buffer_page;
-        RDESC_RING[i].status = $u8 0;
+        e1000->rdesc_ring[i].addr = $u64 buffer_page;
+        e1000->rdesc_ring[i].status = $u8 0;
     }
 
     // write ring address
-    u32* rdbal_ptr = $u32* (MMIO_BASE + $u64 REG_RDBAL);
-    *rdbal_ptr = $u32 ($u64 RDESC_RING);
-    u32* rdbah_ptr = $u32* (MMIO_BASE + $u64 REG_RDBAH);
-    *rdbah_ptr = $u32 (($u64 RDESC_RING) >> $u64 32);
+    u32* rdbal_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDBAL);
+    *rdbal_ptr = $u32 ($u64 e1000->rdesc_ring);
+    u32* rdbah_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDBAH);
+    *rdbah_ptr = $u32 (($u64 e1000->rdesc_ring) >> $u64 32);
 
     // write ring length
-    u32* rdlen_ptr = $u32* (MMIO_BASE + $u64 REG_RDLEN);
-    *rdlen_ptr = $u32 (sizeof(E1000_RDESC) * E1000_NUM_RDESC);
+    u32* rdlen_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDLEN);
+    *rdlen_ptr = $u32 (sizeof(E1000_RDESC) * e1000->num_rdesc);
 
     // write head and tail
-    u32* rdh_ptr = $u32* (MMIO_BASE + $u64 REG_RDH);
-    *rdh_ptr = RDH_RDH & $u32 0;
-    u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
-    *rdt_ptr = RDT_RDT & $u32 (E1000_NUM_RDESC - 0x1);
+    u32* rdh_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDH);
+    *rdh_ptr = E1000_RDH_RDH & $u32 0;
+    u32* rdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDT);
+    *rdt_ptr = E1000_RDT_RDT & $u32 (e1000->num_rdesc - 0x1);
 
     // enable receiver
-    u32* rctl_ptr = $u32* (MMIO_BASE + $u64 REG_RCTL);
-    u32 rctl = (RCTL_EN | RCTL_MPE | RCTL_BAM | RCTL_SECRC);
-    rctl &= ~(RCTL_BSIZE | RCTL_BSEX);
+    u32* rctl_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RCTL);
+    u32 rctl = (E1000_RCTL_EN | E1000_RCTL_MPE | E1000_RCTL_BAM | E1000_RCTL_SECRC);
+    rctl &= ~(E1000_RCTL_BSIZE | E1000_RCTL_BSEX);
     *rctl_ptr = rctl;
 
     println("e1000_init_rx() : Finished RX initialization");
@@ -405,37 +424,37 @@ void e1000_init_tx() {
     // allocate ring memory
     void* ring_base = palloc();
     memset(ring_base, 0, PAGE_SIZE);
-    TDESC_RING = $E1000_TDESC* ring_base;
+    e1000->TDESC_RING = $E1000_TDESC* ring_base;
 
     // fill ring with buffer addresses
-    for(u64 i = 0x0; i < E1000_NUM_TX_DESC; i++) {
+    for(u64 i = 0x0; i < e1000->num_tdesc; i++) {
         void* buffer_page = palloc();
         memset(buffer_page, 0, PAGE_SIZE);
 
-        TDESC_RING[i].addr = $u64 buffer_page;
-        TDESC_RING[i].cmd = $u8 0;
-        TDESC_RING[i].status = $u8 1;
+        e1000->TDESC_RING[i].addr = $u64 buffer_page;
+        e1000->TDESC_RING[i].cmd = $u8 0;
+        e1000->TDESC_RING[i].status = $u8 1;
     }
 
     // write ring address
-    u32* tdbal_ptr = $u32* (MMIO_BASE + $u64 REG_TDBAL);
-    *tdbal_ptr = $u32 ($u64 TDESC_RING);
-    u32* tdbah_ptr = $u32* (MMIO_BASE + $u64 REG_TDBAH);
-    *tdbah_ptr = $u32 (($u64 TDESC_RING) >> $u64 32);
+    u32* tdbal_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TDBAL);
+    *tdbal_ptr = $u32 ($u64 e1000->TDESC_RING);
+    u32* tdbah_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TDBAH);
+    *tdbah_ptr = $u32 (($u64 e1000->TDESC_RING) >> $u64 32);
 
     // write ring length
-    u32* tdlen_ptr = $u32* (MMIO_BASE + $u64 REG_TDLEN);
-    *tdlen_ptr = $u32 (sizeof(E1000_TDESC) * E1000_NUM_TX_DESC);
+    u32* tdlen_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TDLEN);
+    *tdlen_ptr = $u32 (sizeof(E1000_TDESC) * e1000->num_tdesc);
 
     // write head and tail
-    u32* tdh_ptr = $u32* (MMIO_BASE + $u64 REG_TDH);
-    *tdh_ptr = TDH_TDH & $u32 0;
-    u32* tdt_ptr = $u32* (MMIO_BASE + $u64 REG_TDT);
-    *tdt_ptr = TDT_TDT & $u32 0;
+    u32* tdh_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TDH);
+    *tdh_ptr = E1000_TDH_TDH & $u32 0;
+    u32* tdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TDT);
+    *tdt_ptr = E1000_TDT_TDT & $u32 0;
 
     // enable transmitter
-    u32* tctl_ptr = $u32* (MMIO_BASE + $u64 REG_TCTL);
-    u32 tctl = (TCTL_EN | TCTL_PSP);
+    u32* tctl_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TCTL);
+    u32 tctl = (E1000_TCTL_EN | E1000_TCTL_PSP);
     *tctl_ptr = tctl;
 
     println("e1000_init_tx() : Finished TX initialization");
@@ -447,74 +466,74 @@ void e1000_send(u8* data, u16 len) {
     println("e1000_send() : Beginning send operation");
 
     // get tail index from hardware
-    u32* tdt_ptr = $u32* (MMIO_BASE + $u64 REG_TDT);
-    u32 tx_idx = *tdt_ptr & TDT_TDT;
+    u32* tdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TDT);
+    u32 tx_idx = *tdt_ptr & E1000_TDT_TDT;
 
     // fill descriptor
-    memcpy($void* TDESC_RING[tx_idx].addr, $void* data, $u64 len);
-    TDESC_RING[tx_idx].length = len;
+    memcpy($void* e1000->TDESC_RING[tx_idx].addr, $void* data, $u64 len);
+    e1000->TDESC_RING[tx_idx].length = len;
 
     // set command bits
-    TDESC_RING[tx_idx].cmd = (TDESC_CMD_EOP | TDESC_CMD_IFCS);
+    e1000->TDESC_RING[tx_idx].cmd = (E1000_TDESC_CMD_EOP | E1000_TDESC_CMD_IFCS);
 
     // clear status
-    TDESC_RING[tx_idx].status = $u8 0;
+    e1000->TDESC_RING[tx_idx].status = $u8 0;
 
     // move the tail
-    u32 next_idx = (tx_idx + $u32 1) % $u32 E1000_NUM_TX_DESC;
+    u32 next_idx = (tx_idx + $u32 1) % $u32 e1000->num_tdesc;
     *tdt_ptr = next_idx;
 
-    println("e1000_send() : Beginning send operation");
+    println("e1000_send() : Finished send operation");
 }
 
 void e1000_receive_poll() {
     println("e1000_receive_poll() : Polling receive");
 
-    u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
+    u32* rdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDT);
     
     while(1) {
-        u8 status = RDESC_RING[CURR_RDESC].status;
+        u8 status = e1000->rdesc_ring[e1000->curr_rdesc].status;
 
-        if((status & RDESC_STATUS_DD) != $u8 0) {
-            u16 len = RDESC_RING[CURR_RDESC].length;
-            u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
+        if((status & E1000_RDESC_STATUS_DD) != $u8 0) {
+            u16 len = e1000->rdesc_ring[e1000->curr_rdesc].length;
+            u8* buffer = $u8* e1000->rdesc_ring[e1000->curr_rdesc].addr;
 
             println("e1000_receive_poll() : Frame received");
             ethernet_handle_frame(buffer, len);
 
-            RDESC_RING[CURR_RDESC].status = $u8 0;
-            *rdt_ptr = $u32 CURR_RDESC;
-            CURR_RDESC = (CURR_RDESC + $u16 1) % $u16 E1000_NUM_RDESC;
+            e1000->rdesc_ring[e1000->curr_rdesc].status = $u8 0;
+            *rdt_ptr = $u32 e1000->curr_rdesc;
+            e1000->curr_rdesc = (e1000->curr_rdesc + $u16 1) % $u16 e1000->num_rdesc;
         }
     }
 }
 
 void e1000_handle_receive() {
     println("e1000_handle_receive() : Handling frame receive");
-    u32* rdt_ptr = $u32* (MMIO_BASE + $u64 REG_RDT);
+    u32* rdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDT);
 
-    while((RDESC_RING[CURR_RDESC].status & RDESC_STATUS_DD) != $u8 0) {
+    while((e1000->rdesc_ring[e1000->curr_rdesc].status & E1000_RDESC_STATUS_DD) != $u8 0) {
 
-        u16 len = RDESC_RING[CURR_RDESC].length;
-        u8* buffer = $u8* RDESC_RING[CURR_RDESC].addr;
+        u16 len = e1000->rdesc_ring[e1000->curr_rdesc].length;
+        u8* buffer = $u8* e1000->rdesc_ring[e1000->curr_rdesc].addr;
 
         ethernet_handle_frame(buffer, len);
 
-        RDESC_RING[CURR_RDESC].status = $u8 0;
-        *rdt_ptr = $u32 CURR_RDESC;
-        CURR_RDESC = (CURR_RDESC + $u16 1) % $u16 E1000_NUM_RDESC;
+        e1000->rdesc_ring[e1000->curr_rdesc].status = $u8 0;
+        *rdt_ptr = $u32 e1000->curr_rdesc;
+        e1000->curr_rdesc = (e1000->curr_rdesc + $u16 1) % $u16 e1000->num_rdesc;
     }
 }
 
 void e1000_interrupt_handler(trapframe* tf) {
-    u32* icr_ptr = $u32* (MMIO_BASE + $u64 REG_ICR);
+    u32* icr_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_ICR);
     u32 status = *icr_ptr;
 
-    if(status & IMS_LSC) {
+    if(status & E1000_IMS_LSC) {
         println("e1000_interrupt_handler() : Link status changed");
     }
 
-    if(status & IMS_RXT0) {
+    if(status & E1000_IMS_RXT0) {
         println("e1000_interrupt_handler() : Frame received");
         e1000_handle_receive();
     }

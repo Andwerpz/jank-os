@@ -468,7 +468,7 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
     pt_switch_to_kernel();
 
     // For later, rn i only support ipv4
-    if(domain != AF_INET) {
+    if(domain != $i32 AF_INET) {
         pt_switch(user_pt);
         return -ERR_AFNOSUPPORT;
     }

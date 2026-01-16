@@ -466,9 +466,18 @@ void init_mcfg(MCFG* mcfg) {
                     u8 subclass = ($u8* addr)[0x0A];
                     u8 progif   = ($u8* addr)[0x09];
 
-                    if (vendor_id == INTEL_VEND && device_id == E1000_DEV) {
-                        // found intel e1000 nic
-                        e1000_init(addr);
+                    if (vendor_id == INTEL_VEND) {
+                        if(device_id == E1000_DEV) {
+                            // found intel e1000 nic
+                            e1000_init(addr);
+                        }
+                    }
+
+                    if(vendor_id == REALTEK_VEND) {
+                        if(device_id == RTL8168_DEV) {
+                            // found realtek ethernet
+                            rtl8111_init(addr);
+                        }
                     }
 
                     if(class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {

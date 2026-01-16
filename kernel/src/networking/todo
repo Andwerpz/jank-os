@@ -5,6 +5,7 @@ NOW
 - TEST SYSCALLS AND FILE OPS
 - add syscall flag handling
 - make a way to prevent kerenl faults when a networking device DNE. (mostly user mode?)
+- add timeout to link state check on init dhcp
 
 LATER
 - DNS
