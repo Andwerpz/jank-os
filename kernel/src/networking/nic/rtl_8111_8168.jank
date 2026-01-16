@@ -22,8 +22,10 @@ struct RTL8111 {
 
 [__GLOBAL_FIRST__] u64 RTL8111_MAC_CR_PHYAR = 0x60;                     // PHY Access Register
 [__GLOBAL_FIRST__] u32 RTL8111_MAC_CR_PHYAR_Flag = $u32 (1 << 31);      // 1: Write data to MII register. 0: Read data from MII register. bit will flip when done.
+[__GLOBAL_FIRST__] u8 RTL8111_PHY_BMCR = $u8 0x0;                       // Basic mode control register
+[__GLOBAL_FIRST__] u16 RTL8111_PHY_BMCR_Reset = $u16 (1 << 15);         // Reset. 1: Initiate software Reset / Reset in Process. 0: Normal operation.
 [__GLOBAL_FIRST__] u8 RTL8111_PHY_BMSR = $u8 0x1;                       // Basic mode status register
-[__GLOBAL_FIRST__] u16 RTL8111_PHY_BMSR_Link_Status = $u16 (1 << 2);    // Basic mode status register
+[__GLOBAL_FIRST__] u16 RTL8111_PHY_BMSR_Link_Status = $u16 (1 << 2);    // 1: Link is up. 0: Link is down. This bit indicates if link was lost since the last read.
 
 [__GLOBAL_FIRST__] u64 RTL8111_MAC_RDSAR = 0xE4;                        // Receive Descriptor Start Address Register (256-byte alignment)
 [__GLOBAL_FIRST__] u64 RTL8111_MAC_RCR = 0x44;                          // Receive (Rx) Configuration Register
@@ -90,7 +92,8 @@ void rtl8111_init(u64 addr) {
     rtl8111_get_mac_address(nic->mac_address);
     rtl8111_init_rx();
     rtl8111_init_tx();
-    rtl8111_enable_interrupts(); // where to place this?
+    rtl8111_enable_interrupts();
+    rtl8111_enable_tx_rx();
 
     nic->ip_address = $u32 0;
     nic->subnet_mask = $u32 0;
@@ -105,7 +108,14 @@ void rtl8111_init(u64 addr) {
     CURRENT_INTERFACE = nic;
 }
 
+void rtl8111_enable_tx_rx() {
+    // Enable tx and rx
+    u8* cr = $u8* (rtl8111->mmio_base + RTL8111_MAC_CR);
+    *cr |= (RTL8111_MAC_CR_RE | RTL8111_MAC_CR_TE);
+}
+
 void rtl8111_interrupt_handler(trapframe* tf) {
+    println("INT RTL8111");
     u16* isr = $u16* (rtl8111->mmio_base + RTL8111_MAC_ISR);
     u16 status = *isr;
 
@@ -304,8 +314,9 @@ void rtl8111_startup() {
         // spin
     }
 
-    // Enable tx and rx
-    *cr |= (RTL8111_MAC_CR_RE | RTL8111_MAC_CR_TE);
+    // PHY Reset
+    rtl8111_write_phy(RTL8111_PHY_BMCR, RTL8111_PHY_BMCR_Reset);
+    while((rtl8111_read_phy(RTL8111_PHY_BMCR) & RTL8111_PHY_BMCR_Reset) != $u16 0) {}
 
     println("rtl8111_startup() : Finished general intialization");
 }
@@ -405,7 +416,7 @@ void rtl8111_pci_setup(u64 addr) {
     pci_hdr->command = command;
 
     // Enabling MSI-(X?)
-    // assert(pci_enable_msix(pci_hdr, $u8 INTNO_RTL8111) == 0, "rtl8111_pci_setup() : Failed to enable MSI-X");
+    assert(pci_enable_msix(pci_hdr, $u8 INTNO_RTL8111) != 0, "rtl8111_pci_setup() : Failed to disable MSI-X");
     assert(pci_enable_msi(pci_hdr, $u8 INTNO_RTL8111) == 0, "rtl8111_pci_setup() : Failed to enable MSI");
 
     println("rtl8111_pci_setup() : Finished PCI setup");
