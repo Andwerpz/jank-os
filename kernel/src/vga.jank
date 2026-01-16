@@ -19,9 +19,8 @@
 
 [__GLOBAL_FIRST__] extern u8 _binary_font_psf_start;
 
-[__GLOBAL_FIRST__] u32* VGA_STAGING_BUF = $u32* nullptr;
-[__GLOBAL_FIRST__] u64 VGA_STAGING_LINE_OFF;
-[__GLOBAL_FIRST__] u64 VGA_STAGING_HEIGHT;
+[__GLOBAL_FIRST__] vga_scroll_buffer* VGA_KERNEL_SCROLL_BUFFER;
+[__GLOBAL_FIRST__] vga_scroll_buffer* VGA_USER_SCROLL_BUFFER;
 
 struct psf_header {
     u32 magic;
@@ -48,13 +47,18 @@ void init_vga() {
         }
     }
 
-    //allocate staging buffer
-    VGA_STAGING_HEIGHT = VGA_FB_HEIGHT * $u64 16;
-    VGA_STAGING_LINE_OFF = 0x0;
-    VGA_STAGING_BUF = $u32* malloc(sizeof(u32) * VGA_FB_SCANLINE * VGA_STAGING_HEIGHT);
+    //allocate user and kernel staging buffers
+    VGA_KERNEL_SCROLL_BUFFER = $vga_scroll_buffer* malloc(sizeof(vga_scroll_buffer));
+    VGA_USER_SCROLL_BUFFER = $vga_scroll_buffer* malloc(sizeof(vga_scroll_buffer));
+    if(DEBUG_MODE) {
+        new (VGA_KERNEL_SCROLL_BUFFER) vga_scroll_buffer(VGA_FB_WIDTH / 0x2, VGA_FB_WIDTH / 0x2);
+        new (VGA_USER_SCROLL_BUFFER) vga_scroll_buffer(VGA_FB_WIDTH / 0x2, 0x0);
+    }
+    else {
+        new (VGA_KERNEL_SCROLL_BUFFER) vga_scroll_buffer(VGA_FB_WIDTH, 0x0);
+        new (VGA_USER_SCROLL_BUFFER) vga_scroll_buffer(VGA_FB_WIDTH, 0x0);
+    }
 
-    //copy everything from current FB to staging buffer
-    memcpy($void* VGA_STAGING_BUF, $void* VGA_FB, sizeof(u32) * VGA_FB_SCANLINE * VGA_FB_HEIGHT);
 
     VGA_DID_INIT = 1;
     println("done init vga");
@@ -69,103 +73,138 @@ void vga_debug_draw_char(u8 c) {
         VGA_DEBUG_CURSOR_COL = 0x0;
         VGA_DEBUG_CURSOR_ROW ++;
         if(VGA_DEBUG_CURSOR_ROW == (VGA_FB_HEIGHT / $u64 font->height)) {
-            vga_shift_up($u64 font->height);
+            VGA_KERNEL_SCROLL_BUFFER->shift_up($u64 font->height);
             VGA_DEBUG_CURSOR_ROW --;
         }
-        vga_flush();
+
+        if(!SCHEDULER_STARTED) {
+            VGA_KERNEL_SCROLL_BUFFER->flush();
+        }
     }
     else {  
-        vga_draw_char(VGA_DEBUG_CURSOR_COL * $u64 font->width, VGA_DEBUG_CURSOR_ROW * $u64 font->height, c, COLOR_BLACK, COLOR_WHITE);
+        VGA_KERNEL_SCROLL_BUFFER->draw_char(VGA_DEBUG_CURSOR_COL * $u64 font->width, VGA_DEBUG_CURSOR_ROW * $u64 font->height, c, COLOR_BLACK, COLOR_WHITE);
         VGA_DEBUG_CURSOR_COL ++;
-    }
-}
-
-//flush whatever is in the staging buffer into the actual VGA buffer
-void vga_flush() {
-    assert(VGA_STAGING_LINE_OFF < VGA_STAGING_HEIGHT, "vga_flush() : invalid staging offset");
-    if(VGA_STAGING_LINE_OFF + VGA_FB_HEIGHT > VGA_STAGING_HEIGHT) {
-        // wrapping
-        u64 bef_wrap = VGA_STAGING_HEIGHT - VGA_STAGING_LINE_OFF;
-        memcpy($void* VGA_FB, $void* (@VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * bef_wrap);
-        memcpy($void* @(VGA_FB[bef_wrap * VGA_FB_SCANLINE]), $void* VGA_STAGING_BUF, sizeof(u32) * VGA_FB_SCANLINE * (VGA_FB_HEIGHT - bef_wrap));
-    }
-    else {
-        // no wrap
-        memcpy($void* VGA_FB, $void* @(VGA_STAGING_BUF[VGA_STAGING_LINE_OFF * VGA_FB_SCANLINE]), sizeof(u32) * VGA_FB_SCANLINE * VGA_FB_HEIGHT);
-    }
-}
-
-void vga_draw_pixel(u64 x, u64 y, u32 color) {
-    VGA_STAGING_BUF[VGA_FB_SCANLINE * ((VGA_STAGING_LINE_OFF + y) % VGA_STAGING_HEIGHT) + x] = color;
-}
-
-//top left corner positioned at (x, y)
-//the bits within each byte are big endian, but the bytes themselves are little endian. 
-void vga_draw_char(u64 x, u64 y, u8 c, u32 bg_col, u32 fg_col) {
-    psf_header* font = $psf_header* @_binary_font_psf_start;
-    u64 bpl = ($u64 font->width + $u64 7) / $u64 8;
-    u8* glyph = $u8* ($u64 font + $u64 font->headersize + $u64 font->bytesperglyph * $u64 c);
-    for(i32 j = 0; j < $i32 font->height; j++){
-        u64 line = ($u64* @(glyph[bpl * $u64 j]))[0];
-        for(i32 i = 0; i < $i32 font->width; i++){
-            if(line & ($u64 1 << ($u64 font->width - $u64 1 - $u64 i))) {
-                //foreground
-                vga_draw_pixel(x + $u64 i, y + $u64 j, fg_col);
-            }
-            else {
-                //background
-                vga_draw_pixel(x + $u64 i, y + $u64 j, bg_col);
-            }
+        if(VGA_DEBUG_CURSOR_COL == (VGA_KERNEL_SCROLL_BUFFER->width / $u64 font->width)) {
+            VGA_DEBUG_CURSOR_ROW ++;
+        }
+        if(VGA_DEBUG_CURSOR_ROW == (VGA_FB_HEIGHT / $u64 font->height)) {
+            VGA_KERNEL_SCROLL_BUFFER->shift_up($u64 font->height);
+            VGA_DEBUG_CURSOR_ROW --;
         }
     }
 }
 
-void vga_clear_lines(u64 start, u64 end) {
-    assert(start < end, "vga_clear_lines() : start must be <= end");
-    assert(end <= VGA_FB_HEIGHT, "vga_clear_lines() : end out of bounds");
-    start = (start + VGA_STAGING_LINE_OFF) % VGA_STAGING_HEIGHT;
-    end = (end + VGA_STAGING_LINE_OFF) % VGA_STAGING_HEIGHT;
+//flush whatever is in the staging buffers into the actual VGA framebuffer
+void vga_flush() {
+    assert(VGA_DID_INIT, "vga_flush() : need init vga to complete");
+    VGA_USER_SCROLL_BUFFER->flush();
+    if(DEBUG_MODE || !SCHEDULER_STARTED) VGA_KERNEL_SCROLL_BUFFER->flush();
+}
 
-    if(start < end) {
-        //no wrap
-        memset($void* @(VGA_STAGING_BUF[start * VGA_FB_SCANLINE]), 0, sizeof(u32) * (end - start) * VGA_FB_SCANLINE);
+// -- VGA SCROLL BUFFER -- 
+//owns a contiguous horizontal section of the screen
+struct vga_scroll_buffer {
+    u64 width; 
+    u64 offset;         //horizontal offset from left
+    u64 height;         //total height of the scroll buffer
+    u32* buf;
+    u64 line_offset;    //logical start of the screen within the scroll buffer
+
+    vga_scroll_buffer() {
+        panic("vga_scroll_buffer() : no use default constructor");
     }
-    else {
-        //wrap
-        memset($void* @(VGA_STAGING_BUF[start * VGA_FB_SCANLINE]), 0, sizeof(u32) * (VGA_STAGING_HEIGHT - start) * VGA_FB_SCANLINE);
-        memset($void* VGA_STAGING_BUF, 0, sizeof(u32) * end * VGA_FB_SCANLINE);
+
+    vga_scroll_buffer(u64 width, u64 offset) {
+        assert(width + offset <= VGA_FB_WIDTH, "vga_scroll_buffer() : buffer going offscreen");
+        assert(width > 0x0, "vga_scroll_buffer() : can\'t have buffer with 0 width");
+        this.width = width;
+        this.offset = offset;
+        this.height = VGA_FB_HEIGHT * ($u64 16);
+        this.buf = $u32* malloc(sizeof(u32) * this.width * this.height);
+        memset($void* this.buf, 0, sizeof(u32) * this.width * this.height);
+        this.line_offset = 0x0;
     }
-}
 
-void vga_clear_screen() {
-    vga_clear_lines(0x0, VGA_FB_HEIGHT);
-}
+    ~vga_scroll_buffer() {
+        free($void* this.buf, sizeof(u32) * this.width * this.height);
+    }
 
-//shifts whatever is currently drawn down by some amount of lines
-//clears top lines
-void vga_shift_down(u64 lines) {
-    assert(VGA_DID_INIT, "vga_shift_down() : vga should init before using this");
-    assert(lines <= VGA_FB_HEIGHT, "vga_shift_down() : shift too large");
+    void shift_down(u64 lines) {
+        assert(lines <= VGA_FB_HEIGHT, "vga_scroll_buffer::shift_down() : shift too large");
 
-    //do shift
-    if(VGA_STAGING_LINE_OFF >= lines) VGA_STAGING_LINE_OFF -= lines;
-    else VGA_STAGING_LINE_OFF = VGA_STAGING_HEIGHT - lines + VGA_STAGING_LINE_OFF;
+        //do shift
+        if(this.line_offset >= lines) this.line_offset -= lines;
+        else this.line_offset = this.line_offset - lines + this.height;
 
-    //clear top lines
-    vga_clear_lines(0x0, lines);
-}
+        //clear top lines
+        this.clear_lines(0x0, lines);
+    }
+    
+    void shift_up(u64 lines) {
+        assert(lines <= VGA_FB_HEIGHT, "vga_scroll_buffer::shift_up() : shift too large");
 
-//shifts whatever is currently drawn up by some amount of lines
-//clears bottom lines
-void vga_shift_up(u64 lines) {
-    assert(VGA_DID_INIT, "vga_shift_up() : vga should init before using this");
-    assert(lines <= VGA_FB_HEIGHT, "vga_shift_up() : shift too large");
+        //do shift
+        this.line_offset = (this.line_offset + lines) % this.height;
 
-    //do shift
-    VGA_STAGING_LINE_OFF = (VGA_STAGING_LINE_OFF + lines) % VGA_STAGING_HEIGHT;
+        //clear bottom lines
+        this.clear_lines(VGA_FB_HEIGHT - lines, VGA_FB_HEIGHT);
+    }
 
-    //clear bottom lines
-    vga_clear_lines(VGA_FB_HEIGHT - lines, VGA_FB_HEIGHT);
+    void clear_lines(u64 start, u64 end) {
+        assert(start < end, "vga_scroll_buffer::clear_lines() : start must be <= end");
+        assert(end <= VGA_FB_HEIGHT, "vga_scroll_buffer::clear_lines() : end out of bounds");
+        start = (start + this.line_offset) % this.height;
+        end = (end + this.line_offset) % this.height;
+
+        if(start < end) {
+            //no wrap
+            memset($void* @(this.buf[start * this.width]), 0, sizeof(u32) * (end - start) * this.width);
+        }
+        else {
+            //wrap
+            memset($void* @(this.buf[start * this.width]), 0, sizeof(u32) * (this.height - start) * this.width);
+            memset($void* this.buf, 0, sizeof(u32) * end * this.width);
+        }
+    }
+
+    void clear_screen() {
+        this.clear_lines(0x0, VGA_FB_HEIGHT);
+    }
+
+    void draw_pixel(u64 x, u64 y, u32 color) {
+        this.buf[this.width * ((this.line_offset + y) % this.height) + x] = color;
+    }
+
+    void draw_char(u64 x, u64 y, u8 c, u32 bg_col, u32 fg_col) {
+        psf_header* font = $psf_header* @_binary_font_psf_start;
+        assert(x + $u64 font->width <= this.width && y + $u64 font->height <= VGA_FB_HEIGHT, "vga_scroll_buffer::draw_char() : glyph out of bounds");
+        u64 bpl = ($u64 font->width + $u64 7) / $u64 8;
+        u8* glyph = $u8* ($u64 font + $u64 font->headersize + $u64 font->bytesperglyph * $u64 c);
+        for(i32 j = 0; j < $i32 font->height; j++){
+            u64 line = ($u64* @(glyph[bpl * $u64 j]))[0];
+            for(i32 i = 0; i < $i32 font->width; i++){
+                if(line & ($u64 1 << ($u64 font->width - $u64 1 - $u64 i))) {
+                    //foreground
+                    this.buf[this.width * ((this.line_offset + y + $u64 j) % this.height) + x + $u64 i] = fg_col;
+                }
+                else {
+                    //background
+                    this.buf[this.width * ((this.line_offset + y + $u64 j) % this.height) + x + $u64 i] = bg_col;
+                }
+            }
+        }
+    }
+
+    //flushes the contents of this buffer to the VGA FB
+    void flush() {
+        for(u64 i = 0x0; i < VGA_FB_HEIGHT; i++) {
+            memcpy(
+                $void* ($u64 VGA_FB + sizeof(u32) * (VGA_FB_SCANLINE * i + this.offset)), 
+                $void* @(this.buf[((this.line_offset + i) % this.height) * this.width]), 
+                sizeof(u32) * this.width
+            );
+        }
+    }
 }
 
 
@@ -205,7 +244,7 @@ struct vga_terminal {
         psf_header* font = $psf_header* @_binary_font_psf_start;
         this.parse_bptr = 0x0;
         this.grid_rows = $u64 VGA_FB_HEIGHT / $u64 font->height;
-        this.grid_cols = $u64 VGA_FB_WIDTH / $u64 font->width;
+        this.grid_cols = $u64 VGA_USER_SCROLL_BUFFER->width / $u64 font->width;
         this.cursor_row = 0x0;
         this.cursor_col = 0x0;
 
@@ -227,7 +266,7 @@ void vga_terminal_clear_screen(vga_terminal* term) {
         vga_cell* cell = @(term->cells[i]);
         cell->char = ' ';
     }
-    vga_clear_screen();
+    VGA_USER_SCROLL_BUFFER->clear_screen();
 }
 
 //scrolls the terminal up one row, makes the bottom row empty
@@ -247,7 +286,7 @@ void vga_terminal_scroll_up(vga_terminal* term) {
 
     //visual scroll
     psf_header* font = $psf_header* @_binary_font_psf_start;
-    vga_shift_up($u64 font->height);
+    VGA_USER_SCROLL_BUFFER->shift_up($u64 font->height);
 }
 
 //if col is outside the grid, wraps it around
@@ -290,7 +329,7 @@ void vga_terminal_draw_char(vga_terminal* term, u8 c) {
     psf_header* font = $psf_header* @_binary_font_psf_start;
     u64 x = term->cursor_col * $u64 font->width;
     u64 y = term->cursor_row * $u64 font->height;
-    vga_draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
+    VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
 
     //update grid cell
     vga_cell* cell = @(term->cells[term->cursor_row * term->grid_cols + term->cursor_col]);
@@ -516,7 +555,7 @@ void vga_terminal_accept_str(vga_terminal* term, u8* buf, u64 amt) {
         u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
         u64 x = term->cursor_col * $u64 font->width;
         u64 y = term->cursor_row * $u64 font->height;
-        vga_draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
+        VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
     }
 
     //accept all chars
@@ -530,7 +569,7 @@ void vga_terminal_accept_str(vga_terminal* term, u8* buf, u64 amt) {
         u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
         u64 x = term->cursor_col * $u64 font->width;
         u64 y = term->cursor_row * $u64 font->height;
-        vga_draw_char(x, y, c, COLOR_WHITE, COLOR_BLACK);
+        VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, COLOR_WHITE, COLOR_BLACK);
     }
 }
 
