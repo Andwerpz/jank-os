@@ -375,7 +375,7 @@ void init_scheduler() {
     create_process(new string("/bin/sys/init"));
 
     //get ready for scheduler
-    disable_vga_print();
+    // disable_vga_print();
     SCHEDULER_STARTED = 1;
 
     //point %rsp to top of kernel stack
