@@ -228,17 +228,20 @@ void cpu_cache_flush(void* addr, u64 size) {
     asm!("mfence");
 }
 
+[__GLOBAL_FIRST__] i32 DEBUG_MODE = 0;
 [__GLOBAL_FIRST__] i32 DO_VGA_PRINT = 1;
 void disable_vga_print() {
-    DO_VGA_PRINT = 0;
-    vga_clear_screen();
+    if(!DEBUG_MODE) {
+        DO_VGA_PRINT = 0;
+    }
 }
 
 void enable_vga_print() {
-    DO_VGA_PRINT = 1;
-    VGA_DEBUG_CURSOR_ROW = 0x0;
-    VGA_DEBUG_CURSOR_COL = 0x0;
-    vga_clear_screen();
+    if(!DEBUG_MODE) {
+        DO_VGA_PRINT = 1;
+        VGA_DEBUG_CURSOR_COL = 0x0;
+        VGA_DEBUG_CURSOR_ROW = 0x0;
+    }
 }
 
 void print(u8 c) {
