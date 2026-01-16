@@ -115,7 +115,6 @@ void rtl8111_enable_tx_rx() {
 }
 
 void rtl8111_interrupt_handler(trapframe* tf) {
-    println("INT RTL8111");
     u16* isr = $u16* (rtl8111->mmio_base + RTL8111_MAC_ISR);
     u16 status = *isr;
 
@@ -310,7 +309,7 @@ void rtl8111_startup() {
     // Initiate software reset
     u8* cr = $u8* (rtl8111->mmio_base + RTL8111_MAC_CR);
     *cr |= RTL8111_MAC_CR_RST;
-    while((*cr & RTL8111_MAC_CR_RST) == $u8 1) {
+    while((*cr & RTL8111_MAC_CR_RST) != $u8 0) {
         // spin
     }
 
@@ -349,7 +348,7 @@ void rtl8111_write_phy(u8 reg, u16 data) {
     temp |= RTL8111_MAC_CR_PHYAR_Flag;
     *phyar = temp;
 
-    while((*phyar & RTL8111_MAC_CR_PHYAR_Flag) == $u32 1) {}
+    while((*phyar & RTL8111_MAC_CR_PHYAR_Flag) != $u32 0) {}
 }
 
 void rtl8111_pci_setup(u64 addr) {
