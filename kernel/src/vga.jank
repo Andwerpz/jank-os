@@ -86,6 +86,7 @@ void vga_debug_draw_char(u8 c) {
         VGA_DEBUG_CURSOR_COL ++;
         if(VGA_DEBUG_CURSOR_COL == (VGA_KERNEL_SCROLL_BUFFER->width / $u64 font->width)) {
             VGA_DEBUG_CURSOR_ROW ++;
+            VGA_DEBUG_CURSOR_COL = 0x0;
         }
         if(VGA_DEBUG_CURSOR_ROW == (VGA_FB_HEIGHT / $u64 font->height)) {
             VGA_KERNEL_SCROLL_BUFFER->shift_up($u64 font->height);

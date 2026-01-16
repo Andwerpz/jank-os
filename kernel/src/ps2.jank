@@ -122,6 +122,7 @@ void ps2_write_data_expect_ack(u8 c) {
         if (r == $u8 0xFA) return;          // ACK
         if (r == $u8 0xFE) continue;        // RESEND
 
+        println("ps2_write_expect_ack() : unexpected response : ", $void* $u64 r);
         panic("ps2_write_expect_ack() : unexpected response");
     }
 }
