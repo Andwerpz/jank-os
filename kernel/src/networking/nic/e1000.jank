@@ -313,7 +313,7 @@ void e1000_enable_interrupts() {
     println("e1000_enable_interrupts() : Beginning enabling interrupts");
 
     // register the interrupt vector
-    idt_set_entry($u64 e1000->intno, $u64 @network_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
+    idt_set_entry($u64 e1000->intno, $u64 @e1000_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
 
     // register the pic bit
     IRQ_clear_mask(e1000->irq);

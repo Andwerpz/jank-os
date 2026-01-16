@@ -478,8 +478,6 @@ void init_mcfg(MCFG* mcfg) {
                             // found realtek ethernet
                             rtl8111_init(addr);
                         }
-                        println($u64 device_id);
-                        while(1) {}
                     }
 
                     if(class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
