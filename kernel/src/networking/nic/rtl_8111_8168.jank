@@ -88,12 +88,12 @@ void rtl8111_init(u64 addr) {
     nic->name = "eth0"; // temp name for now
 
     rtl8111_pci_setup(addr);
-    rtl8111_startup();
+    rtl8111_reset();
     rtl8111_get_mac_address(nic->mac_address);
     rtl8111_init_rx();
     rtl8111_init_tx();
     rtl8111_enable_interrupts();
-    rtl8111_enable_tx_rx();
+    rtl8111_enable_rx_tx();
 
     nic->ip_address = $u32 0;
     nic->subnet_mask = $u32 0;
@@ -108,10 +108,23 @@ void rtl8111_init(u64 addr) {
     CURRENT_INTERFACE = nic;
 }
 
-void rtl8111_enable_tx_rx() {
+void rtl8111_enable_rx_tx() {
+    println("rtl8111_enable_rx_tx() : Beginning enabling RX and TX");
+
     // Enable tx and rx
     u8* cr = $u8* (rtl8111->mmio_base + RTL8111_MAC_CR);
     *cr |= (RTL8111_MAC_CR_RE | RTL8111_MAC_CR_TE);
+
+    // Configure receive register
+    u32* rcr = $u32* (rtl8111->mmio_base + RTL8111_MAC_RCR);
+    *rcr |= (RTL8111_MAC_RCR_AB | RTL8111_MAC_RCR_AM | RTL8111_MAC_RCR_APM);
+
+    // Configure transmit register
+    u32* tcr = $u32* (rtl8111->mmio_base + RTL8111_MAC_TCR);
+    *tcr |= $u32 (0b111 << $u64 8); // MXDMA set to unlimited
+    *tcr |= $u32 (0b011 << $u64 24); // IDG set?
+
+    println("rtl8111_enable_rx_tx() : Finished enabling RX and TX");
 }
 
 void rtl8111_interrupt_handler(trapframe* tf) {
@@ -168,7 +181,6 @@ void rtl8111_handle_receive() {
     rtl8111->curr_rdesc = idx;
 }
 
-
 void rtl8111_send(u8* data, u16 len) {
     println("rtl8111_send() : Beginning send operation");
 
@@ -195,7 +207,7 @@ void rtl8111_send(u8* data, u16 len) {
     rtl8111->curr_tdesc = (idx + $u64 1) % rtl8111->num_tdesc;
 
     u8* poll_reg = $u8* (rtl8111->mmio_base + RTL8111_MAC_TPPoll);
-    *poll_reg |= RTL8111_MAC_TPPoll_NPQ; // set the normal priority poll bit
+    *poll_reg = RTL8111_MAC_TPPoll_NPQ; // set the normal priority poll bit
 
     println("rtl8111_send() : Finished send operation");
 }
@@ -235,14 +247,11 @@ void rtl8111_init_tx() {
     // Set EOR
     rtl8111->tdesc_ring[rtl8111->num_tdesc - 0x1].opts1 |= RTL8111_TDESC_OPT1_EOR;
 
-    // Write ring address
-    u64* tnpds = $u64* (rtl8111->mmio_base + RTL8111_MAC_TNPDS);
-    *tnpds = $u64 rtl8111->tdesc_ring; 
-
-    // Configure transmit register
-    u32* tcr = $u32* (rtl8111->mmio_base + RTL8111_MAC_TCR);
-    *tcr |= $u32 (0b111 << $u64 8); // MXDMA set to unlimited
-    *tcr |= $u32 (0b011 << $u64 24); // IDG set?
+    // Write ring address (so dumb need to write 32 bits at a time...)
+    u32* tnpds_lo = $u32* (rtl8111->mmio_base + RTL8111_MAC_TNPDS);
+    *tnpds_lo = $u32 ($u64 rtl8111->tdesc_ring & 0xFFFFFFFF);
+    u32* tnpds_hi = $u32* (rtl8111->mmio_base + RTL8111_MAC_TNPDS + $u64 4);    
+    *tnpds_hi = $u32 ($u64 rtl8111->tdesc_ring >> $u64 32);
 
     println("rtl8111_init_tx() : Finished TX initialization");
 }
@@ -277,10 +286,6 @@ void rtl8111_init_rx() {
     u64* rdsar = $u64* (rtl8111->mmio_base + RTL8111_MAC_RDSAR);
     *rdsar = $u64 rtl8111->rdesc_ring; 
 
-    // Configure receive register
-    u32* rcr = $u32* (rtl8111->mmio_base + RTL8111_MAC_RCR);
-    *rcr |= (RTL8111_MAC_RCR_AB | RTL8111_MAC_RCR_AM | RTL8111_MAC_RCR_APM);
-
     println("rtl8111_init_rx() : Finished RX initialization");
 }
 
@@ -303,21 +308,19 @@ void rtl8111_get_mac_address(u8[6]& mac) {
     println("rtl8111_get_mac_address() : Finished getting NIC MAC address");
 }
 
-void rtl8111_startup() {
-    println("rtl8111_startup() : Beginning general intialization");
+void rtl8111_reset() {
+    println("rtl8111_reset() : Beginning device reset");
 
     // Initiate software reset
     u8* cr = $u8* (rtl8111->mmio_base + RTL8111_MAC_CR);
     *cr |= RTL8111_MAC_CR_RST;
-    while((*cr & RTL8111_MAC_CR_RST) != $u8 0) {
-        // spin
-    }
+    while((*cr & RTL8111_MAC_CR_RST) != $u8 0) {}
 
     // PHY Reset
     rtl8111_write_phy(RTL8111_PHY_BMCR, RTL8111_PHY_BMCR_Reset);
     while((rtl8111_read_phy(RTL8111_PHY_BMCR) & RTL8111_PHY_BMCR_Reset) != $u16 0) {}
 
-    println("rtl8111_startup() : Finished general intialization");
+    println("rtl8111_reset() : Finished device reset");
 }
 
 // returns 1 for up, 0 for down.
@@ -403,7 +406,7 @@ void rtl8111_pci_setup(u64 addr) {
     // identity map
     pagetable_t pt = pt_get_current();
     for(u64 vaddr = mmio_base_addr; vaddr < mmio_base_addr + mmio_size; vaddr += PAGE_SIZE) {
-        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | PTE_PCD | PTE_PWT);
+        pt_map_page_if_not_mapped(pt, $void* vaddr, $void* vaddr, PTE_WRITEABLE | pte_pat_bits(PAT_UC));
     }
     rtl8111->mmio_base = mmio_base_addr;
 
