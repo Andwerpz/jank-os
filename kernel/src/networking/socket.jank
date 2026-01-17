@@ -32,9 +32,6 @@ struct socket {
     u16 remote_port;
     
     waitq wait_queue;
-
-    Packet* rx_head; 
-    Packet* rx_tail;
 }
 
 struct Packet {
@@ -72,30 +69,30 @@ void init_port_tables() {
     memset($void* TCP_PORT_TABLE, 0, $u64 MAX_PORTS * sizeof(socket*));
 }
 
-void socket_push_packet(socket* sock, Packet* pkt) {
+void socket_push_packet(Packet*& head, Packet*& tail, Packet* pkt) {
     pkt->next = $Packet* nullptr;
     
-    if(sock->rx_head == nullptr) {
-        sock->rx_head = pkt;
-        sock->rx_tail = pkt;
+    if(head == nullptr) {
+        head = pkt;
+        tail = pkt;
     } else {
         // queue, pkt->next is the next packet in line.
-        sock->rx_tail->next = pkt;
-        sock->rx_tail = pkt;
+        tail->next = pkt;
+        tail = pkt;
     }
 }
 
-Packet* socket_pop_packet(socket* sock) {
-    if(sock->rx_head == nullptr) {
+Packet* socket_pop_packet(Packet*& head, Packet*& tail) {
+    if(head == nullptr) {
         return $Packet* nullptr;
     }
 
-    Packet* pkt = sock->rx_head;
+    Packet* pkt = head;
 
-    sock->rx_head = pkt->next;
+    head = pkt->next;
 
-    if(sock->rx_head == nullptr) {
-        sock->rx_tail = $Packet* nullptr;
+    if(head == nullptr) {
+        tail = $Packet* nullptr;
     }
 
     pkt->next = $Packet* nullptr;

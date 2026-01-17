@@ -9,6 +9,25 @@ struct UDPHeader {
     u16 checksum;
 }
 
+struct UDPSock {
+    Packet* rx_head; 
+    Packet* rx_tail;
+}
+
+void udp_init(socket* sock) {
+    println("udp_init() : Initializing UDP socket information");
+
+    UDPSock* udp_info = $UDPSock* malloc(sizeof(UDPSock));
+    memset($void* udp_info, 0, sizeof(UDPSock));
+
+    udp_info-> rx_head = $Packet* nullptr;
+    udp_info-> rx_tail = $Packet* nullptr;
+
+    sock->proto_info = $void* udp_info;
+
+    println("udp_init() : UDP socket information initialized");
+}
+
 void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     println("udp_handle() : Handling incoming UDP message");
     u16 src_port = be_to_cpu(udp->src_port);
@@ -43,6 +62,7 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     // place packet into socket queue
     println("udp_handle() : Placing packet in associated socket receive queue");
     socket* sock = UDP_PORT_TABLE[dst_port];
+    UDPSock* udp_info = $UDPSock* sock->proto_info;
 
     Packet* pkt = $Packet* malloc(sizeof(Packet));
     pkt->src_ip = src_ip;
@@ -54,7 +74,8 @@ void udp_handle(UDPHeader* udp, u16 len, u32 src_ip) {
     pkt->data = $u8* malloc($u64 payload_len);
     memcpy($void* pkt->data, $void* payload, $u64 payload_len);
     
-    socket_push_packet(sock, pkt);
+
+    socket_push_packet(udp_info->rx_head, udp_info->rx_tail, pkt);
 
     waitq_wake_all(@(sock->wait_queue));
 }
@@ -142,8 +163,9 @@ i32 udp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dest_addr) {
 i32 udp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
     println("udp_receive() : Begin UDP receive socket operation");
     
+    UDPSock* udp_info = $UDPSock* sock->proto_info;
     while(1) {
-        Packet* pkt = socket_pop_packet(sock);
+        Packet* pkt = socket_pop_packet(udp_info->rx_head, udp_info->rx_tail);
 
         if($void* pkt != nullptr) {
             u64 copy_len = len;
@@ -264,8 +286,9 @@ i32 udp_close(socket* sock) {
         UDP_PORT_TABLE[sock->local_port] = $socket* nullptr;
     }
 
+    UDPSock* udp_info = $UDPSock* sock->proto_info;
     while(1) {
-        Packet* pkt = socket_pop_packet(sock);
+        Packet* pkt = socket_pop_packet(udp_info->rx_head, udp_info->rx_tail);
         if(pkt->next == nullptr) break;
 
         free($void* pkt->data, $u64 pkt->len);

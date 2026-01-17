@@ -501,6 +501,7 @@ i32 sys_socket(i32 domain, i32 type, i32 protocol) {
 
     if(type == SOCK_DGRAM) {
         socket->ops = UDP_OPS;
+        udp_init(socket);
     } else if(type == SOCK_STREAM) {
         socket->ops = TCP_OPS;
         tcp_init(socket);
