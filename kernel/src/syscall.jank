@@ -50,9 +50,11 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_GETPID           = $u64 39;
 [__GLOBAL_FIRST__] u64 SYS_SOCKET           = $u64 41;
 [__GLOBAL_FIRST__] u64 SYS_CONNECT          = $u64 42;
+[__GLOBAL_FIRST__] u64 SYS_ACCEPT           = $u64 43;
 [__GLOBAL_FIRST__] u64 SYS_SENDTO           = $u64 44;
 [__GLOBAL_FIRST__] u64 SYS_RECVFROM         = $u64 45;
 [__GLOBAL_FIRST__] u64 SYS_BIND             = $u64 49;
+[__GLOBAL_FIRST__] u64 SYS_LISTEN           = $u64 50;
 [__GLOBAL_FIRST__] u64 SYS_FORK             = $u64 57;
 [__GLOBAL_FIRST__] u64 SYS_EXECVE           = $u64 59;
 [__GLOBAL_FIRST__] u64 SYS_EXIT             = $u64 60;
@@ -203,9 +205,11 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_GETPID)           ans = $u64 sys_getpid();
     else if(sys_id == SYS_SOCKET)           ans = $u64 sys_socket($i32 arg1, $i32 arg2, $i32 arg3);
     else if(sys_id == SYS_CONNECT)          ans = $u64 sys_connect($i32 arg1, $sockaddr* arg2, $u64 arg3);
+    else if(sys_id == SYS_ACCEPT)           ans = $u64 sys_accept($i32 arg1, $sockaddr* arg2, $u64* arg3);
     else if(sys_id == SYS_SENDTO)           ans = $u64 sys_sendto($i32 arg1, $u8* arg2, $u64 arg3, $i32 arg4, $sockaddr* arg5, $u64 arg6);
     else if(sys_id == SYS_RECVFROM)         ans = $u64 sys_recvfrom($i32 arg1, $u8* arg2, $u64 arg3, $i32 arg4, $sockaddr* arg5, $u64* arg6);
     else if(sys_id == SYS_BIND)             ans = $u64 sys_bind($i32 arg1, $sockaddr* arg2, $u64 arg3);
+    else if(sys_id == SYS_LISTEN)           ans = $u64 sys_listen($i32 arg1, $i32 arg2);
     else if(sys_id == SYS_FORK)             ans = $u64 sys_fork();
     else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
     else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
@@ -239,6 +243,14 @@ export u64 syscall_handler() {
     }
 
     return $u64 ans;
+}
+
+i32 sys_listen(i32 fd, i32 backlog) {
+    return -1;
+}
+
+i32 sys_accept(i32 fd, sockaddr* client_addr, u64* addr_len) {
+    return -1;
 }
 
 i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {
