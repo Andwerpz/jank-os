@@ -34,7 +34,9 @@ i32 main(u64 argc, u8** argv) {
 
     r = sys_read(fd, $void* buf, size);
     while(r > $i64 0) {
-        cout << buf;
+        // cout << buf;
+        cout.write_to_fd(buf, $u64 r);
+        cout.flush();
         r = sys_read(fd, $void* buf, size);
     }
 

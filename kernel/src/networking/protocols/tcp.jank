@@ -13,7 +13,7 @@
 [__GLOBAL_FIRST__] i32 TCP_STATE_CLOSING        = 7;    // Server and client   Waiting for a connection termination request acknowledgment from the remote TCP.
 [__GLOBAL_FIRST__] i32 TCP_STATE_LAST_ACK       = 8;    // Server and client   Waiting for an acknowledgment of the connection termination request previously sent to the remote TCP (which includes an acknowledgment of its connection termination request).
 [__GLOBAL_FIRST__] i32 TCP_STATE_TIME_WAIT      = 9;    // Server or client    Waiting for enough time to pass to be sure that all remaining packets on the connection have expired.
-[__GLOBAL_FIRST__] i32 TCP_STATE_CLOSED         = 10;   // Server and client  No connection state at all. 
+[__GLOBAL_FIRST__] i32 TCP_STATE_CLOSED         = 10;   // Server and client   No connection state at all. 
 
 [__GLOBAL_FIRST__] u8 TCP_FLAG_FIN = $u8 0x01;  // Last packet from sender
 [__GLOBAL_FIRST__] u8 TCP_FLAG_SYN = $u8 0x02;  // Synchronize sequence numbers. Only the first packet sent from each end should have this flag set. Some other flags and fields change meaning based on this flag, and some are only valid when it is set, and others when it is clear. 
@@ -78,20 +78,17 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
     println("tcp_handle() : Handling incoming TCP message");
     
     u16 dst_port = be_to_cpu(tcp->dst_port);
-
-    if($u32 dst_port >= MAX_PORTS || dst_port == $u16 0) {
-        println("tcp_handle() : Invalid destination port (outside allowed range), dropping");
-        return;
-    }
-    if(TCP_PORT_TABLE[dst_port] == nullptr) {
-        println("tcp_handle() : Nothing listening on port, sending RST");
-        tcp_send_reset(src_ip, tcp);
-        return;
-    }
-
     socket* sock = TCP_PORT_TABLE[dst_port];
-    TCPSock* tcb = $TCPSock* sock->proto_info;
+    if(TCP_PORT_TABLE[dst_port] == nullptr) {
+        println("tcp_handle() : Nothing listening on port");
+        if((tcp->flags & TCP_FLAG_RST) == $u8 0) {
+            println("tcp_handle() : Sending RST");
+            tcp_send_reset(src_ip, tcp);
+        }
+        return;
+    }
 
+    TCPSock* tcb = $TCPSock* sock->proto_info;
     u32 seq_num = be_to_cpu(tcp->seq_num);
     u32 ack_num = be_to_cpu(tcp->ack_num);
     u8 flags = tcp->flags;
@@ -99,19 +96,8 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
     // handle reset
     if(flags & TCP_FLAG_RST) {
         println("tcp_handle() : Received RST");
-        if(tcb->state == TCP_STATE_SYN_SENT) {
-            println("tcp_handle() : Destination server refused connection");
-            // basically we tried to connect and they refused
-            tcb->state = TCP_STATE_CLOSED;
-            waitq_wake_all(@(sock->wait_queue));
-        } else {
-            println("tcp_handle() : Destination server connection killed?");
-            // maybe theres more states to handle but for now
-            // if we are here, ig we were connected but they killed it
-            tcb->state = TCP_STATE_CLOSED;
-            waitq_wake_all(@(sock->wait_queue));
-        }
-
+        tcb->state = TCP_STATE_CLOSED;
+        waitq_wake_all(@(sock->wait_queue));
         return;
     }
 
@@ -127,14 +113,12 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
             }
 
             tcb->snd_una = ack_num;
-
-            tcb->irs = seq_num;
-            tcb->rcv_nxt = seq_num + $u32 1;
-
             tcb->snd_wnd = $u32 be_to_cpu(tcp->window_size);
 
-            tcb->state = TCP_STATE_ESTABLISHED;
+            tcb->rcv_nxt = seq_num + $u32 1;
+            tcb->irs = seq_num;
 
+            tcb->state = TCP_STATE_ESTABLISHED;
             tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
         
             println("tcp_handle() : Connection established");
@@ -145,20 +129,18 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
     } else if(tcb->state == TCP_STATE_ESTABLISHED) {
         println("tcp_handle() : Recieved payload");
 
-        u8 header_len = (tcp->data_offset >> $u8 4) * $u8 4;
-        u16 payload_len = len - $u16 header_len;
-
         if(seq_num != tcb->rcv_nxt) {
-            if(payload_len > $u16 0) {
-                print("tcp_handle() : Out of order packet. Expected ");
-                print($u64 tcb->rcv_nxt);
-                print(", got ");
-                println($u64 seq_num);
+            print("tcp_handle() : Out of order packet. Expected ");
+            print($u64 tcb->rcv_nxt);
+            print(", got ");
+            println($u64 seq_num);
 
-                tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
-            }
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
             return;
         }
+
+        u8 header_len = (tcp->data_offset >> $u8 4) * $u8 4;
+        u16 payload_len = len - $u16 header_len;
 
         if(payload_len > $u16 0) {
             u8* payload = $u8* ($u64 tcp + $u64 header_len);
@@ -172,22 +154,25 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
 
             tcb->rcv_nxt += $u32 payload_len;
 
-            waitq_wake_all(@(sock->wait_queue));
-
             tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+
+            waitq_wake_all(@(sock->wait_queue));
         }
 
         if(flags & TCP_FLAG_FIN) {
             println("tcp_handle() : Received FIN, connection closing");
+
             tcb->rcv_nxt++;
+
             tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK | TCP_FLAG_FIN);
+
             tcb->state = TCP_STATE_CLOSE_WAIT;
+
+            waitq_wake_all(@(sock->wait_queue));
         }
+
     } else if(tcb->state == TCP_STATE_CLOSE_WAIT || tcb->state == TCP_STATE_LAST_ACK) {
-        println("tcp_handle() : Unhandled path, current TCP state unable to handle incoming packet");
-        return;
-    } else {
-        println("tcp_handle() : Unhandled path, current TCP state unable to handle incoming packet");
+        println("tcp_handle() : Already closing connection, dropping");
         return;
     }
 }
@@ -381,6 +366,8 @@ i32 tcp_close(socket* sock) {
         tcb->snd_nxt++;
     }
 
+    tcb->state = TCP_STATE_CLOSED;
+
     if(sock->local_port != $u16 0) {
         assert(TCP_PORT_TABLE[sock->local_port] == sock, "tcp_close() : Current socket in table does not match associated port");
         TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
@@ -401,11 +388,6 @@ i32 tcp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
     }
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
-
-    // if(tcb->state != TCP_STATE_ESTABLISHED) {
-    //     println("tcp_receive() : TCP connection has not been established yet, returning");
-    //     return -ERR_NOTCONN;
-    // }
 
     while(tcb->rx_head == tcb->rx_tail) {
         if(tcb->state == TCP_STATE_CLOSED || tcb->state == TCP_STATE_CLOSE_WAIT) {
