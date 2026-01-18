@@ -166,8 +166,8 @@ i32 udp_listen(socket* sock, i32 backlog) {
     return -1;
 }
 
-i32 udp_accept(socket* sock, sockaddr* addr, u64* addr_len) {
-    return -1;
+socket* udp_accept(socket* sock, sockaddr* addr, u64* addr_len) {
+    return $socket* nullptr;
 }
 
 i32 udp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {

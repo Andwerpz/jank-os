@@ -1,0 +1,63 @@
+#include <iostream>;
+#include <assert>;
+#include <string>;
+#include <vector>;
+
+i32 main(u64 argc, u8** argv) {
+    cout << "TCP Server test" << "\n";
+    cout.flush();
+
+    i32 fd = sys_socket(2, 1, 6);
+    assert(fd >= 0, "socket create failed");
+
+    sockaddr_in addr;
+    addr.sin_family = $u16 AF_INET;
+    addr.sin_port = $u16 8080;
+    addr.sin_addr = $u32 0;
+
+    assert(sys_bind(fd, $sockaddr* @addr, sizeof(sockaddr_in)) == 0, "Failed to bind to port");
+    assert(sys_listen(fd, 10) == 0, "Failed to listen");
+
+    u64 buf_size = $u64 1024;
+    u8* buf = $u8* malloc(buf_size);
+    memset($void* buf, 0, buf_size);
+
+    u8* response = "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body><h1>Bello!</h1><p>I lub JankOS!</p></body></html>";
+
+    while(1) {
+        sockaddr_in client_addr;
+        u64 len = sizeof(sockaddr_in);
+
+        cout << "Starting server" << "\n";
+        cout.flush();
+
+        i32 client_fd = sys_accept(fd, $sockaddr* @client_addr, @len);
+        cout << client_fd << "\n";
+        cout.flush();
+        if(client_fd > 0) {
+            cout << "Client connected" << "\n";
+            cout.flush();
+
+            i64 n = sys_read(client_fd, $void* buf, buf_size);
+
+            if(n > $i64 0) {
+                cout << "Received request: ";
+                cout.write_to_fd(buf, $u64 n);
+                cout << "\n";
+                cout.flush();
+            }
+
+            sys_write(client_fd, $void* response, strlen(response));
+    
+            sys_close(client_fd);
+
+            cout << "Connection closed" << "\n";
+            cout.flush();
+        } else {
+            cout << "Accept failed" << "\n";
+            cout.flush();
+        }
+    }
+
+    return 0;
+}

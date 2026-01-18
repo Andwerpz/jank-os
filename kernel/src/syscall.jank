@@ -246,11 +246,132 @@ export u64 syscall_handler() {
 }
 
 i32 sys_listen(i32 fd, i32 backlog) {
-    return -1;
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    i32 ret = sock->ops->listen#(sock, backlog);
+
+    // sock->state = listening...;
+
+    pt_switch(user_pt);
+    return ret;
 }
 
 i32 sys_accept(i32 fd, sockaddr* client_addr, u64* addr_len) {
-    return -1;
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    u64 k_addr_len = 0x0;
+    if(addr_len != nullptr) {
+        if(copy_from_user(user_pt, $u8* @k_addr_len, $u8* addr_len, sizeof(u64)) != 0) {
+            println("1");
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+    }
+
+    sockaddr* kaddr = $sockaddr* nullptr;
+    if(client_addr != nullptr) {
+        kaddr = $sockaddr* malloc(sizeof(sockaddr));
+        if(copy_from_user(user_pt, $u8* kaddr, $u8* client_addr, k_addr_len) != 0) {
+            println("2");
+            free($void* kaddr, k_addr_len);
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+    }
+
+    socket* child_sock = sock->ops->accept#(sock, kaddr, @k_addr_len);
+    if(child_sock == nullptr) {
+        if(kaddr != nullptr) {
+            free($void* kaddr, k_addr_len);
+            pt_switch(user_pt);
+        }
+        return -ERR_INVAL;
+    }
+
+    i32 new_fd = -1;
+    for(i32 i = 0; i < $i32 PROCESS_MAX_FD; i++) {
+        if($void* proc->fd_table[i] == nullptr) {
+            new_fd = i;
+            break;
+        }
+    }
+    if(new_fd == -1) {
+        if(kaddr != nullptr) {
+            free($void* kaddr, k_addr_len);
+            pt_switch(user_pt);
+        }
+        pt_switch(user_pt);
+        return -ERR_NFILE;
+    }
+
+    proc->fd_table[new_fd] = file_create_socket($u64 O_RDWR, child_sock);
+
+    if(client_addr != nullptr && kaddr != nullptr) {
+        if(copy_to_user(user_pt, $u8* kaddr, $u8* client_addr, k_addr_len) != 0) {
+            proc->fd_table[new_fd] = $file* nullptr;
+
+            child_sock->ops->close#(child_sock);
+            free($void* child_sock, sizeof(socket));
+
+            free($void* kaddr, k_addr_len);
+            println("3");
+            
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+        
+        if(addr_len != nullptr) {
+            if(copy_to_user(user_pt, $u8* @k_addr_len, $u8* addr_len, sizeof(u64)) != 0) {
+                proc->fd_table[new_fd] = $file* nullptr;
+
+                child_sock->ops->close#(child_sock);
+                free($void* child_sock, sizeof(socket));
+
+                free($void* kaddr, k_addr_len);
+            println("4");
+                
+                pt_switch(user_pt);
+                return -ERR_FAULT;
+            }
+        }
+
+        free($void* kaddr, k_addr_len);
+    }
+
+    pt_switch(user_pt);
+    return new_fd;
 }
 
 i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {

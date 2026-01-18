@@ -49,7 +49,7 @@ struct Packet {
 struct proto_ops {
     fn<i32(socket*, sockaddr*, u64)> bind;
     fn<i32(socket*, i32)> listen;
-    fn<i32(socket*, sockaddr*, u64*)> accept;
+    fn<socket*(socket*, sockaddr*, u64*)> accept;
     fn<i32(socket*, sockaddr*, u64)> connect;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> send;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> receive;
