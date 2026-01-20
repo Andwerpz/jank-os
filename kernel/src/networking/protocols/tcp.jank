@@ -13,7 +13,7 @@
 [__GLOBAL_FIRST__] i32 TCP_STATE_CLOSING        = 7;    // Server and client   Waiting for a connection termination request acknowledgment from the remote TCP.
 [__GLOBAL_FIRST__] i32 TCP_STATE_LAST_ACK       = 8;    // Server and client   Waiting for an acknowledgment of the connection termination request previously sent to the remote TCP (which includes an acknowledgment of its connection termination request).
 [__GLOBAL_FIRST__] i32 TCP_STATE_TIME_WAIT      = 9;    // Server or client    Waiting for enough time to pass to be sure that all remaining packets on the connection have expired.
-[__GLOBAL_FIRST__] i32 TCP_STATE_CLOSED         = 10;   // Server and client  No connection state at all. 
+[__GLOBAL_FIRST__] i32 TCP_STATE_CLOSED         = 10;   // Server and client   No connection state at all. 
 
 [__GLOBAL_FIRST__] u8 TCP_FLAG_FIN = $u8 0x01;  // Last packet from sender
 [__GLOBAL_FIRST__] u8 TCP_FLAG_SYN = $u8 0x02;  // Synchronize sequence numbers. Only the first packet sent from each end should have this flag set. Some other flags and fields change meaning based on this flag, and some are only valid when it is set, and others when it is clear. 
@@ -56,6 +56,10 @@ struct TCPSock {
     u8* rx_buf;
     u32 rx_head;
     u32 rx_tail;
+
+    i32 backlog;
+    deque<socket*> accept_q;
+    vector<socket*> children;
 }
 
 void tcp_init(socket* sock) {
@@ -63,6 +67,7 @@ void tcp_init(socket* sock) {
 
     TCPSock* tcb = $TCPSock* malloc(sizeof(TCPSock));
     memset($void* tcb, 0, sizeof(TCPSock));
+    new (tcb) TCPSock();
 
     tcb->rx_buf = $u8* malloc(TCP_RX_BUFFER_SIZE);
     tcb->rx_head = $u32 0;
@@ -72,124 +77,6 @@ void tcp_init(socket* sock) {
     sock->proto_info = $void* tcb;
 
     println("tcp_init() : TCP socket information initialized");
-}
-
-void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
-    println("tcp_handle() : Handling incoming TCP message");
-    
-    u16 dst_port = be_to_cpu(tcp->dst_port);
-
-    if($u32 dst_port >= MAX_PORTS || dst_port == $u16 0) {
-        println("tcp_handle() : Invalid destination port (outside allowed range), dropping");
-        return;
-    }
-    if(TCP_PORT_TABLE[dst_port] == nullptr) {
-        println("tcp_handle() : Nothing listening on port, sending RST");
-        tcp_send_reset(src_ip, tcp);
-        return;
-    }
-
-    socket* sock = TCP_PORT_TABLE[dst_port];
-    TCPSock* tcb = $TCPSock* sock->proto_info;
-
-    u32 seq_num = be_to_cpu(tcp->seq_num);
-    u32 ack_num = be_to_cpu(tcp->ack_num);
-    u8 flags = tcp->flags;
-
-    // handle reset
-    if(flags & TCP_FLAG_RST) {
-        println("tcp_handle() : Received RST");
-        if(tcb->state == TCP_STATE_SYN_SENT) {
-            println("tcp_handle() : Destination server refused connection");
-            // basically we tried to connect and they refused
-            tcb->state = TCP_STATE_CLOSED;
-            waitq_wake_all(@(sock->wait_queue));
-        } else {
-            println("tcp_handle() : Destination server connection killed?");
-            // maybe theres more states to handle but for now
-            // if we are here, ig we were connected but they killed it
-            tcb->state = TCP_STATE_CLOSED;
-            waitq_wake_all(@(sock->wait_queue));
-        }
-
-        return;
-    }
-
-    if(tcb->state == TCP_STATE_SYN_SENT) {
-        i32 is_syn = (flags & TCP_FLAG_SYN) != $u8 0;
-        i32 is_ack = (flags & TCP_FLAG_ACK) != $u8 0;
-
-        if(is_syn && is_ack) {
-            println("tcp_handle() : Received the SYN-ACK, attempting to complete handshake");
-            if(ack_num != tcb->iss + $u32 1) {
-                println("tcp_handle() : ACK number invalid, not completing the handshake");
-                return;
-            }
-
-            tcb->snd_una = ack_num;
-
-            tcb->irs = seq_num;
-            tcb->rcv_nxt = seq_num + $u32 1;
-
-            tcb->snd_wnd = $u32 be_to_cpu(tcp->window_size);
-
-            tcb->state = TCP_STATE_ESTABLISHED;
-
-            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
-        
-            println("tcp_handle() : Connection established");
-
-            waitq_wake_all(@(sock->wait_queue));
-        }
-
-    } else if(tcb->state == TCP_STATE_ESTABLISHED) {
-        println("tcp_handle() : Recieved payload");
-
-        u8 header_len = (tcp->data_offset >> $u8 4) * $u8 4;
-        u16 payload_len = len - $u16 header_len;
-
-        if(seq_num != tcb->rcv_nxt) {
-            if(payload_len > $u16 0) {
-                print("tcp_handle() : Out of order packet. Expected ");
-                print($u64 tcb->rcv_nxt);
-                print(", got ");
-                println($u64 seq_num);
-
-                tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
-            }
-            return;
-        }
-
-        if(payload_len > $u16 0) {
-            u8* payload = $u8* ($u64 tcp + $u64 header_len);
-
-            for(u16 i = $u16 0; i < payload_len; i++) {
-                tcb->rx_buf[tcb->rx_head] = payload[i];
-                tcb->rx_head = (tcb->rx_head + $u32 1) % $u32 TCP_RX_BUFFER_SIZE;
-
-                // TODO uh should check if head collides with tail
-            }
-
-            tcb->rcv_nxt += $u32 payload_len;
-
-            waitq_wake_all(@(sock->wait_queue));
-
-            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
-        }
-
-        if(flags & TCP_FLAG_FIN) {
-            println("tcp_handle() : Received FIN, connection closing");
-            tcb->rcv_nxt++;
-            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK | TCP_FLAG_FIN);
-            tcb->state = TCP_STATE_CLOSE_WAIT;
-        }
-    } else if(tcb->state == TCP_STATE_CLOSE_WAIT || tcb->state == TCP_STATE_LAST_ACK) {
-        println("tcp_handle() : Unhandled path, current TCP state unable to handle incoming packet");
-        return;
-    } else {
-        println("tcp_handle() : Unhandled path, current TCP state unable to handle incoming packet");
-        return;
-    }
 }
 
 // https://en.wikipedia.org/wiki/Transmission_Control_Protocol#TCP_checksum_for_IPv4
@@ -222,7 +109,7 @@ u16 tcp_checksum(u32 src_ip, u32 dst_ip, u8* packet, u16 len) {
     }
 
     if(count > $u32 0) {
-        sum += ($u32 (($u8* ptr)[len - $u16 1])) << $u32 8;
+        sum += $u32 (($u8* ptr)[len - $u16 1]);
     }
 
     while(sum > $u32 0xFFFF) {
@@ -232,6 +119,221 @@ u16 tcp_checksum(u32 src_ip, u32 dst_ip, u8* packet, u16 len) {
     }
 
     return ~($u16 sum);
+}
+
+void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
+    println("tcp_handle() : Handling incoming TCP message");
+    
+    u16 dst_port = be_to_cpu(tcp->dst_port);
+    socket* sock = TCP_PORT_TABLE[dst_port];
+    if(TCP_PORT_TABLE[dst_port] == nullptr) {
+        println("tcp_handle() : Nothing listening on port");
+        if((tcp->flags & TCP_FLAG_RST) == $u8 0) {
+            println("tcp_handle() : Sending RST");
+            tcp_send_reset(src_ip, tcp);
+        }
+        return;
+    }
+
+    TCPSock* tcb = $TCPSock* sock->proto_info;
+    u16 src_port = be_to_cpu(tcp->src_port);
+
+    if(tcb->state == TCP_STATE_LISTEN) {
+        for(u64 i = 0x0; i < tcb->children.size(); i++) {
+            socket* child = tcb->children[i];
+
+            if(child->remote_addr == src_ip && child->remote_port == src_port) {
+                sock = child;
+                tcb = $TCPSock* child->proto_info;
+                break;
+            }
+        }
+    }
+
+    u32 seq_num = be_to_cpu(tcp->seq_num);
+    u32 ack_num = be_to_cpu(tcp->ack_num);
+    u8 flags = tcp->flags;
+
+    // handle reset
+    if(flags & TCP_FLAG_RST) {
+        println("tcp_handle() : Received RST");
+        tcb->state = TCP_STATE_CLOSED;
+        waitq_wake_all(@(sock->wait_queue));
+        return;
+    }
+
+    if(tcb->state == TCP_STATE_LISTEN) {
+        if(flags & TCP_FLAG_SYN) {
+            println("tcp_handle() : Listener received SYN");
+
+            socket* child = $socket* malloc(sizeof(socket));
+
+            // copy over
+            memset($void* child, 0, sizeof(socket));
+            new (child) socket();
+            child->domain = sock->domain;
+            child->type = sock->type;
+            child->protocol = sock->protocol;
+            child->ops = sock->ops;
+            child->local_port = sock->local_port;
+
+            tcp_init(child);
+
+            // needs for checksumming
+            child->local_addr = CURRENT_INTERFACE->ip_address;
+
+            child->remote_addr = src_ip;
+            child->remote_port = src_port;
+
+            TCPSock* child_tcb = $TCPSock* child->proto_info;
+
+            child_tcb->state = TCP_STATE_SYN_RECEIVED;
+
+            child_tcb->irs = seq_num;
+            child_tcb->rcv_nxt = seq_num + $u32 1;
+            child_tcb->rcv_wnd = TCP_DEFAULT_RECEIVE_WINDOW;
+
+            child_tcb->iss = TCP_DEFAULT_ISS;
+            child_tcb->snd_nxt = child_tcb->iss;
+            child_tcb->snd_wnd = $u32 be_to_cpu(tcp->window_size);
+
+            tcp_send_packet(child, $u8* nullptr, $u16 0, TCP_FLAG_SYN | TCP_FLAG_ACK);
+            child_tcb->snd_nxt++;
+
+            tcb->children.push_back(child);
+        }
+        return;
+    } else if(tcb->state == TCP_STATE_SYN_SENT) {
+        i32 is_syn = (flags & TCP_FLAG_SYN) != $u8 0;
+        i32 is_ack = (flags & TCP_FLAG_ACK) != $u8 0;
+
+        if(is_syn && is_ack) {
+            println("tcp_handle() : Received the SYN-ACK, attempting to complete handshake");
+            if(ack_num != tcb->iss + $u32 1) {
+                println("tcp_handle() : ACK number invalid, not completing the handshake");
+                return;
+            }
+
+            tcb->snd_una = ack_num;
+            tcb->snd_wnd = $u32 be_to_cpu(tcp->window_size);
+
+            tcb->rcv_nxt = seq_num + $u32 1;
+            tcb->irs = seq_num;
+
+            tcb->state = TCP_STATE_ESTABLISHED;
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+        
+            println("tcp_handle() : Connection established");
+
+            waitq_wake_all(@(sock->wait_queue));
+        }
+
+    } else if(tcb->state == TCP_STATE_SYN_RECEIVED) {
+        i32 is_ack = (flags & TCP_FLAG_ACK) != $u8 0;
+        
+        if(is_ack && ack_num == tcb->iss + $u32 1) {
+            println("tcp_handle() : Server child received ACK");
+            
+            tcb->state = TCP_STATE_ESTABLISHED;
+            tcb->snd_una = ack_num;
+            
+            socket* parent = TCP_PORT_TABLE[sock->local_port];
+            TCPSock* parent_tcb = $TCPSock* parent->proto_info;
+            
+            parent_tcb->accept_q.push_back(sock);
+
+            waitq_wake_all(@(parent->wait_queue));
+        }
+    } else if(tcb->state == TCP_STATE_ESTABLISHED) {
+        println("tcp_handle() : Recieved payload");
+
+        if(seq_num != tcb->rcv_nxt) {
+            print("tcp_handle() : Out of order packet. Expected ");
+            print($u64 tcb->rcv_nxt);
+            print(", got ");
+            println($u64 seq_num);
+
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+            return;
+        }
+
+        u8 header_len = (tcp->data_offset >> $u8 4) * $u8 4;
+        u16 payload_len = len - $u16 header_len;
+
+        if(payload_len > $u16 0) {
+            u8* payload = $u8* ($u64 tcp + $u64 header_len);
+
+            for(u16 i = $u16 0; i < payload_len; i++) {
+                tcb->rx_buf[tcb->rx_head] = payload[i];
+                tcb->rx_head = (tcb->rx_head + $u32 1) % $u32 TCP_RX_BUFFER_SIZE;
+
+                // TODO uh should check if head collides with tail
+            }
+
+            tcb->rcv_nxt += $u32 payload_len;
+
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+
+            waitq_wake_all(@(sock->wait_queue));
+        }
+
+        if(flags & TCP_FLAG_FIN) {
+            println("tcp_handle() : Received FIN, connection closing");
+
+            tcb->rcv_nxt++;
+
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK | TCP_FLAG_FIN);
+
+            tcb->state = TCP_STATE_CLOSE_WAIT;
+
+            waitq_wake_all(@(sock->wait_queue));
+        }
+
+    } else if(tcb->state == TCP_STATE_FIN_WAIT_1 || tcb->state == TCP_STATE_FIN_WAIT_2) {
+        if($i32 (flags & TCP_FLAG_ACK) && tcb->state == TCP_STATE_FIN_WAIT_1) {
+            if(ack_num == tcb->snd_nxt) {
+                println("tcp_handle() : Received ACK for our FIN. Transitioning to FIN_WAIT_2");
+                tcb->state = TCP_STATE_FIN_WAIT_2;
+            }
+        }
+
+        if(flags & TCP_FLAG_FIN) {
+            println("tcp_handle() : Received their FIN. Sending ACK and Cleaning up");
+        
+            tcb->rcv_nxt++; 
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+            
+            tcb->state = TCP_STATE_CLOSED;
+
+            if(sock->local_port != $u16 0) {
+                socket* entry = TCP_PORT_TABLE[sock->local_port];
+                
+                if(entry == sock) {
+                    TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
+                } 
+                else if(entry != nullptr) {
+                    TCPSock* parent_tcb = $TCPSock* entry->proto_info;
+                    for(u64 i = 0x0; i < parent_tcb->children.size(); i++) {
+                        if(parent_tcb->children[i] == sock) {
+                            parent_tcb->children.erase(i);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            free($void* tcb->rx_buf, TCP_RX_BUFFER_SIZE);
+            free($void* tcb, sizeof(TCPSock));
+
+            sock->~();
+            free($void* sock, sizeof(socket));
+            
+            return;
+        }
+    } else if(tcb->state == TCP_STATE_CLOSE_WAIT || tcb->state == TCP_STATE_LAST_ACK) {
+        println("tcp_handle() : Already closing connection, dropping");
+        return;
+    }
 }
 
 void tcp_send_packet(socket* sock, u8* data, u16 len, u8 flags) {
@@ -300,11 +402,70 @@ void tcp_send_reset(u32 target_ip, TCPHeader* incoming) {
 void init_tcp_ops() {
     TCP_OPS = $proto_ops* malloc(sizeof(proto_ops));
     new (TCP_OPS) proto_ops();
+    TCP_OPS->bind       = #<tcp_bind(socket*, sockaddr*, u64)>;
+    TCP_OPS->listen     = #<tcp_listen(socket*, i32)>;
+    TCP_OPS->accept     = #<tcp_accept(socket*, sockaddr*, u64*)>;
     TCP_OPS->connect    = #<tcp_connect(socket*, sockaddr*, u64)>;
-    TCP_OPS->close      = #<tcp_close(socket*)>;
     TCP_OPS->send       = #<tcp_send(socket*, u8*, u64, i32, sockaddr*)>;
     TCP_OPS->receive    = #<tcp_receive(socket*, u8*, u64, i32, sockaddr*)>;
-    TCP_OPS->bind       = #<tcp_bind(socket*, sockaddr*, u64)>;
+    TCP_OPS->close      = #<tcp_close(socket*)>;
+}
+
+i32 tcp_listen(socket* sock, i32 backlog) {
+    println("tcp_listen() : Beginning TCP listen socket operation");
+
+    if(sock->proto_info == nullptr) {
+        println("tcp_listen() : Socket missing additional TCP information, returning");
+        return -ERR_INVAL;
+    }
+
+    TCPSock* tcb = $TCPSock* sock->proto_info;
+    if(tcb->state != TCP_STATE_CLOSED && tcb->state != TCP_STATE_LISTEN) {
+        println("tcp_listen() : Unable to listen due to current TCP state, returning");
+        return -ERR_INVAL;
+    }
+
+    tcb->backlog = backlog;
+
+    tcb->state = TCP_STATE_LISTEN;
+
+    println("tcp_listen() : Finished TCP listen socket operation");
+
+    return 0;
+}
+
+socket* tcp_accept(socket* sock, sockaddr* client_addr, u64* addr_len) {
+    println("tcp_accept() : Beginning TCP accept socket operation");
+
+    if(sock->proto_info == nullptr) {
+        println("tcp_accept() : Socket missing additional TCP information, returning");
+        return $socket* nullptr;
+    }
+
+    TCPSock* tcb = $TCPSock* sock->proto_info;
+    if(tcb->state != TCP_STATE_LISTEN) {
+        println("tcp_accept() : Socket is not listening, returning");
+        return $socket* nullptr;
+    }
+
+    while(tcb->accept_q.size() == 0x0) {
+        wait_on(@(sock->wait_queue));
+    }
+
+    socket* child_sock = tcb->accept_q.front();
+    tcb->accept_q.pop_front();
+
+    if(client_addr != nullptr) {
+        sockaddr_in* sin = $sockaddr_in* client_addr;
+        sin->sin_family = $u16 AF_INET;
+        sin->sin_port = cpu_to_be(child_sock->remote_port);
+        sin->sin_addr = child_sock->remote_addr;
+        *addr_len = sizeof(sockaddr_in);
+    }
+
+    println("tcp_accept() : Finished TCP accept socket operation");
+
+    return child_sock;
 }
 
 i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
@@ -324,9 +485,9 @@ i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
     TCPSock* tcb = $TCPSock* sock->proto_info;
 
     sock->remote_addr = sin->sin_addr;
-    sock->remote_port = sin->sin_port;
+    sock->remote_port = be_to_cpu(sin->sin_port);
 
-    // should this be here?
+    // should this be here? needs this for checksum hehe
     sock->local_addr = CURRENT_INTERFACE->ip_address;
 
     print("tcp_connect() : Connecting to [");
@@ -377,17 +538,40 @@ i32 tcp_close(socket* sock) {
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
     if(tcb->state == TCP_STATE_ESTABLISHED || tcb->state == TCP_STATE_SYN_RECEIVED) {
+        println("tcp_close() : Changing state to FIN_WAIT_1");
         tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK | TCP_FLAG_FIN);
         tcb->snd_nxt++;
-    }
+        tcb->state = TCP_STATE_FIN_WAIT_1;
+    } else {
+        tcb->state = TCP_STATE_CLOSED;
+        if(sock->local_port != $u16 0) {
+            socket* entry = TCP_PORT_TABLE[sock->local_port];
+            if(entry == sock) {
+                println("tcp_close() : Closing the parent listener");
+                TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
 
-    if(sock->local_port != $u16 0) {
-        assert(TCP_PORT_TABLE[sock->local_port] == sock, "tcp_close() : Current socket in table does not match associated port");
-        TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
-    }
+            } else if(entry != nullptr) {
+                println("tcp_close() : Closing the child socket");
+                TCPSock* parent_tcb = $TCPSock* entry->proto_info;
 
-    free($void* tcb->rx_buf, TCP_RX_BUFFER_SIZE);
-    free($void* tcb, sizeof(TCPSock));
+                for(u64 i = 0x0; i < parent_tcb->children.size(); i++) {
+                    if(parent_tcb->children[i] == sock) {
+                        parent_tcb->children.erase(i);
+                        break;
+                    }
+                }
+
+            } else {
+                panic("tcp_close() : Should not be here");
+            }
+        }
+
+        free($void* tcb->rx_buf, TCP_RX_BUFFER_SIZE);
+        free($void* tcb, sizeof(TCPSock));
+
+        sock->~();
+        free($void* sock, sizeof(socket));
+    }
 
     println("tcp_close() : Finished TCP close socket operation");
 
@@ -401,11 +585,6 @@ i32 tcp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
     }
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
-
-    // if(tcb->state != TCP_STATE_ESTABLISHED) {
-    //     println("tcp_receive() : TCP connection has not been established yet, returning");
-    //     return -ERR_NOTCONN;
-    // }
 
     while(tcb->rx_head == tcb->rx_tail) {
         if(tcb->state == TCP_STATE_CLOSED || tcb->state == TCP_STATE_CLOSE_WAIT) {
@@ -473,20 +652,22 @@ i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     if(sin->sin_family != $u16 AF_INET) return -ERR_AFNOSUPPORT;
 
     // if no port selected, map an ephemeral port
-    if(sin->sin_port == $u16 0) {
+    u16 sin_port = be_to_cpu(sin->sin_port);
+    if(sin_port == $u16 0) {
         i32 port = get_next_ephemeral_port(TCP_PORT_TABLE);
         if(port < 0) {
             println("tcp_bind() : Unable to find an open ephemeral port, exiting");
             return -ERR_ADDRINUSE;
         }
-        sin->sin_port = $u16 port;
+        sin_port = $u16 port;
+        sin->sin_port = cpu_to_be($u16 port);
     } else {
-        if($u32 sin->sin_port >= MAX_PORTS) {
+        if($u32 sin_port >= MAX_PORTS) {
             println("tcp_bind() : Port outside allowed range, exiting");
             return -ERR_INVAL;
         }
 
-        if(TCP_PORT_TABLE[sin->sin_port] != nullptr) {
+        if(TCP_PORT_TABLE[sin_port] != nullptr) {
             println("tcp_bind() : Port already in use, exiting");
             return -ERR_ADDRINUSE;
         }
@@ -495,11 +676,11 @@ i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     print("tcp_bind() : TCP bind called for [");
     print_ipv4_addr(sin->sin_addr);
     print(":");
-    print($u64 sin->sin_port);
+    print($u64 sin_port);
     println("]");
 
-    TCP_PORT_TABLE[sin->sin_port] = sock;
-    sock->local_port = sin->sin_port;
+    TCP_PORT_TABLE[sin_port] = sock;
+    sock->local_port = sin_port;
     sock->local_addr = sin->sin_addr;
 
     println("tcp_bind() : Finished TCP bind sock");

@@ -1,13 +1,14 @@
 NOW
+- tcp enforce backlog from listen on accept
 - tcp connect timeout, added more error codes inside struct?
 - fill in states for UDP
-- move packet stuff inside udp, we will be using void* to hold protocol specifics
 - TEST SYSCALLS AND FILE OPS
 - add syscall flag handling
 - make a way to prevent kerenl faults when a networking device DNE. (mostly user mode?)
 - add timeout to link state check on init dhcp
 
 LATER
+- TCP congestion and out of order packets handling.
 - DNS
 - make that arp entry lookup not suck
 - arp queuing time out ttl
@@ -15,6 +16,7 @@ LATER
 - add lease time to dhcp
 - add checks to prevent attempts for network activity when there is no network device present
 - generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards? void* for driver struct in net interface?
+- enable more interrupts (transmit) for NICs so i dont have to use a software pointer to transmit?
 
 all the structs for networking that stay inside the kernel will keep everything in CPU order (little endian)
 all functions will take in CPU order (little endian)

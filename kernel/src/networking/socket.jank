@@ -32,9 +32,6 @@ struct socket {
     u16 remote_port;
     
     waitq wait_queue;
-
-    Packet* rx_head; 
-    Packet* rx_tail;
 }
 
 struct Packet {
@@ -51,6 +48,8 @@ struct Packet {
 
 struct proto_ops {
     fn<i32(socket*, sockaddr*, u64)> bind;
+    fn<i32(socket*, i32)> listen;
+    fn<socket*(socket*, sockaddr*, u64*)> accept;
     fn<i32(socket*, sockaddr*, u64)> connect;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> send;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> receive;
@@ -72,30 +71,30 @@ void init_port_tables() {
     memset($void* TCP_PORT_TABLE, 0, $u64 MAX_PORTS * sizeof(socket*));
 }
 
-void socket_push_packet(socket* sock, Packet* pkt) {
+void socket_push_packet(Packet*& head, Packet*& tail, Packet* pkt) {
     pkt->next = $Packet* nullptr;
     
-    if(sock->rx_head == nullptr) {
-        sock->rx_head = pkt;
-        sock->rx_tail = pkt;
+    if(head == nullptr) {
+        head = pkt;
+        tail = pkt;
     } else {
         // queue, pkt->next is the next packet in line.
-        sock->rx_tail->next = pkt;
-        sock->rx_tail = pkt;
+        tail->next = pkt;
+        tail = pkt;
     }
 }
 
-Packet* socket_pop_packet(socket* sock) {
-    if(sock->rx_head == nullptr) {
+Packet* socket_pop_packet(Packet*& head, Packet*& tail) {
+    if(head == nullptr) {
         return $Packet* nullptr;
     }
 
-    Packet* pkt = sock->rx_head;
+    Packet* pkt = head;
 
-    sock->rx_head = pkt->next;
+    head = pkt->next;
 
-    if(sock->rx_head == nullptr) {
-        sock->rx_tail = $Packet* nullptr;
+    if(head == nullptr) {
+        tail = $Packet* nullptr;
     }
 
     pkt->next = $Packet* nullptr;
@@ -140,8 +139,6 @@ i64 socket_getdents(file* f, u8* buf, u64 len) {
 i32 socket_close(file* f) {
     socket* sock = $socket* f->resource_ptr;
     i32 ret = sock->ops->close#(sock);
-    sock->~();
-    free($void* sock, sizeof(socket));
     return ret;
 }
 
