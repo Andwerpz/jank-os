@@ -2,6 +2,7 @@
 #include <assert>;
 #include <string>;
 #include <vector>;
+#include <networking/inet>;
 
 i32 main(u64 argc, u8** argv) {
     cout << "TCP test" << "\n";
@@ -12,7 +13,7 @@ i32 main(u64 argc, u8** argv) {
 
     sockaddr_in remote;
     remote.sin_family = $u16 AF_INET;
-    remote.sin_port = $u16 80;
+    remote.sin_port = inet_hton($u16 80);
     remote.sin_addr = $u32 (70 << 24 | 38 << 16 | 95 << 8 | 141 << 0);
 
     // motherfuckingwebsite.com

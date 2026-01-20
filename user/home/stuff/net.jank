@@ -2,6 +2,8 @@
 #include <assert>;
 #include <string>;
 #include <vector>;
+#include <networking/inet>;
+
 
 i32 main(u64 argc, u8** argv) {
     cout << "UDP test" << "\n";
@@ -12,7 +14,7 @@ i32 main(u64 argc, u8** argv) {
 
     sockaddr_in test;
     test.sin_family = $u16 2;
-    test.sin_port = $u16 1234;
+    test.sin_port = inet_hton($u16 1234);
     test.sin_addr = $u32 0;
 
     i32 res = sys_bind(fd, $sockaddr* @test, sizeof(sockaddr_in));
