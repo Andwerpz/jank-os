@@ -289,6 +289,47 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
             waitq_wake_all(@(sock->wait_queue));
         }
 
+    } else if(tcb->state == TCP_STATE_FIN_WAIT_1 || tcb->state == TCP_STATE_FIN_WAIT_2) {
+        if($i32 (flags & TCP_FLAG_ACK) && tcb->state == TCP_STATE_FIN_WAIT_1) {
+            if(ack_num == tcb->snd_nxt) {
+                println("tcp_handle() : Received ACK for our FIN. Transitioning to FIN_WAIT_2");
+                tcb->state = TCP_STATE_FIN_WAIT_2;
+            }
+        }
+
+        if(flags & TCP_FLAG_FIN) {
+            println("tcp_handle() : Received their FIN. Sending ACK and Cleaning up");
+        
+            tcb->rcv_nxt++; 
+            tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
+            
+            tcb->state = TCP_STATE_CLOSED;
+
+            if(sock->local_port != $u16 0) {
+                socket* entry = TCP_PORT_TABLE[sock->local_port];
+                
+                if(entry == sock) {
+                    TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
+                } 
+                else if(entry != nullptr) {
+                    TCPSock* parent_tcb = $TCPSock* entry->proto_info;
+                    for(u64 i = 0x0; i < parent_tcb->children.size(); i++) {
+                        if(parent_tcb->children[i] == sock) {
+                            parent_tcb->children.erase(i);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            free($void* tcb->rx_buf, TCP_RX_BUFFER_SIZE);
+            free($void* tcb, sizeof(TCPSock));
+
+            sock->~();
+            free($void* sock, sizeof(socket));
+            
+            return;
+        }
     } else if(tcb->state == TCP_STATE_CLOSE_WAIT || tcb->state == TCP_STATE_LAST_ACK) {
         println("tcp_handle() : Already closing connection, dropping");
         return;
@@ -497,36 +538,40 @@ i32 tcp_close(socket* sock) {
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
     if(tcb->state == TCP_STATE_ESTABLISHED || tcb->state == TCP_STATE_SYN_RECEIVED) {
+        println("tcp_close() : Changing state to FIN_WAIT_1");
         tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK | TCP_FLAG_FIN);
         tcb->snd_nxt++;
-    }
+        tcb->state = TCP_STATE_FIN_WAIT_1;
+    } else {
+        tcb->state = TCP_STATE_CLOSED;
+        if(sock->local_port != $u16 0) {
+            socket* entry = TCP_PORT_TABLE[sock->local_port];
+            if(entry == sock) {
+                println("tcp_close() : Closing the parent listener");
+                TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
 
-    tcb->state = TCP_STATE_CLOSED;
+            } else if(entry != nullptr) {
+                println("tcp_close() : Closing the child socket");
+                TCPSock* parent_tcb = $TCPSock* entry->proto_info;
 
-    if(sock->local_port != $u16 0) {
-        socket* entry = TCP_PORT_TABLE[sock->local_port];
-        if(entry == sock) {
-            println("tcp_close() : Closing the parent listener");
-            TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
-
-        } else if(entry != nullptr) {
-            println("tcp_close() : Closing the child socket");
-            TCPSock* parent_tcb = $TCPSock* entry->proto_info;
-
-            for(u64 i = 0x0; i < parent_tcb->children.size(); i++) {
-                if(parent_tcb->children[i] == sock) {
-                    parent_tcb->children.erase(i);
-                    break;
+                for(u64 i = 0x0; i < parent_tcb->children.size(); i++) {
+                    if(parent_tcb->children[i] == sock) {
+                        parent_tcb->children.erase(i);
+                        break;
+                    }
                 }
+
+            } else {
+                panic("tcp_close() : Should not be here");
             }
-
-        } else {
-            panic("tcp_close() : Should not be here");
         }
-    }
 
-    free($void* tcb->rx_buf, TCP_RX_BUFFER_SIZE);
-    free($void* tcb, sizeof(TCPSock));
+        free($void* tcb->rx_buf, TCP_RX_BUFFER_SIZE);
+        free($void* tcb, sizeof(TCPSock));
+
+        sock->~();
+        free($void* sock, sizeof(socket));
+    }
 
     println("tcp_close() : Finished TCP close socket operation");
 

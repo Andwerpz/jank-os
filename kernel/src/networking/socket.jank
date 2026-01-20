@@ -139,8 +139,6 @@ i64 socket_getdents(file* f, u8* buf, u64 len) {
 i32 socket_close(file* f) {
     socket* sock = $socket* f->resource_ptr;
     i32 ret = sock->ops->close#(sock);
-    sock->~();
-    free($void* sock, sizeof(socket));
     return ret;
 }
 

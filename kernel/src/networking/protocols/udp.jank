@@ -305,6 +305,11 @@ i32 udp_close(socket* sock) {
         free($void* pkt, sizeof(Packet));
     }
 
+    free($void* sock->proto_info, sizeof(UDPSock));
+
+    sock->~();
+    free($void* sock, sizeof(socket));
+
     println("udp_close() : Finished UDP close socket operation");
 
     return 0;
