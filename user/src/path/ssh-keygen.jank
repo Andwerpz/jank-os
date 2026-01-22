@@ -1,0 +1,41 @@
+#include <iostream>;
+#include <assert>;
+#include <intx>;
+#include <crypto/ed25519>;
+
+string to_hashstring(void* buf, u64 len) {
+    string res;
+    u8* hex = "0123456789abcdef";
+    for(u64 i = 0x0; i < len; i++) {
+        u8 low = ($u8* buf)[i] & $u8 0x0F;
+        u8 high = (($u8* buf)[i] & $u8 0xF0) >> $u8 4;
+        res.push_back(hex[high]);
+        res.push_back(hex[low]);
+    }
+    return res;
+}
+
+i32 main(u64 argc, u8** argv) {
+    if(argc != 0x2) {
+        cout << "Usage : \n";
+        cout << "ssh-keygen <algorithm_name>\n";
+        return 1;
+    } 
+
+    string algname = new string(argv[1]);
+    if(algname == "ed25519") {
+        void* private = malloc($u64 32);
+        void* public = malloc($u64 32);
+        ed25519_generate_keypair(private, public);
+        cout << "PRIVATE : " << to_hashstring(private, $u64 32) << "\n";
+        cout << "PUBLIC  : " << to_hashstring(public, $u64 32) << "\n";
+        free(private, $u64 32);
+        free(public, $u64 32);
+    }
+    else {
+        cout << "Unsupported algorithm : " << algname << "\n";
+        return 1;
+    }
+
+    return 0;
+}

@@ -1141,21 +1141,29 @@ u64 sys_sched_yield() {
     return 0x0;
 }
 
+[__GLOBAL_FIRST__] u64 MMAP_COUNTER = 0x0;
 void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 offset) {
     // switch to kernel_pt
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
 
+    MMAP_COUNTER ++;
+    if((MMAP_COUNTER % $u64 1000) == 0x0) {
+        cout << "MMAP COUNT : " << MMAP_COUNTER << "\n";
+    }
+
     process* proc = get_cur_proc();
 
     // check if len is page aligned
     if(len % PAGE_SIZE != 0x0) {
+        cout << "MMAP FAILED : LEN NOT PAGE ALIGNED\n";
         pt_switch(user_pt);
         return $void* $u64 -ERR_UNKNOWN;
     }
 
     // check if we've ran out of heap space
     if(proc->brk + len > USER_HEAP_TOP) {
+        cout << "MMAP FAILED : OUT OF HEAP SPACE\n";
         pt_switch(user_pt);
         return $void* $u64 -ERR_UNKNOWN;
     }
