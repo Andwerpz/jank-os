@@ -42,7 +42,7 @@ we need some cryptographic algorithms :
 SSH also supports the use of compression algorithms, but for now supporting 'none' is fine. 
 
 for now, I'll just support one commonly supported algorithm for each type
- - KEX : curve25519
+ - KEX : curve25519 (X25519)
  - Hostkey / Userkey : ed25519
  - Cipher + MAC : chacha20-poly1305
 

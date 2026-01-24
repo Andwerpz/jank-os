@@ -12,6 +12,10 @@ drive: user
 # flag to tell qemu to print interrupts
 # -d int
 
+# host cpu passthrough?
+#		-enable-kvm \
+# 		-cpu host \
+
 # create and boot from drive
 .PHONY: boot
 boot: drive 
