@@ -130,11 +130,6 @@ void init_pipe_file_ops() {
     FILE_OPS_PIPE->op_poll = #<pipe_poll(file*)>;
 }
 
-// POLL FILL IN
-u16 pipe_poll(file* f) {
-    return $u16 0;
-}
-
 i64 pipe_read(file* fd, u8* buf, u64 amt) {
     pipe_ref* pipe = $pipe_ref* fd->resource_ptr;
     u64 buf_ptr = 0x0;
@@ -198,4 +193,15 @@ i32 pipe_fstat(file* file, stat* stat) {
     stat->st_blocks = $i64 0x0;
 
     return 0;
+}
+
+u16 pipe_poll(file* file) {
+    pipe_ref* ref = $pipe_ref* file->resource_ptr;
+    pipe* pipe = ref->pipe;
+
+    u16 ret = $u16 0;
+    if(pipe->has_char()) ret |= POLLIN;
+    ret |= POLLOUT;
+    if(pipe->writers == 0x0) ret |= POLLHUP;
+    return ret;
 }

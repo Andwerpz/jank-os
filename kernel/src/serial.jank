@@ -127,11 +127,6 @@ void init_serial_file_ops() {
     FILE_OPS_SERIAL->op_poll = #<serial_poll(file*)>;
 }
 
-// POLL FILL IN
-u16 serial_poll(file* f) {
-    return $u16 0;
-}
-
 i64 serial_read(file* fd, u8* buf, u64 amt) {
     u64 buf_ptr = 0x0;
     while(buf_ptr < amt) {
@@ -176,6 +171,12 @@ i32 serial_fstat(file* file, stat* stat) {
     return -1;  //TODO
 }
 
+u16 serial_poll(file* file) {
+    u16 ret = $u16 0;
+    if(serial_received() != $u8 0) ret |= POLLIN;
+    if(is_transmit_empty() != $u8 0) ret |= POLLOUT;
+    return ret;
+}
 
 [__GLOBAL_FIRST__] tty_backend_ops* TTY_BACKEND_OPS_SERIAL;
 void init_serial_tty_backend_ops() {
