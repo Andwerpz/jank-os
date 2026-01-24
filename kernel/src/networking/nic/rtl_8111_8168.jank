@@ -100,6 +100,7 @@ void rtl8111_init(u64 addr) {
     nic->gateway_ip = $u32 0;
     nic->dhcp_server = $u32 0;
     nic->dns_server = $u32 0;
+    nic->dhcp_configured = 0;
 
     nic->send = #<rtl8111_send(u8*, u16)>;
     nic->get_link_state = #<rtl8111_get_link_status()>;
@@ -138,6 +139,14 @@ void rtl8111_interrupt_handler(trapframe* tf) {
 
     if(status & RTL8111_MAC_IMR_LinkChg) {
         println("rtl8111_interrupt_handler() : Link status change");
+
+        if(rtl8111_get_link_status()) {
+            println("rtl8111_interrupt_handler() : Link is UP, Starting DHCP");
+        } else {
+            println("rtl8111_interrupt_handler() : Link is DOWN");
+            CURRENT_INTERFACE->dhcp_configured = 0;
+            CURRENT_INTERFACE->ip_address = $u32 0;
+        }
     }
 
     if(status & RTL8111_MAC_IMR_ROK) {
@@ -325,6 +334,7 @@ void rtl8111_reset() {
 
 // returns 1 for up, 0 for down.
 i32 rtl8111_get_link_status() {
+    rtl8111_read_phy(RTL8111_PHY_BMSR);
     u16 temp = rtl8111_read_phy(RTL8111_PHY_BMSR) & RTL8111_PHY_BMSR_Link_Status;
     if(temp) return 1;
     return 0;

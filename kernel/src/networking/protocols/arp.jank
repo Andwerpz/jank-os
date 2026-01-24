@@ -4,8 +4,12 @@
 [__GLOBAL_FIRST__] u16 ARP_OPCODE_REPLY         = $u16 0x0002;
 
 [__GLOBAL_FIRST__] PendingPacket* ARP_WAIT_QUEUE_HEAD = $PendingPacket* nullptr;
+[__GLOBAL_FIRST__] u32 ARP_WAIT_QUEUE_MAX_RETRIES = $u32 5;
+[__GLOBAL_FIRST__] u64 ARP_WAIT_QUEUE_RETRY_INTERVAL = (0x3B9ACA00 * $u64 1);
 
-vector<ARPEntry*> arp_entries;
+[__GLOBAL_FIRST__] u64 ARP_ENTRY_TTL = (0x3B9ACA00 * $u64 60);
+hashmap<u32, ARPEntry*> ARP_TABLE;
+vector<u32> ARP_TABLE_IPS; // used to keep track of ips for now... until i can iterate a hashmap (@andrewli)
 
 struct ARPHeader {
     u16     hw_type;        // Hardware Type
@@ -20,8 +24,8 @@ struct ARPHeader {
 }
 
 struct ARPEntry {
-    u32     ip;
     u8[6]   mac;
+    u64     expire_at;
 }
 
 struct PendingPacket {
@@ -29,6 +33,9 @@ struct PendingPacket {
     u8* data;       // this is the entire packet, NOT packet->data (heh)
     u16 len;        // this is the length of the entire packet, NOT packet->data (heh)
     PendingPacket* next;
+
+    u32 retries;
+    u64 last_attempt;
 }
 
 void arp_handle(ARPHeader* arp) {
@@ -141,25 +148,29 @@ void send_arp_request(u32 target_ip) {
 }
 
 void arp_update(u32 ip, u8[6]& mac) {
-    for(u64 i = 0x0; i < arp_entries.size(); i++) {
-        if(arp_entries[i]->ip == ip) {
-            set_mac(mac, arp_entries[i]->mac);
-            return;
-        }
+    if(ARP_TABLE.contains(ip)) {
+        ARPEntry* entry = ARP_TABLE.get(ip);
+        set_mac(mac, entry->mac);
+        entry->expire_at = hpet_get_ns() + ARP_ENTRY_TTL;
+        return;
     }
 
-    ARPEntry* arp_entry = $ARPEntry* malloc(sizeof(ARPEntry));
-    arp_entry->ip = ip;
-    set_mac(arp_entry->mac, mac);
-    arp_entries.push_back(arp_entry);
+    ARPEntry* entry = $ARPEntry* malloc(sizeof(ARPEntry));
+    set_mac(entry->mac, mac);
+    ARP_TABLE.insert(ip, entry);
+    ARP_TABLE_IPS.push_back(ip);
 }
 
 i32 arp_lookup(u32 ip, u8[6]& mac) {
-    for(u64 i = 0x0; i < arp_entries.size(); i++) {
-        if(arp_entries[i]->ip == ip) {
-            set_mac(mac, arp_entries[i]->mac);
-            return 1;
+    if(ARP_TABLE.contains(ip)) {
+        ARPEntry* entry = ARP_TABLE.get(ip);
+
+        if(entry->expire_at > hpet_get_ns()) {
+            return 0;
         }
+
+        set_mac(mac, entry->mac);
+        return 1;
     }
     return 0;
 }
@@ -167,11 +178,15 @@ i32 arp_lookup(u32 ip, u8[6]& mac) {
 void arp_table_dump() {
     println("=-----=");
     println("Current ARP Table:");
-    for(u64 i = 0x0; i < arp_entries.size(); i++) {
-        print_ipv4_addr(arp_entries[i]->ip);
-        print(" - ");
-        print_mac_addr(arp_entries[i]->mac);
-        println("");
+    for(u64 i = 0x0; i < ARP_TABLE_IPS.size(); i++) {
+        if(ARP_TABLE.contains(ARP_TABLE_IPS[i])) {
+            ARPEntry* entry = ARP_TABLE.get(ARP_TABLE_IPS[i]);
+            print_ipv4_addr(ARP_TABLE_IPS[i]);
+            print(" - ");
+            print_mac_addr(entry->mac);
+            print(" | Expires at: ");
+            println(entry->expire_at);
+        }
     }
     println("=-----=");
 }
@@ -183,6 +198,9 @@ void arp_queue_packet(u32 target_ip, u8* packet, u16 len) {
 
     pp->data = $u8* malloc($u64 len);
     memcpy($void* pp->data, $void* packet, $u64 len);
+
+    pp->retries = $u32 0;
+    pp->last_attempt = hpet_get_ns();
 
     pp->next = ARP_WAIT_QUEUE_HEAD;
     ARP_WAIT_QUEUE_HEAD = pp;
@@ -212,6 +230,48 @@ void arp_flush_pending(u32 resolved_ip, u8[6]& dst_mac) {
 
             free($void* to_free->data, $u64 to_free->len);
             free($void* to_free, sizeof(PendingPacket));
+        } else {
+            prev = curr;
+            curr = curr->next;
+        }
+    }
+}
+
+void arp_check_timeouts() {
+    u64 now = hpet_get_ns();
+
+    PendingPacket* curr = ARP_WAIT_QUEUE_HEAD;
+    PendingPacket* prev = $PendingPacket* nullptr;
+
+    while(curr != nullptr) {
+        if(now - curr->last_attempt >= ARP_WAIT_QUEUE_RETRY_INTERVAL) {
+            if(curr->retries < ARP_WAIT_QUEUE_MAX_RETRIES) {
+                println("arp_check_timeouts() : Retrying ARP request");
+                send_arp_request(curr->target_ip);
+                
+                curr->retries++;
+                curr->last_attempt = now;
+                
+                prev = curr;
+                curr = curr->next;
+            } else {
+                print("arp_check_timeouts() : ARP resolution failed for [");
+                print_ipv4_addr(curr->target_ip);
+                println("], dropping packet");
+
+                PendingPacket* to_free = curr;
+                if(prev == nullptr) {
+                    ARP_WAIT_QUEUE_HEAD = curr->next;
+                    curr = ARP_WAIT_QUEUE_HEAD;
+                } else {
+                    prev->next = curr->next;
+                    curr = curr->next;
+                }
+
+                free($void* to_free->data, $u64 to_free->len);
+                free($void* to_free, sizeof(PendingPacket));
+            }
+
         } else {
             prev = curr;
             curr = curr->next;

@@ -54,6 +54,7 @@ struct proto_ops {
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> send;
     fn<i32(socket*, u8*, u64, i32, sockaddr*)> receive;
     fn<i32(socket*)> close;
+    fn<u16(socket*)> poll;
 }
 
 i32 get_next_ephemeral_port(socket** port_table) {
@@ -112,6 +113,7 @@ void init_socket_file_ops() {
     FILE_OPS_SOCKET->op_close       = #<socket_close(file*)>;
     FILE_OPS_SOCKET->op_truncate    = #<socket_truncate(file*, u64)>;
     FILE_OPS_SOCKET->op_fstat       = #<socket_fstat(file*, stat*)>;
+    FILE_OPS_SOCKET->op_poll        = #<socket_poll(file*)>;
 }
 
 i64 socket_read(file* f, u8* buf, u64 len) {
@@ -162,4 +164,10 @@ i32 socket_fstat(file* f, stat* s) {
     s->st_blocks = $i64 0x0;
 
     return 0;
+}
+
+u16 socket_poll(file* f) {
+    socket* sock = $socket* f->resource_ptr;
+    u16 ret = sock->ops->poll#(sock);
+    return ret;
 }

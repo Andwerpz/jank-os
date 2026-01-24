@@ -219,25 +219,6 @@ void vfs_tests() {
     }
 }
 
-void init_dhcp() {
-    // make dummy dhcp socket
-    socket* socket = $socket* malloc(sizeof(socket));
-    new (socket) socket();
-    UDP_PORT_TABLE[DHCP_CLIENT_LISTEN_PORT] = socket;
-
-    u64 init_time = hpet_get_ns();
-    u64 curr_time = 0x0;
-
-    while(1) {
-        curr_time = hpet_get_ns();
-        if((curr_time - init_time) > 0x3B9ACA00) {
-            dhcp_send_discover();
-            init_time = curr_time;
-            break;
-        }
-    }
-}
-
 //manually triggers a general protection fault
 void gp_handler_test() {
     u8* bad_addr = $u8* 0x0f00000000000000; //non-canonical address
@@ -306,10 +287,6 @@ i32 main() {
         init_port_tables();
         init_udp_ops();
         init_tcp_ops();
-
-        // wait for link up.
-        while(CURRENT_INTERFACE->get_link_state#() == 0) {}
-        init_dhcp();
     }
 
     init_scheduler();

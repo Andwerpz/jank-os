@@ -114,6 +114,7 @@ void init_udp_ops() {
     UDP_OPS->connect    = #<udp_connect(socket*, sockaddr*, u64)>;
     UDP_OPS->bind       = #<udp_bind(socket*, sockaddr*, u64)>;
     UDP_OPS->close      = #<udp_close(socket*)>;
+    UDP_OPS->poll       = #<udp_poll(socket*)>;
 }
 
 i32 udp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dest_addr) {
@@ -202,7 +203,10 @@ i32 udp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
         }
 
         // handle non block flags here
-        // if()
+        if(flags & MSG_DONTWAIT) {
+            return -ERR_AGAIN;
+            // return -ERR_WOULDBLOCK;
+        }
 
         wait_on(@(sock->wait_queue));
     }
@@ -315,4 +319,17 @@ i32 udp_close(socket* sock) {
     println("udp_close() : Finished UDP close socket operation");
 
     return 0;
+}
+
+u16 udp_poll(socket* sock) {
+    UDPSock* udp_info = $UDPSock* sock->proto_info;
+    u16 mask = $u16 0;
+
+    if(udp_info->rx_head != udp_info->rx_tail) {
+        mask |= POLLIN;
+    }
+
+    mask |= POLLOUT; // udp should be always writable
+
+    return mask;
 }

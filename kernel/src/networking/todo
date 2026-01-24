@@ -1,19 +1,23 @@
 NOW
+- DHCP on link status change polish
+- flesh out dhcp
+- add lease time to dhcp
+- ^above dhcp items can probably be done inside the timer call...
+
 - tcp enforce backlog from listen on accept
 - tcp connect timeout, added more error codes inside struct?
+- TCP congestion and out of order packets handling.
+
 - fill in states for UDP
+
 - TEST SYSCALLS AND FILE OPS
+
 - add syscall flag handling
-- make a way to prevent kerenl faults when a networking device DNE. (mostly user mode?)
+
 - add timeout to link state check on init dhcp
 
 LATER
-- TCP congestion and out of order packets handling.
 - DNS
-- make that arp entry lookup not suck
-- arp queuing time out ttl
-- add expirations for arp entries, probably 60 seconds?
-- add lease time to dhcp
 - add checks to prevent attempts for network activity when there is no network device present
 - generic network device? move all globals for nic driver to own struct, possible to have multiple of same cards? void* for driver struct in net interface?
 - enable more interrupts (transmit) for NICs so i dont have to use a software pointer to transmit?
@@ -21,3 +25,6 @@ LATER
 all the structs for networking that stay inside the kernel will keep everything in CPU order (little endian)
 all functions will take in CPU order (little endian)
 all the protocol structs that get sent over the wire will be network order (big endian)
+some exceptions:
+ipv4 -> u32 mapping will be big endian (?)
+in the sockaddr struct, we will have the ip and the port in big endian

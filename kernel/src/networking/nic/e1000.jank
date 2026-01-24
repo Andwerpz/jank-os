@@ -152,6 +152,7 @@ void e1000_init(u64 addr) {
     nic->gateway_ip = $u32 0;
     nic->dhcp_server = $u32 0;
     nic->dns_server = $u32 0;
+    nic->dhcp_configured = 0;
 
     nic->send = #<e1000_send(u8*, u16)>;
     nic->get_link_state = #<e1000_get_link_status()>;
@@ -531,6 +532,14 @@ void e1000_interrupt_handler(trapframe* tf) {
 
     if(status & E1000_IMS_LSC) {
         println("e1000_interrupt_handler() : Link status changed");
+
+        if(e1000_get_link_status()) {
+            println("e1000_interrupt_handler() : Link is UP");
+        } else {
+            println("e1000_interrupt_handler() : Link is DOWN");
+            CURRENT_INTERFACE->dhcp_configured = 0;
+            CURRENT_INTERFACE->ip_address = $u32 0;
+        }
     }
 
     if(status & E1000_IMS_RXT0) {
