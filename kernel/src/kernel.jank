@@ -4,6 +4,7 @@
 #include <vector>;
 #include <deque>;
 #include <hashmap>;
+#include <crypto/chacha20>;
 
 #include "memlayout.jank";
 #include "panic.jank";

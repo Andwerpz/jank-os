@@ -278,11 +278,6 @@ void init_tty_file_ops() {
     FILE_OPS_TTY->op_poll = #<tty_poll(file*)>;
 }
 
-// POLL FILL IN
-u16 tty_poll(file* f) {
-    return $u16 0;
-}
-
 i64 tty_read(file* fd, u8* buf, u64 amt) {
     assert(fd->type == FILE_TYPE_TTY, "tty_read() : mismatching type");
     assert(fd->resource_ptr != nullptr, "tty_read() : resource must be not null");
@@ -338,6 +333,15 @@ i32 tty_fstat(file* file, stat* stat) {
     stat->st_blocks = $i64 0x0;
 
     return 0;
+}
+
+u16 tty_poll(file* file) {
+    tty* tty = $tty* file->resource_ptr;
+
+    u16 ret = $u16 0;
+    if(tty->outq.size() != 0x0) ret |= POLLIN;
+    ret |= POLLOUT;
+    return ret;
 }
 
 

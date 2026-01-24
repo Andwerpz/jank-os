@@ -67,6 +67,7 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_UNLINK           = $u64 87;
 [__GLOBAL_FIRST__] u64 SYS_GETDENTS64       = $u64 217;
 [__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
+[__GLOBAL_FIRST__] u64 SYS_GETRANDOM        = $u64 318;
 
 //jank syscalls
 //TODO add talk-to-jank 
@@ -228,6 +229,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_STAT)             ans = $u64 sys_stat($u8* arg1, $stat* arg2);
     else if(sys_id == SYS_FSTAT)            ans = $u64 sys_fstat($i32 arg1, $stat* arg2);
     else if(sys_id == SYS_POLL)             ans = $u64 sys_poll($pollfd* arg1, $u32 arg2, $i32 arg3);
+    else if(sys_id == SYS_GETRANDOM)        ans = $u64 sys_getrandom($void* arg1, $u64 arg2, $u64 arg3);
 
     else {
         pt_switch_to_kernel();
@@ -247,11 +249,64 @@ export u64 syscall_handler() {
     return $u64 ans;
 }
 
+[__GLOBAL_FIRST__] chacha20_ctx* SYS_GETRANDOM_CHACHA20_CTX = $chacha20_ctx* nullptr;
+[__GLOBAL_FIRST__] void* SYS_GETRANDOM_KEY_MATERIAL = nullptr;
+i64 sys_getrandom(void* buf, u64 buf_len, u64 flags) {
+    if(flags != 0x0) {
+        cout << "sys_getrandom() : not supporting any flags for now\n";
+        return $i64 -ERR_INVAL;
+    }
+
+    //is len == 0?
+    if(buf_len == 0x0) {
+        return $i64 0;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //initialize chacha20 
+    if(SYS_GETRANDOM_CHACHA20_CTX == nullptr) {
+        SYS_GETRANDOM_CHACHA20_CTX = $chacha20_ctx* malloc(sizeof(chacha20_ctx));
+        SYS_GETRANDOM_KEY_MATERIAL = malloc($u64 64);
+        u64 x = $u64 1337;
+        for(u64 i = 0x0; i < $u64 64; i++) {
+            x = (x * $u64 1529) % $u64 10923;
+            ($u8* SYS_GETRANDOM_KEY_MATERIAL)[i] = $u8 x;
+        }
+    }
+    chacha20_init(
+        SYS_GETRANDOM_CHACHA20_CTX, 
+        SYS_GETRANDOM_KEY_MATERIAL, 
+        $u32 0, 
+        $void* ($u64 SYS_GETRANDOM_KEY_MATERIAL + $u64 32)
+    );
+
+    //generate random bytes
+    void* kbuf = malloc(buf_len);
+    chacha20_keystream(SYS_GETRANDOM_CHACHA20_CTX, kbuf, buf_len);
+
+    //create new key material
+    chacha20_keystream(SYS_GETRANDOM_CHACHA20_CTX, SYS_GETRANDOM_KEY_MATERIAL, $u64 64);
+
+    //copy to kernel
+    if(copy_to_user(user_pt, $u8* kbuf, $u8* buf, buf_len) != 0) {
+        free(kbuf, buf_len);
+        pt_switch(user_pt);
+        return $i64 -ERR_FAULT;
+    }
+
+    free(kbuf, buf_len);
+    pt_switch(user_pt);
+    return $i64 buf_len;
+}
+
 i32 sys_poll(pollfd* fds, u32 nfds, i32 timeout) {
     pagetable_t user_pt = pt_get_current();
     pt_switch_to_kernel();
     process* proc = get_cur_proc();
 
+    //copy fds array from user
     u64 copy_size = sizeof(pollfd) * $u64 nfds;
     pollfd* k_fds = $pollfd* malloc(copy_size);
     if(copy_from_user(user_pt, $u8* k_fds, $u8* fds, copy_size) != 0) {
@@ -260,12 +315,19 @@ i32 sys_poll(pollfd* fds, u32 nfds, i32 timeout) {
         return -ERR_FAULT;
     }
 
+    //ensure all fds are valid
+    for(u32 i = $u32 0; i < nfds; i++) {
+        i32 fd = k_fds[i].fd;
+        if(fd < 0 || fd >= $i32 PROCESS_MAX_FD || proc->fd_table[fd] == nullptr) {
+            free($void* k_fds, copy_size);
+            pt_switch(user_pt);
+            return -ERR_BADF;
+        }
+    }
 
     i32 num_ready = 0;
-
     u64 start = hpet_get_ns();
     u64 timeout_ns = $u64 timeout * 0xF4240;
-
     while(1) {
         for(u32 i = $u32 0; i < nfds; i++) {
             file* f = proc->fd_table[k_fds[i].fd];
@@ -283,11 +345,9 @@ i32 sys_poll(pollfd* fds, u32 nfds, i32 timeout) {
                 num_ready++;
             }
         }
-
         if(num_ready > 0) {
             break;
         }
-
         if(timeout >= 0) {
             u64 curr = hpet_get_ns();
             if((curr - start) >= timeout_ns) {
@@ -295,7 +355,8 @@ i32 sys_poll(pollfd* fds, u32 nfds, i32 timeout) {
             }
         }
 
-        // yield(); // ?
+        //yield and wait for more events
+        yield();
     }
 
     if(copy_to_user(user_pt, $u8* k_fds, $u8* fds, copy_size) != 0) {

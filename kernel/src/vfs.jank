@@ -1117,11 +1117,6 @@ void init_vfs_file_ops() {
     FILE_OPS_VFS->op_poll = #<vfs_poll(file*)>;
 }
 
-// POLL FILL IN
-u16 vfs_poll(file* f) {
-    return $u16 0;
-}
-
 i64 vfs_read(file* fd, u8* buf, u64 amt) {
     vfs_inode* node = $vfs_inode* fd->resource_ptr;
 
@@ -1285,4 +1280,21 @@ i32 vfs_fstat(file* file, stat* stat) {
     vfs_inode* node = $vfs_inode* file->resource_ptr;
     i32 status = vfs_fstat(node, stat);
     return status;
+}
+
+u16 vfs_poll(file* file) {
+    vfs_inode* node = $vfs_inode* file->resource_ptr;
+
+    u16 ret = $u16 0;
+    if(node->is_file()) {
+        ret |= POLLIN;
+        ret |= POLLOUT;
+    }
+    else if(node->is_directory()) {
+        // nothing
+    }
+    else {
+        panic("vfs_poll() : unsupported file type");
+    }
+    return ret;
 }
