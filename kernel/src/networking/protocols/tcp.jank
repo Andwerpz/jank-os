@@ -460,7 +460,7 @@ socket* tcp_accept(socket* sock, sockaddr* client_addr, u64* addr_len) {
         sockaddr_in* sin = $sockaddr_in* client_addr;
         sin->sin_family = $u16 AF_INET;
         sin->sin_port = cpu_to_be(child_sock->remote_port);
-        sin->sin_addr = child_sock->remote_addr;
+        sin->sin_addr = cpu_to_be(child_sock->remote_addr);
         *addr_len = sizeof(sockaddr_in);
     }
 
@@ -485,7 +485,7 @@ i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
 
-    sock->remote_addr = sin->sin_addr;
+    sock->remote_addr = be_to_cpu(sin->sin_addr);
     sock->remote_port = be_to_cpu(sin->sin_port);
 
     // should this be here? needs this for checksum hehe
@@ -663,8 +663,10 @@ i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     sockaddr_in* sin = $sockaddr_in* addr;
     if(sin->sin_family != $u16 AF_INET) return -ERR_AFNOSUPPORT;
 
-    // if no port selected, map an ephemeral port
     u16 sin_port = be_to_cpu(sin->sin_port);
+    u32 sin_addr = be_to_cpu(sin->sin_addr);
+
+    // if no port selected, map an ephemeral port
     if(sin_port == $u16 0) {
         i32 port = get_next_ephemeral_port(TCP_PORT_TABLE);
         if(port < 0) {
@@ -686,14 +688,14 @@ i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     }
 
     print("tcp_bind() : TCP bind called for [");
-    print_ipv4_addr(sin->sin_addr);
+    print_ipv4_addr(sin_addr);
     print(":");
     print($u64 sin_port);
     println("]");
 
     TCP_PORT_TABLE[sin_port] = sock;
     sock->local_port = sin_port;
-    sock->local_addr = sin->sin_addr;
+    sock->local_addr = sin_addr;
 
     println("tcp_bind() : Finished TCP bind sock");
 

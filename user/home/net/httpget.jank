@@ -14,7 +14,7 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in remote;
     remote.sin_family = $u16 AF_INET;
     remote.sin_port = inet_hton($u16 80);
-    remote.sin_addr = $u32 (70 << 24 | 38 << 16 | 95 << 8 | 141 << 0);
+    remote.sin_addr = inet_hton($u32 (70 << 24 | 38 << 16 | 95 << 8 | 141 << 0));
 
     // motherfuckingwebsite.com
 
@@ -41,10 +41,10 @@ i32 main(u64 argc, u8** argv) {
         r = sys_read(fd, $void* buf, size);
     }
 
-    // res = sys_recvfrom(fd, buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
+    // res = sys_recvfrom(fd, $void* buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
     // while(res > 0) {
     //     cout << buf;
-    //     res = sys_recvfrom(fd, buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
+    //     res = sys_recvfrom(fd, $void* buf, size, 0, $sockaddr* nullptr, $u64* nullptr);
     // }
     cout << "\n";
     cout.flush();

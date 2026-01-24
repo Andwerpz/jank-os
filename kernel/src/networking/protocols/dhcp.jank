@@ -324,7 +324,7 @@ void init_dhcp() {
     }
 
     if(CURRENT_INTERFACE->dhcp_configured) {
-        return;
+        return; 
     }
 
     if(UDP_PORT_TABLE[DHCP_CLIENT_LISTEN_PORT] == nullptr) {
