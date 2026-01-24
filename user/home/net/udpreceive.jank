@@ -15,7 +15,7 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in test;
     test.sin_family = $u16 2;
     test.sin_port = inet_hton($u16 1234);
-    test.sin_addr = $u32 0;
+    test.sin_addr = inet_hton($u32 0);
 
     i32 res = sys_bind(fd, $sockaddr* @test, sizeof(sockaddr_in));
     assert(res >= 0, "failed to bind");
@@ -27,7 +27,7 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in client_addr;
     u64 addr_len = sizeof(sockaddr_in);
 
-    i32 len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
+    i64 len = sys_recvfrom(fd, $void* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
 
     cout << "got length: " << len << "\n";
     buf[len] = $u8 0;
@@ -35,10 +35,10 @@ i32 main(u64 argc, u8** argv) {
     cout.flush();
 
     // while(1) {
-    //     // i32 len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
+    //     // i32 len = sys_recvfrom(fd, $void* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
     //     i64 len = sys_read(fd, $void* buf, buf_size - 0x1);
     //     while(len <= $i64 0) {
-    //         // len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
+    //         // len = sys_recvfrom(fd, $void* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
     //         len = sys_read(fd, $void* buf, buf_size - 0x1);
     //     }
 

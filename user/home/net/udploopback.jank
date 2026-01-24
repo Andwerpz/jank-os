@@ -14,7 +14,7 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in local;
     local.sin_family = $u16 AF_INET;
     local.sin_port = inet_hton($u16 4321);
-    local.sin_addr = $u32 0;
+    local.sin_addr = inet_hton($u32 0);
 
     i32 res = sys_bind(fd, $sockaddr* @local, sizeof(sockaddr_in));
     assert(res >= 0, "failed to bind");
@@ -22,9 +22,9 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in remote;
     remote.sin_family = $u16 AF_INET;
     remote.sin_port = inet_hton($u16 4321);
-    remote.sin_addr = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 15 << 0);
-    // remote.sin_addr = $u32 (127 << 24 | 0 << 16 | 0 << 8 | 1 << 0);
-    // remote.sin_addr = $u32 (10 << 24 | 0 << 16 | 2 << 8 | 3 << 0);
+    remote.sin_addr = inet_hton($u32 (10 << 24 | 0 << 16 | 2 << 8 | 15 << 0));
+    // remote.sin_addr = inet_hton($u32 (127 << 24 | 0 << 16 | 0 << 8 | 1 << 0));
+    // remote.sin_addr = inet_hton($u32 (10 << 24 | 0 << 16 | 2 << 8 | 3 << 0));
 
     res = sys_connect(fd, $sockaddr* @remote, sizeof(sockaddr_in));
     cout << res << "\n";
@@ -44,7 +44,7 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in client_addr;
     u64 addr_len = sizeof(sockaddr_in);
 
-    i32 len = sys_recvfrom(fd, $u8* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
+    i64 len = sys_recvfrom(fd, $void* @buf[0], buf_size - 0x1, 0, $sockaddr* @client_addr, @addr_len);
     cout << "got length: " << len << "\n";
     buf[len] = $u8 0;
     cout << $u8* @buf[0] << "\n";

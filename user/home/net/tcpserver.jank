@@ -14,7 +14,7 @@ i32 main(u64 argc, u8** argv) {
     sockaddr_in addr;
     addr.sin_family = $u16 AF_INET;
     addr.sin_port = inet_hton($u16 8080);
-    addr.sin_addr = $u32 0;
+    addr.sin_addr = inet_hton($u32 0);
 
     assert(sys_bind(fd, $sockaddr* @addr, sizeof(sockaddr_in)) == 0, "Failed to bind to port");
     assert(sys_listen(fd, 10) == 0, "Failed to listen");
