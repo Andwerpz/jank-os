@@ -319,6 +319,10 @@ void dhcp_send_discover() {
 }
 
 void init_dhcp() {
+    if(net_interfaces.size() == $u64 0) {
+        return;
+    }
+
     if(CURRENT_INTERFACE->dhcp_configured) {
         return;
     }
