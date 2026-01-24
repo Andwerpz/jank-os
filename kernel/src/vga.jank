@@ -237,6 +237,11 @@ struct vga_terminal {
     u64 cursor_row;
     u64 cursor_col;
 
+    //set to 1 when we write a printable character on the last column
+    //if wrap_pending and we're trying to write a printable character, should wrap then write character
+    //if wrap_pending and we're trying to do some other action that moves the cursor, clear wrap_pending
+    i32 wrap_pending;   
+
     vga_cell* cells;
 
     vga_terminal() {
@@ -248,6 +253,7 @@ struct vga_terminal {
         this.grid_cols = $u64 VGA_USER_SCROLL_BUFFER->width / $u64 font->width;
         this.cursor_row = 0x0;
         this.cursor_col = 0x0;
+        this.wrap_pending = 0;
 
         //initialize cells
         this.cells = $vga_cell* malloc(sizeof(vga_cell) * this.grid_rows * this.grid_cols);
@@ -305,6 +311,7 @@ void vga_terminal_set_cursor_pos(vga_terminal* term, u64 row, u64 col) {
     }
     term->cursor_row = row;
     term->cursor_col = col;
+    term->wrap_pending = 0;     //unset wrap pending whenever the cursor moves
 }
 
 void vga_terminal_set_cursor_row(vga_terminal* term, u64 row) {
@@ -326,6 +333,12 @@ void vga_terminal_inc_cursor_col(vga_terminal* term) {
 //draws character onto screen at cursor position, updates cursor position
 //does default cursor movement (increments cursor col)
 void vga_terminal_draw_char(vga_terminal* term, u8 c) {
+    //handle wrapping
+    if(term->wrap_pending) {
+        assert(term->cursor_col + 0x1 == term->grid_cols, "vga_terminal_draw_char() : wrap_pending should only be set when the cursor is in last column");
+        vga_terminal_inc_cursor_col(term);
+    }
+
     //draw char
     psf_header* font = $psf_header* @_binary_font_psf_start;
     u64 x = term->cursor_col * $u64 font->width;
@@ -337,7 +350,14 @@ void vga_terminal_draw_char(vga_terminal* term, u8 c) {
     cell->char = c;
 
     //update cursor
-    vga_terminal_inc_cursor_col(term);
+    if(term->cursor_col + 0x1 == term->grid_cols) {
+        //arm next character to wrap
+        term->wrap_pending = 1;
+    }
+    else {
+        //move cursor right
+        vga_terminal_inc_cursor_col(term);
+    }      
 }
 
 void vga_terminal_draw_string(vga_terminal* term, u8* str) {
