@@ -127,6 +127,12 @@ void init_pipe_file_ops() {
     FILE_OPS_PIPE->op_close = #<pipe_close(file*)>;
     FILE_OPS_PIPE->op_truncate = #<pipe_truncate(file*, u64)>;
     FILE_OPS_PIPE->op_fstat = #<pipe_fstat(file*, stat*)>;
+    FILE_OPS_PIPE->op_poll = #<pipe_poll(file*)>;
+}
+
+// POLL FILL IN
+u16 pipe_poll(file* f) {
+    return $u16 0;
 }
 
 i64 pipe_read(file* fd, u8* buf, u64 amt) {

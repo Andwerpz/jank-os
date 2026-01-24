@@ -21,6 +21,7 @@ struct file_ops {
     fn<i32(file*)> op_close;                    //closes the fd and underlying resource
     fn<i32(file*, u64)> op_truncate;            //sets the size of the underlying resource
     fn<i32(file*, stat*)> op_fstat;             //populates the provided stat struct
+    fn<u16(file*)> op_poll;                     // returns bitmask of current status (for sys_poll)
 }
 
 struct file {
@@ -176,6 +177,10 @@ i32 file_fstat(file* file, stat* stat) {
     return retval;
 }
 
+u16 file_poll(file* f) {
+    u16 ret = f->ops->op_poll#(f);
+    return ret;
+}
 
 void init_file() {
     init_serial_file_ops();

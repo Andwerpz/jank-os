@@ -40,6 +40,7 @@ i32 init_syscall() {
 [__GLOBAL_FIRST__] u64 SYS_CLOSE            = $u64 3;
 [__GLOBAL_FIRST__] u64 SYS_STAT             = $u64 4;
 [__GLOBAL_FIRST__] u64 SYS_FSTAT            = $u64 5;
+[__GLOBAL_FIRST__] u64 SYS_POLL             = $u64 7;
 [__GLOBAL_FIRST__] u64 SYS_LSEEK            = $u64 8;
 [__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
 [__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
@@ -226,6 +227,7 @@ export u64 syscall_handler() {
     else if(sys_id == SYS_IOCTL)            ans = $u64 sys_ioctl($i32 arg1, $u32 arg2, $void* arg3);
     else if(sys_id == SYS_STAT)             ans = $u64 sys_stat($u8* arg1, $stat* arg2);
     else if(sys_id == SYS_FSTAT)            ans = $u64 sys_fstat($i32 arg1, $stat* arg2);
+    else if(sys_id == SYS_POLL)             ans = $u64 sys_poll($pollfd* arg1, $u32 arg2, $i32 arg3);
 
     else {
         pt_switch_to_kernel();
@@ -243,6 +245,68 @@ export u64 syscall_handler() {
     }
 
     return $u64 ans;
+}
+
+i32 sys_poll(pollfd* fds, u32 nfds, i32 timeout) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+    process* proc = get_cur_proc();
+
+    u64 copy_size = sizeof(pollfd) * $u64 nfds;
+    pollfd* k_fds = $pollfd* malloc(copy_size);
+    if(copy_from_user(user_pt, $u8* k_fds, $u8* fds, copy_size) != 0) {
+        free($void* k_fds, copy_size);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
+
+
+    i32 num_ready = 0;
+
+    u64 start = hpet_get_ns();
+    u64 timeout_ns = $u64 timeout * 0xF4240;
+
+    while(1) {
+        for(u32 i = $u32 0; i < nfds; i++) {
+            file* f = proc->fd_table[k_fds[i].fd];
+            if($void* f != nullptr) {
+                u16 mask = f->ops->op_poll#(f);
+                u16 events = k_fds[i].events | POLLERR | POLLHUP; // add implicit flags?
+                if(mask & events) {
+                    k_fds[i].revents = mask & events;
+                    num_ready++;
+                } else {
+                    k_fds[i].revents = $u16 0;
+                }
+            } else {
+                k_fds[i].revents = POLLNVAL;
+                num_ready++;
+            }
+        }
+
+        if(num_ready > 0) {
+            break;
+        }
+
+        if(timeout >= 0) {
+            u64 curr = hpet_get_ns();
+            if((curr - start) >= timeout_ns) {
+                break;
+            }
+        }
+
+        // yield(); // ?
+    }
+
+    if(copy_to_user(user_pt, $u8* k_fds, $u8* fds, copy_size) != 0) {
+        free($void* k_fds, copy_size);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
+
+    free($void* k_fds, copy_size);
+    pt_switch(user_pt);
+    return num_ready;
 }
 
 i32 sys_listen(i32 fd, i32 backlog) {
@@ -294,7 +358,6 @@ i32 sys_accept(i32 fd, sockaddr* client_addr, u64* addr_len) {
     u64 k_addr_len = 0x0;
     if(addr_len != nullptr) {
         if(copy_from_user(user_pt, $u8* @k_addr_len, $u8* addr_len, sizeof(u64)) != 0) {
-            println("1");
             pt_switch(user_pt);
             return -ERR_FAULT;
         }
@@ -304,7 +367,6 @@ i32 sys_accept(i32 fd, sockaddr* client_addr, u64* addr_len) {
     if(client_addr != nullptr) {
         kaddr = $sockaddr* malloc(sizeof(sockaddr));
         if(copy_from_user(user_pt, $u8* kaddr, $u8* client_addr, k_addr_len) != 0) {
-            println("2");
             free($void* kaddr, k_addr_len);
             pt_switch(user_pt);
             return -ERR_FAULT;
@@ -346,7 +408,6 @@ i32 sys_accept(i32 fd, sockaddr* client_addr, u64* addr_len) {
             free($void* child_sock, sizeof(socket));
 
             free($void* kaddr, k_addr_len);
-            println("3");
             
             pt_switch(user_pt);
             return -ERR_FAULT;
@@ -360,7 +421,6 @@ i32 sys_accept(i32 fd, sockaddr* client_addr, u64* addr_len) {
                 free($void* child_sock, sizeof(socket));
 
                 free($void* kaddr, k_addr_len);
-            println("4");
                 
                 pt_switch(user_pt);
                 return -ERR_FAULT;

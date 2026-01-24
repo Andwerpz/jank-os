@@ -1114,6 +1114,12 @@ void init_vfs_file_ops() {
     FILE_OPS_VFS->op_close = #<vfs_close(file*)>;
     FILE_OPS_VFS->op_truncate = #<vfs_truncate(file*, u64)>;
     FILE_OPS_VFS->op_fstat = #<vfs_fstat(file*, stat*)>;
+    FILE_OPS_VFS->op_poll = #<vfs_poll(file*)>;
+}
+
+// POLL FILL IN
+u16 vfs_poll(file* f) {
+    return $u16 0;
 }
 
 i64 vfs_read(file* fd, u8* buf, u64 amt) {

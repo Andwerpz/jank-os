@@ -275,6 +275,12 @@ void init_tty_file_ops() {
     FILE_OPS_TTY->op_close = #<tty_close(file*)>;
     FILE_OPS_TTY->op_truncate = #<tty_truncate(file*, u64)>;
     FILE_OPS_TTY->op_fstat = #<tty_fstat(file*, stat*)>;
+    FILE_OPS_TTY->op_poll = #<tty_poll(file*)>;
+}
+
+// POLL FILL IN
+u16 tty_poll(file* f) {
+    return $u16 0;
 }
 
 i64 tty_read(file* fd, u8* buf, u64 amt) {

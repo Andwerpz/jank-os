@@ -409,6 +409,7 @@ void init_tcp_ops() {
     TCP_OPS->send       = #<tcp_send(socket*, u8*, u64, i32, sockaddr*)>;
     TCP_OPS->receive    = #<tcp_receive(socket*, u8*, u64, i32, sockaddr*)>;
     TCP_OPS->close      = #<tcp_close(socket*)>;
+    TCP_OPS->poll       = #<tcp_poll(socket*)>;
 }
 
 i32 tcp_listen(socket* sock, i32 backlog) {
@@ -697,4 +698,24 @@ i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     println("tcp_bind() : Finished TCP bind sock");
 
     return 0;
+}
+
+u16 tcp_poll(socket* sock) {
+    TCPSock* tcb = $TCPSock* sock->proto_info;
+    u16 mask = $u16 0;
+
+    if(tcb->rx_head != tcb->rx_tail) {
+        mask |= POLLIN;
+    }
+    
+    if(tcb->state == TCP_STATE_CLOSED || tcb->state == TCP_STATE_CLOSE_WAIT) {
+        mask |= POLLHUP;
+        mask |= POLLIN; // eof is readable
+    }
+
+    if(tcb->state == TCP_STATE_ESTABLISHED) {
+        mask |= POLLOUT;
+    }
+
+    return mask;
 }
