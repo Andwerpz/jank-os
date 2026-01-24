@@ -202,7 +202,10 @@ i32 udp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
         }
 
         // handle non block flags here
-        // if()
+        if(flags & MSG_DONTWAIT) {
+            return -ERR_AGAIN;
+            // return -ERR_WOULDBLOCK;
+        }
 
         wait_on(@(sock->wait_queue));
     }

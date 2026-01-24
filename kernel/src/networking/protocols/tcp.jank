@@ -586,12 +586,23 @@ i32 tcp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
 
-    while(tcb->rx_head == tcb->rx_tail) {
-        if(tcb->state == TCP_STATE_CLOSED || tcb->state == TCP_STATE_CLOSE_WAIT) {
-            return 0;
+    if(flags & MSG_DONTWAIT) {
+        if(tcb->rx_head == tcb->rx_tail) {
+            if(tcb->state == TCP_STATE_CLOSED || tcb->state == TCP_STATE_CLOSE_WAIT) {
+                return 0;
+            }
+            
+            return -ERR_AGAIN;
+            // return -ERR_WOULDBLOCK;
         }
+    } else {
+        while(tcb->rx_head == tcb->rx_tail) {
+            if(tcb->state == TCP_STATE_CLOSED || tcb->state == TCP_STATE_CLOSE_WAIT) {
+                return 0;
+            }
 
-        wait_on(@(sock->wait_queue));
+            wait_on(@(sock->wait_queue));
+        }
     }
 
     u64 bytes_read = 0x0;
