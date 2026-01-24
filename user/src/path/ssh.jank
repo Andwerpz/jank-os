@@ -1162,6 +1162,57 @@ void handle_disconnect() {
     disconnected = 1;
 }
 
+termios* gen_canonical_termios() {
+    termios* t = $termios* malloc(sizeof(termios));
+    memset($void* t, 0, sizeof(termios));
+
+    // --- input flags ---
+    t->c_iflag |= $u32 TTY_ICRNL;    //map CR -> NL
+
+    // --- output flags ---
+    t->c_oflag |= $u32 TTY_OPOST;    //enable post-processing 
+    t->c_oflag |= $u32 TTY_ONLCR;    //map NL -> CR NL
+
+    // --- control flags ---
+
+    // --- local flags ---
+    t->c_lflag |= $u32 TTY_ICANON;   //enable line discipline
+    t->c_lflag |= $u32 TTY_ECHO;     //echo characters back to backend
+    t->c_lflag |= $u32 TTY_ECHOE;    //visually delete the last character typed on backspace
+
+    // --- control chars ---
+    t->c_cc[TTY_VERASE] = $u8 0x7F;      //set backspace char to be DEL
+
+    return t;
+}
+
+termios* gen_raw_termios() {
+    termios* t = gen_canonical_termios();
+
+    // turn off canonical, echo, signals
+    t->c_lflag &= $u32 ~(TTY_ICANON | TTY_ECHO | TTY_ISIG);
+
+    // read returns as soon as 1 byte is available
+    t->c_cc[TTY_VMIN]  = $u8 1;
+    t->c_cc[TTY_VTIME] = $u8 0;
+
+    return t;
+}
+
+i32 enable_raw_mode(i32 fd) {
+    if(tcsetattr(fd, gen_raw_termios())) {
+        return -1;
+    }
+    return 0;
+}
+
+i32 enable_canonical_mode(i32 fd) {
+    if(tcsetattr(fd, gen_canonical_termios())) {
+        return -1;
+    }
+    return 0;
+}
+
 i32 main(u64 argc, u8** argv) {
     if(argc != 0x2) {
         cout << "Usage : \n";
@@ -1216,6 +1267,9 @@ i32 main(u64 argc, u8** argv) {
             return 1;
         }
     }
+
+    //turn on raw termios
+    enable_raw_mode(STDOUT);
 
     socket = sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if(socket < 0) {
@@ -1392,7 +1446,7 @@ i32 main(u64 argc, u8** argv) {
     do_KEX();
 
     //server trust
-    {
+    if(1) {
         cout << "Trust server : " << to_hexstring(server_public_key) << "? (Y/N)\n";
         cout.flush();
         string resp = cin.next_line();
@@ -1437,38 +1491,44 @@ i32 main(u64 argc, u8** argv) {
 
         //TODO : implement publickey auth
         if(!authenticated && has_password) {
-            //prompt for password
-            cout << "Enter password for " << username << "\n";
-            cout.flush();
-            string password;
-            cin >> password;
+            for(i32 i = 0; i < 3 && !authenticated; i++) {
+                //prompt for password
+                cout << "Enter password for " << username << "\n";
+                cout.flush();
+                string password;
+                cin >> password;
 
-            //send auth request
-            {
-                pb.init();
-                pb << SSH_MSG_USERAUTH_REQUEST;
-                pb << username;
-                pb << "ssh-connection";
-                pb << "password";
-                pb << $u8 0;    // FALSE
-                pb << password;
-                pb.flush_packet();
+                //send auth request
+                {
+                    pb.init();
+                    pb << SSH_MSG_USERAUTH_REQUEST;
+                    pb << username;
+                    pb << "ssh-connection";
+                    pb << "password";
+                    pb << $u8 0;    // FALSE
+                    pb << password;
+                    pb.flush_packet();
 
-                pp.read_packet(1);
-                u8 payload_type;
-                pp >> payload_type;
-                if(payload_type == SSH_MSG_USERAUTH_SUCCESS) {
-                    // yay
-                    authenticated = 1;
+                    pp.read_packet(1);
+                    u8 payload_type;
+                    pp >> payload_type;
+                    if(payload_type == SSH_MSG_USERAUTH_SUCCESS) {
+                        // yay
+                        authenticated = 1;
+                    }
+                    else if(payload_type == SSH_MSG_USERAUTH_FAILURE) {
+                        // oh no!
+                        cout << "Password incorrect\n";
+                        vector<string> next_authlist;
+                        u8 partial_success;
+                        pp >> next_authlist >> partial_success;
+                    }
+                    else assert(0, "unexpected response to password auth request");
+                    pp.final();
                 }
-                else if(payload_type == SSH_MSG_USERAUTH_FAILURE) {
-                    // oh no!
-                    vector<string> next_authlist;
-                    u8 partial_success;
-                    pp >> next_authlist >> partial_success;
-                }
-                else assert(0, "unexpected response to password auth request");
-                pp.final();
+            }
+            if(!authenticated) {
+                cout << "3 failed password attempts, aborting password authentication\n";
             }
         }
 
@@ -1545,6 +1605,9 @@ i32 main(u64 argc, u8** argv) {
     pb << "reason";
     pb << "";           // language tag
     pb.flush_packet();
+
+    //enable canonical termios
+    enable_canonical_mode(STDOUT);
 
     return 0;
 }
