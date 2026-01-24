@@ -13,6 +13,7 @@ struct NetInterface {
     u32 gateway_ip;
     u32 dhcp_server;
     u32 dns_server;
+    i32 dhcp_configured;
 
     // driver abstractions
     fn<void(u8*, u16)> send;

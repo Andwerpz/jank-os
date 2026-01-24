@@ -340,13 +340,29 @@ void page_fault_handler(trapframe* tf, u64 error_code) {
 
 //just jump to scheduler
 //flush VGA periodically
+//flush arp periodically (should move later)
 [__GLOBAL_FIRST__] u64 TIMER_VGA_COUNTER = 0x0;
+[__GLOBAL_FIRST__] u64 TIMER_ARP_COUNTER = 0x0;
+[__GLOBAL_FIRST__] u64 TIMER_DHCP_COUNTER = 0x0;
 void timer_interrupt_handler(trapframe* tf) {
-    TIMER_VGA_COUNTER ++;
+    TIMER_VGA_COUNTER++;
     if(TIMER_VGA_COUNTER >= 0x3) {
         TIMER_VGA_COUNTER = 0x0;
         vga_flush();
     }
+
+    TIMER_ARP_COUNTER++;
+    if(TIMER_ARP_COUNTER >= 0x32) {
+        TIMER_ARP_COUNTER = 0x0;
+        arp_check_timeouts();
+    }
+
+    TIMER_DHCP_COUNTER++;
+    if(TIMER_DHCP_COUNTER >= 0xC8) {
+        TIMER_DHCP_COUNTER = 0x0;
+        init_dhcp();
+    }
+    
     scheduler(tf);
 }
 
