@@ -2,6 +2,10 @@
 #include <assert>;
 #include <intx>;
 #include <string>;
+#include <math>;
+#include <deque>;
+#include <error>;
+#include <termios>;
 #include <crypto/ed25519>;
 #include <crypto/sha2>;
 #include <crypto/chacha20>;
@@ -12,18 +16,37 @@
 
 //standard SSH payload types
 // https://www.iana.org/assignments/ssh-parameters/ssh-parameters.xhtml
-u8 SSH_MSG_SERVICE_REQUEST  = $u8 5;
-u8 SSH_MSG_SERVICE_ACCEPT   = $u8 6;
-u8 SSH_MSG_KEXINIT          = $u8 20;
-u8 SSH_MSG_NEWKEYS          = $u8 21;    //ends the KEX sequence, notifies that subsequent packets will be encrypted using the new keys derived during KEX
-u8 SSH_MSG_USERAUTH_REQUEST = $u8 50;
-u8 SSH_MSG_USERAUTH_FAILURE = $u8 51;
-u8 SSH_MSG_USERAUTH_SUCCESS = $u8 52;
-u8 SSH_MSG_USERAUTH_BANNER  = $u8 53;
+u8 SSH_MSG_DISCONNECT                   = $u8 1;
+u8 SSH_MSG_IGNORE                       = $u8 2;
+u8 SSH_MSG_UNIMPLEMENTED                = $u8 3;
+u8 SSH_MSG_DEBUG                        = $u8 4;
+u8 SSH_MSG_SERVICE_REQUEST              = $u8 5;
+u8 SSH_MSG_SERVICE_ACCEPT               = $u8 6;
+u8 SSH_MSG_KEXINIT                      = $u8 20;
+u8 SSH_MSG_NEWKEYS                      = $u8 21;    //ends the KEX sequence, notifies that subsequent packets will be encrypted using the new keys derived during KEX
+u8 SSH_MSG_USERAUTH_REQUEST             = $u8 50;
+u8 SSH_MSG_USERAUTH_FAILURE             = $u8 51;
+u8 SSH_MSG_USERAUTH_SUCCESS             = $u8 52;
+u8 SSH_MSG_USERAUTH_BANNER              = $u8 53;
+u8 SSH_MSG_GLOBAL_REQUEST               = $u8 80;
+u8 SSH_MSG_REQUEST_SUCCESS              = $u8 81;
+u8 SSH_MSG_REQUEST_FAILURE              = $u8 82;
+u8 SSH_MSG_CHANNEL_OPEN                 = $u8 90;
+u8 SSH_MSG_CHANNEL_OPEN_CONFIRMATION    = $u8 91;
+u8 SSH_MSG_CHANNEL_OPEN_FAILURE         = $u8 92;
+u8 SSH_MSG_CHANNEL_WINDOW_ADJUST        = $u8 93;
+u8 SSH_MSG_CHANNEL_DATA                 = $u8 94;
+u8 SSH_MSG_CHANNEL_EXTENDED_DATA        = $u8 95;
+u8 SSH_MSG_CHANNEL_EOF                  = $u8 96;
+u8 SSH_MSG_CHANNEL_CLOSE                = $u8 97;
+u8 SSH_MSG_CHANNEL_REQUEST              = $u8 98;
+u8 SSH_MSG_CHANNEL_SUCCESS              = $u8 99;
+u8 SSH_MSG_CHANNEL_FAILURE              = $u8 100;
 
 i32 socket;
 istream socket_in;
 ostream socket_out;
+socket_reader sr;
 packet_parser pp;
 packet_builder pb;
 preferred_algorithms client_pa;
@@ -50,6 +73,11 @@ string session_id;
 string shared_key;          // K
 string exchange_hash;       // H
 
+//primary ssh session channel
+channel session_channel;
+
+i32 disconnected = 0;
+
 struct preferred_algorithms {
     vector<string> kex_algorithms;
     vector<string> server_host_key_algorithms;
@@ -72,6 +100,15 @@ struct selected_algorithms {
     string mac_algorithm_server_to_client;
     string compression_algorithm_client_to_server;
     string compression_algorithm_server_to_client;
+}
+
+struct channel {
+    u32 local_id;           // my id for this channel
+    u32 remote_id;          // servers id for this channel
+    u32 send_window;        // how many bytes the server is willing to recieve currently
+    u32 recv_window;        // how many bytes I'm willing to recieve currently
+    u32 max_packet_in;      // servers maximum packet size (cap what I send)
+    u32 max_packet_out;     // our maximum packet size (cap what I recieve)
 }
 
 //the hashing function used is dependent on the negotiated KEX algorithm
@@ -140,7 +177,6 @@ struct packet_builder {
                 assert(packet_length < 0xFFFFFFFF, "packet length should fit in a u32");
                 assert(packet_length % block_size == 0x0, "packet is not properly padded");
                 void* packet = malloc(0x4 + packet_length + $u64 16); // +4 for packet length u32, +16 for tag
-                cout << "SEND ENCRYPTED PACKET LENGTH : " << packet_length << "\n";
 
                 for(u64 i = 0x0; i < 0x4; i++) {
                     ($u8* packet)[i] = $u8 ((packet_length >> ((0x3 - i) * 0x8)) & 0xFF);
@@ -200,8 +236,6 @@ struct packet_builder {
             assert(padding_length < 0xFF, "padding length should fit in a byte");
             assert(packet_length < 0xFFFFFFFF, "packet length should fit in a u32");
             assert((packet_length + 0x4) % block_size == 0x0, "packet is not properly padded");
-            cout << "SEND UNENCRYPTED PACKET LENGTH : " << packet_length << "\n";
-            cout.flush();
 
             //build header
             string header = new string(0x5, ' ');
@@ -268,21 +302,59 @@ packet_builder& operator<<(packet_builder& p, vector<string> x) {
     return p;
 }
 
-//keeps invoking sys_read until we read exactly len bytes
-i32 read_all(void* buf, u64 len) {
-    u64 ptr = 0x0;
-    while(ptr < len) {
-        u64 amt = len - ptr;
-        i64 status = sys_read(socket, $void* ($u64 buf + ptr), amt);
-        if(status < $i64 0) {
-            //read failed
-            return -1;
-        }
-        u64 read_amt = $u64 status;
-        assert(read_amt <= amt, "read_amt exceeded amt??");
-        ptr += read_amt;
+struct socket_reader {
+    i32 socket;
+    string buf;
+    u64 bufptr;
+
+    socket_reader(i32 s) {
+        this.socket = s;
+        this.buf = "";
+        this.bufptr = 0x0;
     }
-    return 0;
+
+    //resets buffer pointer
+    void init() {
+        this.bufptr = 0x0;
+    }
+
+    //discard all bytes saved in the buffer, resets buffer pointer
+    void final() {
+        this.bufptr = 0x0;
+        this.buf = "";
+    }
+
+    //returns 0 on success, 1 on failure
+    i32 read_bytes(void* buf, u64 len, i32 blocking) {
+        while(this.bufptr < this.buf.size() && len != 0x0) {
+            ($u8* buf)[0] = this.buf[this.bufptr];
+            buf = $void* ($u64 buf + 0x1);
+            len --;
+            this.bufptr ++;
+        }
+        i32 flags = 0;
+        if(!blocking) flags = MSG_DONTWAIT;
+        u64 ptr = 0x0;
+        while(ptr < len) {
+            u64 amt = len - ptr;
+            i64 status = sys_recvfrom(socket, $void* ($u64 buf + ptr), amt, flags, $sockaddr* nullptr, $u64* nullptr);
+            // i64 status = sys_read(socket, $void* ($u64 buf + ptr), amt);
+            if(status < $i64 0) {
+                //read failed
+                assert(status == $i64 -ERR_AGAIN, "socket_reader::read_bytes() : unexpected error");
+                return 1;
+            }
+            u64 read_amt = $u64 status;
+            assert(read_amt <= amt, "socket_reader::read_bytes() : read exceeded amt");
+
+            for(u64 i = 0x0; i < read_amt; i++) {
+                this.buf.push_back(($u8* ($u64 buf + ptr))[i]);
+                this.bufptr ++;
+            }
+            ptr += read_amt;
+        }
+        return 0;
+    }
 }
 
 struct packet_parser {
@@ -296,7 +368,9 @@ struct packet_parser {
         this.ptr = 0x0;
     }
 
-    void read_packet() {
+    //returns 0 on success, 1 on failure
+    i32 read_packet(i32 blocking) {
+        sr.init();
         if(this.is_encrypted) {
             if(sa.encryption_algorithm_server_to_client == "chacha20-poly1305@openssh.com") {
                 void* key = malloc($u64 64);
@@ -316,8 +390,9 @@ struct packet_parser {
                 void* header_buf = malloc(0x4);
                 u32 packet_length;
                 {   
-                    if(read_all(header_buf, 0x4)) {
-                        assert(0, "read header failed");
+                    if(sr.read_bytes(header_buf, 0x4, blocking)) {
+                        assert(!blocking, "packet_parser::read_packet() : read header failed");
+                        return 1;
                     }
 
                     chacha20_ctx ctx;
@@ -326,15 +401,13 @@ struct packet_parser {
 
                     packet_length = inet_ntoh(($u32* header_buf)[0]);
                 }
-
-                cout << "RECIEVE ENCRYPTED PACKET LENGTH : " << packet_length << "\n";
-                cout.flush();
                 
                 //decrypt payload
                 void* packet_buf = malloc($u64 packet_length);
                 {
-                    if(read_all(packet_buf, $u64 packet_length)) {
-                        assert(0, "read rest of packet failed");
+                    if(sr.read_bytes(packet_buf, $u64 packet_length, blocking)) {
+                        assert(!blocking, "packet_parser::read_packet() : read payload failed");
+                        return 1;
                     }
 
                     chacha20_ctx ctx;
@@ -350,8 +423,9 @@ struct packet_parser {
                 //check tag
                 {
                     void* tag = malloc($u64 16);
-                    if(read_all(tag, $u64 16)) {
-                        assert(0, "read tag failed");
+                    if(sr.read_bytes(tag, $u64 16, blocking)) {
+                        assert(!blocking, "packet_parser::read_packet() : read tag failed");
+                        return 1;
                     }
 
                     //copy over packet plaintext
@@ -413,18 +487,18 @@ struct packet_parser {
 
             //read header
             void* header = malloc(0x5);
-            if(read_all(header, 0x5)) {
-                assert(0, "read header failed");
+            if(sr.read_bytes(header, 0x5, blocking)) {
+                assert(!blocking, "packet_parser::read_packet() : read header failed");
+                return 1;
             }
 
             u32 packet_length = inet_ntoh(($u32* header)[0]);
             u8 padding_length = ($u8* header)[4];
-            cout << "RECIEVE UNENCRYPTED PACKET LENGTH : " << packet_length << "\n";
-            cout.flush();
 
             void* payload = malloc($u64 packet_length - 0x1);
-            if(read_all(payload, $u64 packet_length - 0x1)) {
-                assert(0, "read payload failed");
+            if(sr.read_bytes(payload, $u64 packet_length - 0x1, blocking)) {
+                assert(!blocking, "packet_parser::read_packet() : read payload failed");
+                return 1;
             }
             this.payload = new string($u8* payload, $u64 packet_length - 0x1 - $u64 padding_length);
 
@@ -432,12 +506,19 @@ struct packet_parser {
             free(payload, $u64 packet_length - 0x1);
         }
 
+        sr.final();
         this.ptr = 0x0;
         this.seq_no ++;
+        return 0;
     }
 
     void final() {
         assert(this.ptr == this.payload.size(), "did not parse entirety of payload");
+    }
+
+    //discard the remaining bytes of the payload
+    void discard() {
+        this.ptr = this.payload.size();
     }
 }
 
@@ -562,6 +643,48 @@ string to_hexstring(string s) {
     return res;
 }
 
+void read_packets_until(vector<u8> types) {
+    while(1) {
+        pp.read_packet(1);
+        assert(pp.payload.size() > 0x0);
+        u8 payload_type = pp.payload[0];
+        for(u64 i = 0x0; i < types.size(); i++) {
+            if(types[i] == payload_type) {
+                return;
+            }
+        }
+        
+        //handle packet
+        handle_packet();
+    }
+}
+
+//handles the packet currently in pp
+void handle_packet() {
+    assert(pp.payload.size() > 0x0, "handle_packet() : pp.payload empty");
+    u8 payload_type = pp.payload[0];
+    if(payload_type == SSH_MSG_GLOBAL_REQUEST) {
+        handle_global_request();
+    }
+    else if(payload_type == SSH_MSG_CHANNEL_WINDOW_ADJUST) {
+        handle_window_adjust();
+    }
+    else if(payload_type == SSH_MSG_CHANNEL_DATA) {
+        handle_channel_data();
+    }
+    else if(payload_type == SSH_MSG_CHANNEL_EXTENDED_DATA) {
+        handle_channel_extended_data();
+    }
+    else if(payload_type == SSH_MSG_CHANNEL_EOF) {
+        handle_channel_eof();
+    }
+    else {
+        cout << "Unhandled packet type : " << $u64 payload_type << "\n";
+        cout.flush();
+        assert(0, "read_packets_until() : unhandled packet type");
+    }
+}
+
 void do_KEX() {
     string server_public_key_blob;
     string server_signature;
@@ -593,7 +716,7 @@ void do_KEX() {
 
         //recieve packet
         {   
-            pp.read_packet();
+            pp.read_packet(1);
         
             u8 payload_type;
             pp >> payload_type;
@@ -726,7 +849,7 @@ void do_KEX() {
     //recieve NEWKEYS
     {
         cout.flush();
-        pp.read_packet();
+        pp.read_packet(1);
         u8 payload_type;
         pp >> payload_type;
         assert(payload_type == SSH_MSG_NEWKEYS, "NEWKEYS should be last payload in KEX sequence");
@@ -752,11 +875,8 @@ void do_service_request(string service_name) {
         pb.flush_packet();
     }
 
-    cout << "SENT SERVICE REQUEST\n";
-    cout.flush();
-
     {
-        pp.read_packet();
+        pp.read_packet(1);
         u8 payload_type;
         pp >> payload_type;
         assert(payload_type == SSH_MSG_SERVICE_ACCEPT, "do_service_request() : expect service accept response");
@@ -765,6 +885,281 @@ void do_service_request(string service_name) {
         assert(name == service_name);
         pp.final();
     }
+}
+
+//requests a shell session across the given channel
+//returns 0 on success, 1 on failure
+i32 do_channel_shell_request(channel& c) {
+    pb.init();
+    pb << SSH_MSG_CHANNEL_REQUEST;
+    pb << c.remote_id;
+    pb << "shell";
+    pb << $u8 1;
+    pb.flush_packet();
+
+    i32 status;
+    vector<u8> resp_list;
+    resp_list.push_back(SSH_MSG_CHANNEL_SUCCESS);
+    resp_list.push_back(SSH_MSG_CHANNEL_FAILURE);
+    read_packets_until(resp_list);
+    u8 payload_type;
+    pp >> payload_type;
+    if(payload_type == SSH_MSG_CHANNEL_SUCCESS) {
+        // yay
+        u32 recipient_channel;
+        pp >> recipient_channel;
+        assert(recipient_channel == c.local_id, "do_channel_shell_request() : channel id mismatch");
+        status = 0;
+    }
+    else if(payload_type == SSH_MSG_CHANNEL_FAILURE) {
+        // oh no!
+        u32 recipient_channel;
+        pp >> recipient_channel;
+        assert(recipient_channel == c.local_id, "do_channel_shell_request() : channel id mismatch");
+        status = 1;
+    }
+    else {
+        cout << "got payload type : " << $u64 payload_type << "\n";
+        cout.flush();
+        assert(0, "do_channel_shell_request() : unexpected response to channel open request");
+    }
+    pp.final();
+
+    return status;
+}
+
+i32 do_channel_pty_request(channel& c) {
+    {
+        winsize* wsz = $winsize* malloc(sizeof(winsize));
+        tcgetwinsize(STDIN, wsz);
+
+        pb.init();
+        pb << SSH_MSG_CHANNEL_REQUEST;
+        pb << c.remote_id;
+        pb << "pty-req";
+        pb << $u8 1;
+        // pb << "xterm";              // terminal environment name
+        pb << "xterm-256color";
+        pb << $u32 wsz->ws_col;
+        pb << $u32 wsz->ws_row;
+        pb << $u32 wsz->ws_xpixel;
+        pb << $u32 wsz->ws_ypixel;
+        pb << "TTY_OP_END";         // encoded terminal modes (tty settings?)
+        pb.flush_packet();
+        free($void* wsz, sizeof(winsize));
+    }
+
+    i32 status;
+    vector<u8> resp_list;
+    resp_list.push_back(SSH_MSG_CHANNEL_SUCCESS);
+    resp_list.push_back(SSH_MSG_CHANNEL_FAILURE);
+    read_packets_until(resp_list);
+    u8 payload_type;
+    pp >> payload_type;
+    if(payload_type == SSH_MSG_CHANNEL_SUCCESS) {
+        // yay
+        u32 recipient_channel;
+        pp >> recipient_channel;
+        assert(recipient_channel == c.local_id, "do_channel_shell_request() : channel id mismatch");
+        status = 0;
+    }
+    else if(payload_type == SSH_MSG_CHANNEL_FAILURE) {
+        // oh no!
+        u32 recipient_channel;
+        pp >> recipient_channel;
+        assert(recipient_channel == c.local_id, "do_channel_shell_request() : channel id mismatch");
+        status = 1;
+    }
+    else {
+        cout << "got payload type : " << $u64 payload_type << "\n";
+        cout.flush();
+        assert(0, "do_channel_pty_request() : unexpected response to channel open request");
+    }
+    pp.final();
+
+    return status;
+}
+
+channel open_channel(string channel_type, u32 local_id, u32 initial_recv_window, u32 max_packet_in) {
+    channel c = new channel();
+    c.local_id = local_id;
+    c.recv_window = initial_recv_window;
+    c.max_packet_in = max_packet_in;
+    {
+        pb.init();
+        pb << SSH_MSG_CHANNEL_OPEN;
+        pb << "session";        // channel type
+        pb << c.local_id;      
+        pb << c.recv_window;
+        pb << c.max_packet_in;
+        pb.flush_packet();
+
+        vector<u8> resp_list;
+        resp_list.push_back(SSH_MSG_CHANNEL_OPEN_CONFIRMATION);
+        resp_list.push_back(SSH_MSG_CHANNEL_OPEN_FAILURE);
+        read_packets_until(resp_list);
+        u8 payload_type;
+        pp >> payload_type;
+        if(payload_type == SSH_MSG_CHANNEL_OPEN_CONFIRMATION) {
+            // yay
+            u32 _local_id;
+            pp >> _local_id;
+            assert(_local_id == c.local_id, "local channel id mismatch");
+            pp >> c.remote_id >> c.send_window >> c.max_packet_out;
+        }
+        else if(payload_type == SSH_MSG_CHANNEL_OPEN_FAILURE) {
+            // oh no!
+            u32 _local_id;
+            pp >> _local_id;
+            assert(_local_id == c.local_id, "local channel id mismatch");
+            u32 reason_code;
+            pp >> reason_code;
+            string description;
+            pp >> description;
+            string language;
+            pp >> language;
+
+            cout << "Failed to open channel : " << description << "\n";
+            cout.flush();
+            assert(0, "open_channel() : failed to open channel");
+        }
+        else {
+            cout << "got payload type : " << $u64 payload_type << "\n";
+            cout.flush();
+            assert(0, "open_channel() : unexpected response to channel open request");
+        }
+        pp.final();
+    }
+    return c;
+}
+
+void handle_global_request() {
+    u8 payload_type;
+    pp >> payload_type;
+    assert(payload_type == SSH_MSG_GLOBAL_REQUEST, "handle_global_request() : payload incorrect type");
+
+    string request_name;
+    u8 want_reply;
+    pp >> request_name >> want_reply;
+
+    // cout << "GOT GLOBAL REQUEST : " << request_name << " " << $u64 want_reply << "\n";
+    // cout.flush();
+
+    //just ignore / fail all requests for now
+    pp.discard();
+    pp.final();
+    if(want_reply) {
+        pb.init();
+        pb << SSH_MSG_REQUEST_FAILURE;
+        pb.flush_packet();
+    }
+}
+
+void handle_window_adjust() {
+    u8 payload_type;
+    pp >> payload_type;
+    assert(payload_type == SSH_MSG_CHANNEL_WINDOW_ADJUST, "handle_window_adjust() : payload incorrect type");
+
+    u32 recipient_channel;
+    u32 bytes_to_add;
+    pp >> recipient_channel >> bytes_to_add;
+    pp.final();
+
+    //for now, there's only one channel
+    assert(recipient_channel == session_channel.local_id, "handle_window_adjust() : unknown recipient channel");
+    session_channel.send_window += bytes_to_add;
+}
+
+void do_window_adjust(channel& c, u32 bytes_to_add) {
+    c.recv_window += bytes_to_add;
+
+    pb.init();
+    pb << SSH_MSG_CHANNEL_WINDOW_ADJUST;
+    pb << c.remote_id;
+    pb << bytes_to_add;
+    pb.flush_packet();    
+}
+
+void do_channel_data(channel& c, string data) {
+    assert(data.size() <= $u64 c.max_packet_out, "do_channel_data() : data exceeds max packet size");
+    assert(data.size() <= $u64 c.send_window, "do_channel_data() : data exceeds send window");
+    c.send_window -= $u32 data.size();
+
+    pb.init();
+    pb << SSH_MSG_CHANNEL_DATA;
+    pb << c.remote_id;
+    pb << data;
+    pb.flush_packet();
+}
+
+void handle_channel_data() {
+    u8 payload_type;
+    pp >> payload_type;
+    assert(payload_type == SSH_MSG_CHANNEL_DATA, "handle_channel_data() : payload incorrect type");
+
+    u32 recipient_channel;
+    string data;
+    pp >> recipient_channel >> data;
+    pp.final();
+
+    //for now, there's only one channel
+    assert(recipient_channel == session_channel.local_id, "handle_channel_data() : unknown recipient channel");
+    channel& c = session_channel;
+    assert(data.size() <= $u64 c.recv_window, "handle_channel_data() : recieved message exceeds recieve window");
+    assert(data.size() <= $u64 c.max_packet_in, "handle_channel_data() : recieved message exceeds max in packet size");
+    c.recv_window -= $u32 data.size();
+    cout << data;
+    cout.flush();
+}
+
+//usually for debug info??
+void handle_channel_extended_data() {
+    u8 payload_type;
+    pp >> payload_type;
+    assert(payload_type == SSH_MSG_CHANNEL_EXTENDED_DATA, "handle_channel_extended_data() : payload incorrect type");
+
+    u32 recipient_channel;
+    u32 data_type_code;
+    string data;
+    pp >> recipient_channel >> data_type_code >> data;
+    pp.final();
+
+    assert(recipient_channel == session_channel.local_id, "handle_channel_extended_data() : unknown recipient channel");
+    channel& c = session_channel;
+    assert(data.size() <= $u64 c.recv_window, "handle_channel_extended_data() : recieved message exceeds recieve window");
+    assert(data.size() <= $u64 c.max_packet_in, "handle_channel_extended_data() : recieved message exceeds max in packet size");
+    c.recv_window -= $u32 data.size();
+    // cout << data;
+    // cout.flush();
+}
+
+void handle_channel_eof() {
+    u8 payload_type;
+    pp >> payload_type;
+    assert(payload_type == SSH_MSG_CHANNEL_EOF, "handle_channel_eof() : payload incorrect type");
+
+    u32 recipient_channel;
+    pp >> recipient_channel;
+    pp.final();
+
+    assert(recipient_channel == session_channel.local_id, "handle_channel_eof() : unknown recipient channel");
+    channel& c = session_channel;    
+
+    //for now just do nothing
+}
+
+void handle_disconnect() {
+    u8 payload_type;
+    pp >> payload_type;
+    assert(payload_type == SSH_MSG_DISCONNECT, "handle_disconnect() : payload incorrect type");
+
+    u32 disconnect_code;
+    string reason;
+    string lang_tag;
+    pp >> disconnect_code >> reason >> lang_tag;
+    pp.final();
+
+    disconnected = 1;
 }
 
 i32 main(u64 argc, u8** argv) {
@@ -829,6 +1224,7 @@ i32 main(u64 argc, u8** argv) {
     }
     socket_in = new istream(socket);
     socket_out = new ostream(socket);
+    sr = new socket_reader(socket);
 
     sockaddr_in remote;
     remote.sin_family = $u16 AF_INET;
@@ -851,12 +1247,10 @@ i32 main(u64 argc, u8** argv) {
     sa.compression_algorithm_client_to_server = "none";
     sa.compression_algorithm_server_to_client = "none";
 
+    //banner exchange
     //read lines until we get to a line that begins with "SSH-"
     while(1) {
-        string line = socket_in.next_line();
-        cout << line << "\n";
-        cout.flush();
-        
+        string line = socket_in.next_line();        
         if(line.size() >= 0x4 && line.substr(0x0, 0x4) == new string("SSH-")) {
             //save server id string
             server_id_string = line;
@@ -916,7 +1310,7 @@ i32 main(u64 argc, u8** argv) {
 
     //parse server KEXINIT
     {
-        pp.read_packet();
+        pp.read_packet(1);
 
         //save payload
         server_kexinit_payload = pp.payload;
@@ -1021,7 +1415,7 @@ i32 main(u64 argc, u8** argv) {
             pb << "none";
             pb.flush_packet();  
 
-            pp.read_packet();
+            pp.read_packet(1);
             u8 payload_type;
             u8 partial_success;
             pp >> payload_type;
@@ -1060,7 +1454,7 @@ i32 main(u64 argc, u8** argv) {
                 pb << password;
                 pb.flush_packet();
 
-                pp.read_packet();
+                pp.read_packet(1);
                 u8 payload_type;
                 pp >> payload_type;
                 if(payload_type == SSH_MSG_USERAUTH_SUCCESS) {
@@ -1085,9 +1479,72 @@ i32 main(u64 argc, u8** argv) {
     }
     cout << "Authentication successful\n";
 
+    //open ssh session channel
+    session_channel = open_channel(new string("session"), $u32 67, $u32 0x200000, $u32 8000);
+    cout << "Opened session channel\n";
+
+    if(do_channel_pty_request(session_channel)) {
+        cout << "pty request failed\n";
+        return 1;
+    }
+
+    if(do_channel_shell_request(session_channel)) {
+        cout << "shell request failed\n";
+        return 1;
+    }
+
     //connection phase
+    pollfd* stdin_pollfd = $pollfd* malloc(sizeof(pollfd));
+    stdin_pollfd->fd = STDIN;
+    stdin_pollfd->events = POLLIN;
+
+    while(!disconnected) {
+        //poll bytes from stdin
+        {
+            string s;
+            void* buf = malloc(0x1);
+            while(1) {
+                i32 poll_status = sys_poll(stdin_pollfd, $u32 1, 0);
+                if(poll_status < 0) {
+                    cout << "sys_poll on stdin failed : " << poll_status << "\n";
+                    cout.flush();
+                    assert(0, "sys_poll on stdin failed\n");
+                }
+                if((stdin_pollfd->revents & POLLIN) == $u16 0) {
+                    //no more bytes
+                    break;
+                }
+
+                i64 read_status = sys_read(STDIN, buf, 0x1);
+                assert(read_status == $i64 1, "sys_read failed");
+                s.push_back(($u8* buf)[0]);
+            }
+            free(buf, 0x1);
+
+            if(s.size() != 0x0) {
+                //send user input to server
+                do_channel_data(session_channel, s);
+            }   
+        }
+
+        //poll packets
+        if(!pp.read_packet(0)) {
+            handle_packet();
+        }
+
+        //see if we need to extend the recieve window
+        if(session_channel.recv_window < $u32 0x100000) {
+            do_window_adjust(session_channel, $u32 0x200000 - session_channel.recv_window);
+        }
+    }
 
     //disconnect
+    pb.init();
+    pb << SSH_MSG_DISCONNECT;
+    pb << $u32 0xB;     // SSH_DISCONNECT_BY_APPLICATION
+    pb << "reason";
+    pb << "";           // language tag
+    pb.flush_packet();
 
     return 0;
 }
