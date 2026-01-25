@@ -1,0 +1,34 @@
+#include <iostream>;
+#include <assert>;
+#include <dirent>;
+#include <string>;
+#include <time>;
+
+u8 ESC = $u8 0x1B;
+
+void set_fgcol(u64 r, u64 g, u64 b) {
+    cout << ESC << "[38;2;" << r << ";" << g << ";" << b << "m";
+}
+
+void set_bgcol(u64 r, u64 g, u64 b) {
+    cout << ESC << "[48;2;" << r << ";" << g << ";" << b << "m";
+}
+
+void reset_color() {
+    cout << ESC << "[0m";
+}
+
+i32 main(u64 argc, u8** argv) {
+
+    for(u64 r = 0x7; r < 0x100; r += 0x8) {
+        for(u64 g = 0x7; g < 0x100; g += 0x8) {
+            set_fgcol(r, g, 0xFF);
+            set_bgcol(r, g, 0xFF);
+            cout << "  ";
+        }
+        reset_color();
+        cout << "\n";
+    }
+
+    return 0;
+}
