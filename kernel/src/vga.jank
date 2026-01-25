@@ -646,6 +646,7 @@ void init_vga_tty_backend_ops() {
     new (TTY_BACKEND_OPS_VGA) tty_backend_ops();
     TTY_BACKEND_OPS_VGA->op_accept_input = #<vga_accept_input(tty*, u8*, u64)>;
     TTY_BACKEND_OPS_VGA->op_close = #<vga_close(tty*)>;
+    TTY_BACKEND_OPS_VGA->op_get_winsize = #<vga_get_winsize(tty*, winsize*)>;
 }
 
 i64 vga_accept_input(tty* tty, u8* buf, u64 amt) {
@@ -658,5 +659,14 @@ i32 vga_close(tty* tty) {
     //free terminal struct
     vga_terminal* term = $vga_terminal* tty->backend;
     term->~();
+    return 0;
+}
+
+i32 vga_get_winsize(tty* tty, winsize* out_winsize) {
+    vga_terminal* term = $vga_terminal* tty->backend;
+    out_winsize->ws_row = $u16 term->grid_rows;
+    out_winsize->ws_col = $u16 term->grid_cols;
+    out_winsize->ws_xpixel = $u16 0;
+    out_winsize->ws_ypixel = $u16 0;
     return 0;
 }

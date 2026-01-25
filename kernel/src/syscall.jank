@@ -1887,6 +1887,13 @@ i32 sys_ioctl(i32 fd, u32 op, void* arg) {
             retval = tty_set_termios($tty* file->resource_ptr, t);
             free($void* t, sizeof(termios));
         }
+        else if(op == $u32 TIOCGWINSZ) {
+            //retrieve winsize
+            winsize* w = $winsize* malloc(sizeof(winsize));
+            retval = tty_get_winsize($tty* file->resource_ptr, w);
+            copy_to_user(user_pt, $u8* w, $u8* arg, sizeof(winsize));
+            free($void* w, sizeof(winsize));
+        }
     }
 
     pt_switch(user_pt);

@@ -13,6 +13,7 @@
 struct tty_backend_ops {
     fn<i64(tty*, u8*, u64)> op_accept_input;
     fn<i32(tty*)> op_close;
+    fn<i32(tty*, winsize*)> op_get_winsize;
 }
 
 [__GLOBAL_FIRST__] u64 TTY_NEXT_INO = 0x1;
@@ -249,6 +250,10 @@ i32 tty_set_termios(tty* tty, termios* in_termios) {
 i32 tty_get_termios(tty* tty, termios* out_termios) {
     memcpy($void* out_termios, $void* @(tty->termios), sizeof(termios));
     return 0;
+}
+
+i32 tty_get_winsize(tty* tty, winsize* out_winsize) {
+    return tty->backend_ops->op_get_winsize#(tty, out_winsize);
 }
 
 i32 tty_close(tty* tty) {

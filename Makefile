@@ -23,7 +23,7 @@ boot: drive
 	@cp /usr/share/OVMF/OVMF_VARS_4M.fd ./build/OVMF_VARS_4M.work.fd
 	sudo -E qemu-system-x86_64 \
 		-machine q35 \
-		-m 4G \
+		-m 1G \
 		-no-reboot \
 		-serial stdio \
 		-device nec-usb-xhci,id=xhci,msi=on,msix=off \
@@ -33,9 +33,9 @@ boot: drive
 		-drive file=drive.img,if=none,id=bootdisk,format=raw \
 		-device ide-hd,bus=ahci.0,drive=bootdisk,bootindex=0 \
 		-netdev user,id=net0,hostfwd=udp::1234-:1234,hostfwd=tcp::8080-:8080 -device e1000,netdev=net0,mac=52:54:00:12:34:56 \
-		-object filter-dump,id=f1,netdev=net0,file=jankos.pcap 
-#  		-enable-kvm \
-#  		-cpu host \
+		-object filter-dump,id=f1,netdev=net0,file=jankos.pcap \
+ 		-enable-kvm \
+ 		-cpu host \
 
 .PHONY: boot_usb
 boot_usb: drive

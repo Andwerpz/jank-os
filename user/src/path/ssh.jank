@@ -374,12 +374,14 @@ struct packet_parser {
         if(this.is_encrypted) {
             if(sa.encryption_algorithm_server_to_client == "chacha20-poly1305@openssh.com") {
                 void* key = malloc($u64 64);
+                void* nonce = malloc($u64 12);
+                void* header_buf = malloc(0x4);
+
                 generate_key_material('D', key, $u64 64);
                 void* K1 = key;
                 void* K2 = $void* ($u64 key + $u64 32);
 
                 //nonce is big-endian 64-bit representation of seq_no
-                void* nonce = malloc($u64 12);
                 memset(nonce, 0, $u64 12);
                 for(u64 i = 0x0; i < 0x4; i++) {
                     u64 shift = (0x3 - i) * 0x8;
@@ -387,10 +389,12 @@ struct packet_parser {
                 }
 
                 //decrypt length
-                void* header_buf = malloc(0x4);
                 u32 packet_length;
                 {   
                     if(sr.read_bytes(header_buf, 0x4, blocking)) {
+                        free(key, $u64 64);
+                        free(nonce, $u64 12);
+                        free(header_buf, 0x4);
                         assert(!blocking, "packet_parser::read_packet() : read header failed");
                         return 1;
                     }
@@ -406,6 +410,10 @@ struct packet_parser {
                 void* packet_buf = malloc($u64 packet_length);
                 {
                     if(sr.read_bytes(packet_buf, $u64 packet_length, blocking)) {
+                        free(key, $u64 64);
+                        free(nonce, $u64 12);
+                        free(header_buf, 0x4);
+                        free(packet_buf, $u64 packet_length);
                         assert(!blocking, "packet_parser::read_packet() : read payload failed");
                         return 1;
                     }
@@ -424,6 +432,11 @@ struct packet_parser {
                 {
                     void* tag = malloc($u64 16);
                     if(sr.read_bytes(tag, $u64 16, blocking)) {
+                        free(key, $u64 64);
+                        free(nonce, $u64 12);
+                        free(header_buf, 0x4);
+                        free(packet_buf, $u64 packet_length);
+                        free(tag, $u64 16);
                         assert(!blocking, "packet_parser::read_packet() : read tag failed");
                         return 1;
                     }
@@ -488,6 +501,7 @@ struct packet_parser {
             //read header
             void* header = malloc(0x5);
             if(sr.read_bytes(header, 0x5, blocking)) {
+                free(header, 0x5);
                 assert(!blocking, "packet_parser::read_packet() : read header failed");
                 return 1;
             }
@@ -497,6 +511,8 @@ struct packet_parser {
 
             void* payload = malloc($u64 packet_length - 0x1);
             if(sr.read_bytes(payload, $u64 packet_length - 0x1, blocking)) {
+                free(header, 0x5);
+                free(payload, $u64 packet_length - 0x1);
                 assert(!blocking, "packet_parser::read_packet() : read payload failed");
                 return 1;
             }
@@ -931,7 +947,13 @@ i32 do_channel_shell_request(channel& c) {
 i32 do_channel_pty_request(channel& c) {
     {
         winsize* wsz = $winsize* malloc(sizeof(winsize));
-        tcgetwinsize(STDIN, wsz);
+        if(tcgetwinsize(STDIN, wsz)) {
+            assert(0, "do_channel_pty_request() : tcgetwinsize failed");
+        }
+
+        cout << "WINDOW ROWS : " << wsz->ws_row << "\n";
+        cout << "WINDOW COLS : " << wsz->ws_col << "\n";
+        cout.flush();
 
         pb.init();
         pb << SSH_MSG_CHANNEL_REQUEST;
@@ -939,7 +961,8 @@ i32 do_channel_pty_request(channel& c) {
         pb << "pty-req";
         pb << $u8 1;
         // pb << "xterm";              // terminal environment name
-        pb << "xterm-256color";
+        // pb << "xterm-256color";
+        pb << "dumb";
         pb << $u32 wsz->ws_col;
         pb << $u32 wsz->ws_row;
         pb << $u32 wsz->ws_xpixel;
