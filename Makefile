@@ -23,7 +23,7 @@ boot: drive
 	@cp /usr/share/OVMF/OVMF_VARS_4M.fd ./build/OVMF_VARS_4M.work.fd
 	sudo -E qemu-system-x86_64 \
 		-machine q35 \
-		-m 2G \
+		-m 4G \
 		-no-reboot \
 		-serial stdio \
 		-device nec-usb-xhci,id=xhci,msi=on,msix=off \
