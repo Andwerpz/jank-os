@@ -606,13 +606,16 @@ void vga_terminal_draw_string(vga_terminal* term, u8* str) {
 void vga_terminal_accept_str(vga_terminal* term, u8* buf, u64 amt) {
     //de-render cursor
     {
-        psf_header* font = $psf_header* @_binary_font_psf_start;
-        u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
+        psf_header* font = $psf_header* @_binary_font_psf_start;    
+        vga_cell& cell = term->cells[term->cursor_row * term->grid_cols + term->cursor_col];
+        u8 c = cell.char;
+        u32 bg_color = cell.bg_color;
+        u32 fg_color = cell.fg_color;
         u64 x = term->cursor_col * $u64 font->width;
         u64 y = term->cursor_row * $u64 font->height;
         VGA_USER_SCROLL_BUFFER->draw_char(
             x, y, c, 
-            term->bg_color, term->fg_color
+            bg_color, fg_color
         );
     }
 
@@ -624,12 +627,15 @@ void vga_terminal_accept_str(vga_terminal* term, u8* buf, u64 amt) {
     //render cursor
     {
         psf_header* font = $psf_header* @_binary_font_psf_start;
-        u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
+        vga_cell& cell = term->cells[term->cursor_row * term->grid_cols + term->cursor_col];
+        u8 c = cell.char;
+        u32 bg_color = cell.bg_color;
+        u32 fg_color = cell.fg_color;
         u64 x = term->cursor_col * $u64 font->width;
         u64 y = term->cursor_row * $u64 font->height;
         VGA_USER_SCROLL_BUFFER->draw_char(
             x, y, c, 
-            vga_invert_color(term->bg_color), vga_invert_color(term->fg_color)
+            vga_invert_color(bg_color), vga_invert_color(fg_color)
         );
     }
 }
