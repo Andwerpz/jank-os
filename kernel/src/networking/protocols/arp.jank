@@ -165,7 +165,7 @@ i32 arp_lookup(u32 ip, u8[6]& mac) {
     if(ARP_TABLE.contains(ip)) {
         ARPEntry* entry = ARP_TABLE.get(ip);
 
-        if(entry->expire_at > hpet_get_ns()) {
+        if(entry->expire_at < hpet_get_ns()) {
             return 0;
         }
 
