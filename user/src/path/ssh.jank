@@ -961,8 +961,8 @@ i32 do_channel_pty_request(channel& c) {
         pb << "pty-req";
         pb << $u8 1;
         // pb << "xterm";              // terminal environment name
-        // pb << "xterm-256color";
-        pb << "dumb";
+        pb << "xterm-256color";
+        // pb << "dumb";
         pb << $u32 wsz->ws_col;
         pb << $u32 wsz->ws_row;
         pb << $u32 wsz->ws_xpixel;
@@ -1575,6 +1575,10 @@ i32 main(u64 argc, u8** argv) {
         cout << "shell request failed\n";
         return 1;
     }
+
+    cout << ($u8 0x1B) << "[2J";    //clear screen
+    cout << ($u8 0x1B) << "[H";     //move cursor home
+    cout.flush();
 
     //connection phase
     pollfd* stdin_pollfd = $pollfd* malloc(sizeof(pollfd));
