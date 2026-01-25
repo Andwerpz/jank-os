@@ -222,6 +222,8 @@ struct vga_scroll_buffer {
 
 struct vga_cell {
     u8 char;
+    u32 fg_color;
+    u32 bg_color;
 }
 
 struct vga_terminal {
@@ -242,6 +244,10 @@ struct vga_terminal {
     //if wrap_pending and we're trying to do some other action that moves the cursor, clear wrap_pending
     i32 wrap_pending;   
 
+    //active colors
+    u32 fg_color;
+    u32 bg_color;
+
     vga_cell* cells;
 
     vga_terminal() {
@@ -254,11 +260,15 @@ struct vga_terminal {
         this.cursor_row = 0x0;
         this.cursor_col = 0x0;
         this.wrap_pending = 0;
+        this.fg_color = COLOR_WHITE;
+        this.bg_color = COLOR_BLACK;
 
         //initialize cells
         this.cells = $vga_cell* malloc(sizeof(vga_cell) * this.grid_rows * this.grid_cols);
         for(u64 i = 0x0; i < this.grid_rows * this.grid_cols; i++) {
             this.cells[i].char = ' ';
+            this.cells[i].fg_color = COLOR_WHITE;
+            this.cells[i].bg_color = COLOR_BLACK;
         }
     }
 
@@ -343,7 +353,7 @@ void vga_terminal_draw_char(vga_terminal* term, u8 c) {
     psf_header* font = $psf_header* @_binary_font_psf_start;
     u64 x = term->cursor_col * $u64 font->width;
     u64 y = term->cursor_row * $u64 font->height;
-    VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
+    VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, term->bg_color, term->fg_color);
 
     //update grid cell
     vga_cell* cell = @(term->cells[term->cursor_row * term->grid_cols + term->cursor_col]);
@@ -576,7 +586,7 @@ void vga_terminal_accept_str(vga_terminal* term, u8* buf, u64 amt) {
         u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
         u64 x = term->cursor_col * $u64 font->width;
         u64 y = term->cursor_row * $u64 font->height;
-        VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, COLOR_BLACK, COLOR_WHITE);
+        VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, term->bg_color, term->fg_color);
     }
 
     //accept all chars
@@ -590,7 +600,7 @@ void vga_terminal_accept_str(vga_terminal* term, u8* buf, u64 amt) {
         u8 c = term->cells[term->cursor_row * term->grid_cols + term->cursor_col].char;
         u64 x = term->cursor_col * $u64 font->width;
         u64 y = term->cursor_row * $u64 font->height;
-        VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, COLOR_WHITE, COLOR_BLACK);
+        VGA_USER_SCROLL_BUFFER->draw_char(x, y, c, term->fg_color, term->bg_color);
     }
 }
 

@@ -7,6 +7,7 @@
 
 struct phys_page_node {
     phys_page_node* prev;
+    u8 checksum;    // bitwise xor of all bits should equal 0
 }
 
 //find all the memory that is marked as EfiConventionalMemory and mark it as free
@@ -42,6 +43,13 @@ void* palloc() {
         panic("palloc() : PMA out of memory");
     }
 
+    //check checksum
+    u8 checksum = $u8 0;
+    for(u64 i = 0x0; i < sizeof(phys_page_node) - 0x1; i++) {
+        checksum ^= ($u8* pma_head)[i];
+    }
+    assert(pma_head->checksum == checksum, "palloc() : checksum failed");
+
     PMA_PAGES_LEFT --;
     void* ret = $void* pma_head;
     pma_head = pma_head->prev;
@@ -58,5 +66,9 @@ void pfree(void* page) {
     PMA_PAGES_LEFT ++;
     phys_page_node* nhead = $phys_page_node* page;
     nhead->prev = pma_head;
+    nhead->checksum = $u8 0;
+    for(u64 i = 0x0; i < sizeof(phys_page_node) - 0x1; i++) {
+        nhead->checksum ^= ($u8* nhead)[i];
+    }
     pma_head = nhead;
 }
