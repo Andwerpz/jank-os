@@ -366,6 +366,7 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 	i32 spin = 0; // Spin lock timeout counter
 	i32 slot = find_cmdslot(p);
 	if(slot == -1) return 1;
+    assert(count <= $u32 8, "ahci_read() : cannot allocate more than 4K contiguous physical buffer");
 
 	HBA_CMD_HEADER* cmdheader = $HBA_CMD_HEADER* ($u64 p->clb | ($u64 p->clbu << $u64 32));
 	cmdheader = $HBA_CMD_HEADER* ($u64 cmdheader + $u64 slot * sizeof(HBA_CMD_HEADER));
@@ -382,9 +383,11 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 	memset($void* cmdtbl, 0, sizeof(HBA_CMD_TBL) + ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1) * sizeof(HBA_PRDT_ENTRY));
 
 	// 8K bytes (16 sectors) per PRDT
+    // need to rework this to accept multiple 4K buffers
     u64 i = 0x0;
 	for (; i < ($u64 ((cmdheader->DW0 >> $u32 16) & $u32 0xffff) - 0x1); i++) {
-		cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+		cmdtbl->prdt_entry[i].dba = $u32 $u64 buf;
+        cmdtbl->prdt_entry[i].dbau = $u32 ($u64 buf >> $u64 32);
 
 		cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
 		cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 (8*1024-1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
@@ -395,7 +398,8 @@ i32 ahci_read(HBA_PORT* p, u32 startl, u32 starth, u32 count, u16* buf) {
 		count -= $u32 16;	// 16 sectors
 	}
     // Last entry
-	cmdtbl->prdt_entry[i].dba = $u32 $u64 buf; // ???
+	cmdtbl->prdt_entry[i].dba = $u32 $u64 buf;
+    cmdtbl->prdt_entry[i].dbau = $u32 ($u64 buf >> $u64 32);
     cmdtbl->prdt_entry[i].DW3 &= $u32 ~0x3ffff;
     cmdtbl->prdt_entry[i].DW3 |= $u32 (0x3ffff & $u64 ((count << $u32 9) - $u32 1)); // (dbc) 8K bytes (this value should always be set to 1 less than the actual value)
 
