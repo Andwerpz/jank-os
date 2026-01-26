@@ -94,30 +94,30 @@ struct DHCPRequestOptions {
 }
 
 void dhcp_handle(DHCPHeader* dhcp, u16 len) {
-    println("dhcp_handle() : Handling incoming DHCP message");
+    if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Handling incoming DHCP message");
 
     if(len < $u16 sizeof(UDPHeader)) {
-        println("dhcp_handle() : DHCP header length too short");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : DHCP header length too short");
         return;
     }
 
     if(be_to_cpu(dhcp->magic_cookie) != DHCP_MAGIC_COOKIE) {
-        println("dhcp_handle() : Invalid magic cookie for DHCP");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Invalid magic cookie for DHCP");
         return;
     }
 
     if(dhcp->op != DHCP_OP_BOOTREPLY) {
-        println("dhcp_handle() : Incoming DHCP message is a request, ignoring");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Incoming DHCP message is a request, ignoring");
         return;
     }
 
     if(dhcp->htype != DHCP_HTYPE_ETHERNET || dhcp->hlen != DHCP_HLEN_ETHERNET) {
-        println("dhcp_handle() : Incoming DHCP unsupported hardware type or length, ignoring");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Incoming DHCP unsupported hardware type or length, ignoring");
         return;
     }
 
     if(be_to_cpu(dhcp->xid) != DHCP_XID) {
-        println("dhcp_handle() : Invalid XID, ignoring");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Invalid XID, ignoring");
         return;
     }
 
@@ -142,18 +142,18 @@ void dhcp_handle(DHCPHeader* dhcp, u16 len) {
     }
 
     if(type == DHCP_MSG_TYPE_OFFER) {
-        println("dhcp_handle() : Received DHCP offer");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Received DHCP offer");
         dhcp_handle_offer(dhcp, len);
     } else if(type == DHCP_MSG_TYPE_ACK) {
-        println("dhcp_handle() : Received DHCP ack");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Received DHCP ack");
         dhcp_handle_ack(dhcp, len);
     } else {
-        println("dhcp_handle() : Unknown message type");
+        if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle() : Unknown message type");
     }
 }
 
 void dhcp_handle_ack(DHCPHeader* dhcp, u16 len) {
-    println("dhcp_handle_ack() : Handling incoming DHCP ack");
+    if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle_ack() : Handling incoming DHCP ack");
 
     CURRENT_INTERFACE->ip_address = be_to_cpu(dhcp->your_ip_addr);
     
@@ -191,7 +191,7 @@ void dhcp_handle_ack(DHCPHeader* dhcp, u16 len) {
 }
 
 void dhcp_handle_offer(DHCPHeader* dhcp, u16 len) {
-    println("dhcp_handle_offer() : Handling incoming DHCP offer");
+    if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle_offer() : Handling incoming DHCP offer");
 
     u32 offered_ip = be_to_cpu(dhcp->your_ip_addr);
     u32 server_ip = $u32 0;
@@ -216,14 +216,16 @@ void dhcp_handle_offer(DHCPHeader* dhcp, u16 len) {
         i += ($u64 2 + $u64 opt_len); // skip the type and len field, then skip by length
     }
     
-    println("dhcp_handle_offer() : Offer parsed, sending request");
+    if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_handle_offer() : Offer parsed, sending request");
     dhcp_send_request(offered_ip, server_ip);
 }
 
 void dhcp_send_request(u32 offered_ip, u32 server_ip) {
-    print("dhcp_send_request() : Sending DHCP request to [");
-    print_ipv4_addr(server_ip);
-    println("]");
+    if(NETWORKING_APPLICATION_LAYER_DEBUG) {
+        print("dhcp_send_request() : Sending DHCP request to [");
+        print_ipv4_addr(server_ip);
+        println("]");
+    }
 
     u64 total_len = sizeof(DHCPHeader) + sizeof(DHCPRequestOptions);
     u8* buffer = $u8* malloc(total_len);
@@ -276,7 +278,7 @@ void dhcp_send_request(u32 offered_ip, u32 server_ip) {
 }
 
 void dhcp_send_discover() {
-    println("dhcp_send_discover() : Sending DHCP discover");
+    if(NETWORKING_APPLICATION_LAYER_DEBUG) println("dhcp_send_discover() : Sending DHCP discover");
 
     u64 total_len = sizeof(DHCPHeader) + sizeof(DHCPDiscoverOptions);
     u8* buffer = $u8* malloc(total_len);

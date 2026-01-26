@@ -6,6 +6,7 @@
 #include <hashmap>;
 #include <crypto/chacha20>;
 
+#include "debug.jank";
 #include "memlayout.jank";
 #include "panic.jank";
 #include "serial.jank";

@@ -110,7 +110,7 @@ void rtl8111_init(u64 addr) {
 }
 
 void rtl8111_enable_rx_tx() {
-    println("rtl8111_enable_rx_tx() : Beginning enabling RX and TX");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_enable_rx_tx() : Beginning enabling RX and TX");
 
     // Enable tx and rx
     u8* cr = $u8* (rtl8111->mmio_base + RTL8111_MAC_CR);
@@ -125,7 +125,7 @@ void rtl8111_enable_rx_tx() {
     *tcr |= $u32 (0b111 << $u64 8); // MXDMA set to unlimited
     *tcr |= $u32 (0b011 << $u64 24); // IDG set?
 
-    println("rtl8111_enable_rx_tx() : Finished enabling RX and TX");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_enable_rx_tx() : Finished enabling RX and TX");
 }
 
 void rtl8111_interrupt_handler(trapframe* tf) {
@@ -138,19 +138,19 @@ void rtl8111_interrupt_handler(trapframe* tf) {
     }
 
     if(status & RTL8111_MAC_IMR_LinkChg) {
-        println("rtl8111_interrupt_handler() : Link status change");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_interrupt_handler() : Link status change");
 
         if(rtl8111_get_link_status()) {
-            println("rtl8111_interrupt_handler() : Link is UP, Starting DHCP");
+            if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_interrupt_handler() : Link is UP, Starting DHCP");
         } else {
-            println("rtl8111_interrupt_handler() : Link is DOWN");
+            if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_interrupt_handler() : Link is DOWN");
             CURRENT_INTERFACE->dhcp_configured = 0;
             CURRENT_INTERFACE->ip_address = $u32 0;
         }
     }
 
     if(status & RTL8111_MAC_IMR_ROK) {
-        println("rtl8111_interrupt_handler() : Frame received");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_interrupt_handler() : Frame received");
         rtl8111_handle_receive();
     }
 
@@ -158,7 +158,7 @@ void rtl8111_interrupt_handler(trapframe* tf) {
 }
 
 void rtl8111_handle_receive() {
-    println("rtl8111_handle_receive() : Handling frame receive");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_handle_receive() : Handling frame receive");
 
     u64 idx = rtl8111->curr_rdesc;
 
@@ -191,14 +191,14 @@ void rtl8111_handle_receive() {
 }
 
 void rtl8111_send(u8* data, u16 len) {
-    println("rtl8111_send() : Beginning send operation");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_send() : Beginning send operation");
 
     u64 idx = rtl8111->curr_tdesc;
     RTL8111_TDESC* desc = $RTL8111_TDESC* @rtl8111->tdesc_ring[idx];
 
     if((desc->opts1 & RTL8111_TDESC_OPT1_OWN) != $u32 0) {
         // TODO ring full...
-        println("rtl8111_send() : TX ring full, unable to send packet");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_send() : TX ring full, unable to send packet");
         return;
     }
 
@@ -218,7 +218,7 @@ void rtl8111_send(u8* data, u16 len) {
     u8* poll_reg = $u8* (rtl8111->mmio_base + RTL8111_MAC_TPPoll);
     *poll_reg = RTL8111_MAC_TPPoll_NPQ; // set the normal priority poll bit
 
-    println("rtl8111_send() : Finished send operation");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_send() : Finished send operation");
 }
 
 void rtl8111_enable_interrupts() {
@@ -232,7 +232,7 @@ void rtl8111_enable_interrupts() {
 }
 
 void rtl8111_init_tx() {
-    println("rtl8111_init_tx() : Beginning TX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_init_tx() : Beginning TX initialization");
 
     // Allocate ring memory
     void* ring_base = palloc();
@@ -262,11 +262,11 @@ void rtl8111_init_tx() {
     u32* tnpds_hi = $u32* (rtl8111->mmio_base + RTL8111_MAC_TNPDS + $u64 4);    
     *tnpds_hi = $u32 ($u64 rtl8111->tdesc_ring >> $u64 32);
 
-    println("rtl8111_init_tx() : Finished TX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_init_tx() : Finished TX initialization");
 }
 
 void rtl8111_init_rx() {
-    println("rtl8111_init_rx() : Beginning RX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_init_rx() : Beginning RX initialization");
     
     // Allocate ring memory
     void* ring_base = palloc();
@@ -295,11 +295,11 @@ void rtl8111_init_rx() {
     u64* rdsar = $u64* (rtl8111->mmio_base + RTL8111_MAC_RDSAR);
     *rdsar = $u64 rtl8111->rdesc_ring; 
 
-    println("rtl8111_init_rx() : Finished RX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_init_rx() : Finished RX initialization");
 }
 
 void rtl8111_get_mac_address(u8[6]& mac) {
-    println("rtl8111_get_mac_address() : Begin getting NIC MAC address");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_get_mac_address() : Begin getting NIC MAC address");
 
     mac[0] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR0));
     mac[1] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR1));
@@ -308,17 +308,17 @@ void rtl8111_get_mac_address(u8[6]& mac) {
     mac[4] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR4));
     mac[5] = *($u8* (rtl8111->mmio_base + RTL8111_MAC_IDR5));
 
-    print("rtl8111_get_mac_address() : NIC MAC address is ");
-    print("[");
-    print_mac_addr(mac);
-    print("]");
-    println("");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) {
+        print("rtl8111_get_mac_address() : NIC MAC address is [");
+        print_mac_addr(mac);
+        println("]");
+    }
 
-    println("rtl8111_get_mac_address() : Finished getting NIC MAC address");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_get_mac_address() : Finished getting NIC MAC address");
 }
 
 void rtl8111_reset() {
-    println("rtl8111_reset() : Beginning device reset");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_reset() : Beginning device reset");
 
     // Initiate software reset
     u8* cr = $u8* (rtl8111->mmio_base + RTL8111_MAC_CR);
@@ -329,7 +329,7 @@ void rtl8111_reset() {
     rtl8111_write_phy(RTL8111_PHY_BMCR, RTL8111_PHY_BMCR_Reset);
     while((rtl8111_read_phy(RTL8111_PHY_BMCR) & RTL8111_PHY_BMCR_Reset) != $u16 0) {}
 
-    println("rtl8111_reset() : Finished device reset");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_reset() : Finished device reset");
 }
 
 // returns 1 for up, 0 for down.
@@ -365,7 +365,7 @@ void rtl8111_write_phy(u8 reg, u16 data) {
 }
 
 void rtl8111_pci_setup(u64 addr) {
-    println("rtl8111_pci_setup() : Beginning PCI setup");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_pci_setup() : Beginning PCI setup");
 
     PCIHeader0* pci_hdr = $PCIHeader0* addr;
 
@@ -381,7 +381,7 @@ void rtl8111_pci_setup(u64 addr) {
     u64 type = (BAR2 & 0x6) >> 0x1;
     if(type == 0x0) {
         // 32 bit
-        println("rtl8111_pci_setup() : Detected 32-bit memory register base address");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_pci_setup() : Detected 32-bit memory register base address");
         mmio_base_addr = $u64 (BAR2 & 0xFFFFFFF0);
 
         // get size
@@ -393,7 +393,7 @@ void rtl8111_pci_setup(u64 addr) {
         mmio_size = $u64 mask + 0x1;
     } else if(type == 0x2) {
         // 64 bit
-        println("rtl8111_pci_setup() : Detected 64-bit memory register base address");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_pci_setup() : Detected 64-bit memory register base address");
         u64 lower = $u64 (BAR2 & 0xFFFFFFF0);
         u64 upper = BAR3 << $u64 32;
         mmio_base_addr = upper | lower;
@@ -431,5 +431,5 @@ void rtl8111_pci_setup(u64 addr) {
     assert(pci_enable_msix(pci_hdr, $u8 INTNO_RTL8111) != 0, "rtl8111_pci_setup() : Failed to disable MSI-X");
     assert(pci_enable_msi(pci_hdr, $u8 INTNO_RTL8111) == 0, "rtl8111_pci_setup() : Failed to enable MSI");
 
-    println("rtl8111_pci_setup() : Finished PCI setup");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_pci_setup() : Finished PCI setup");
 }

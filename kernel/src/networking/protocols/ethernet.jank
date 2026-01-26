@@ -11,7 +11,7 @@ struct EthernetHeader {
 }
 
 void ethernet_handle_frame(u8* buffer, u16 length) {
-    println("ethernet_handle_frame() : Handling incoming frame");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("ethernet_handle_frame() : Handling incoming frame");
     if($u64 length < sizeof(EthernetHeader)) return;
 
     EthernetHeader* eth = $EthernetHeader* buffer;
@@ -19,29 +19,32 @@ void ethernet_handle_frame(u8* buffer, u16 length) {
     u16 type = be_to_cpu(eth->type);
 
     if(type == ETHERNET_TYPE_ARP) {
-        println("ethernet_handle_frame() : ARP packet received");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("ethernet_handle_frame() : ARP packet received");
         ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
         // snoop for free addresses for free!!!
         arp_update(be_to_cpu(arp->sender_ip), arp->sender_mac);
         arp_handle(arp);
-        arp_table_dump();
+        if(NETWORKING_ACCESS_LAYER_DEBUG) arp_table_dump();
 
     } else if(type == ETHERNET_TYPE_IPV4) {
-        println("ethernet_handle_frame() : IPv4 packet received");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("ethernet_handle_frame() : IPv4 packet received");
         IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
         ipv4_handle(ip);
 
     } else {
-        print("ethernet_handle_frame() : Unknown packet type: ");
-        print($void* ($u64 type));
-        println("");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) {
+            print("ethernet_handle_frame() : Unknown packet type: ");
+            println($void* ($u64 type));
+        }
     }
 }
 
 void ethernet_send_frame(u8[6]& dst_mac, u8* data, u16 len, u16 eth_type) {
-    print("ethernet_send_frame() : Sending Ethernet frame to [");
-    print_mac_addr(dst_mac);
-    println("]");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) {
+        print("ethernet_send_frame() : Sending Ethernet frame to [");
+        print_mac_addr(dst_mac);
+        println("]");
+    }
 
     u64 frame_len = sizeof(EthernetHeader) + $u64 len;
 

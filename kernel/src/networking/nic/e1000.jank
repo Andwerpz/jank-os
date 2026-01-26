@@ -124,7 +124,7 @@ struct E1000_TDESC {
 [__GLOBAL_FIRST__] u8 E1000_TDESC_CMD_IFCS = $u8 0x2;         // Insert FCS, Controls the insertion of the FCS/CRC field in normal Ethernet packets. IFCS is valid only when EOP is set.
 
 void e1000_init(u64 addr) {
-    println("e1000_init() : Beginning NIC initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_init() : Beginning NIC initialization");
 
     e1000 = $E1000* malloc(sizeof(E1000));
     e1000->eeprom_exists = $u8 0;
@@ -160,7 +160,7 @@ void e1000_init(u64 addr) {
     net_interfaces.push_back(nic);
     CURRENT_INTERFACE = nic;
 
-    println("e1000_init() : Finished NIC initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_init() : Finished NIC initialization");
 }
 
 i32 e1000_get_link_status() {
@@ -171,7 +171,7 @@ i32 e1000_get_link_status() {
 }
 
 void e1000_pci_setup(u64 addr) {
-    println("e1000_pci_setup() : Beginning PCI setup");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_pci_setup() : Beginning PCI setup");
 
     PCIHeader0* pci_hdr = $PCIHeader0* addr;
 
@@ -186,7 +186,7 @@ void e1000_pci_setup(u64 addr) {
     u64 type = (BAR0 & 0x6) >> 0x1;
     if(type == 0x0) {
         // 32 bit
-        println("e1000_pci_setup() : Detected 32-bit memory register base address");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_pci_setup() : Detected 32-bit memory register base address");
         mmio_base_addr = $u64 (BAR0 & 0xFFFFFFF0);
 
         // get size
@@ -198,7 +198,7 @@ void e1000_pci_setup(u64 addr) {
         mmio_size = $u64 mask + 0x1;
     } else if(type == 0x2) {
         // 64 bit
-        println("e1000_pci_setup() : Detected 64-bit memory register base address");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_pci_setup() : Detected 64-bit memory register base address");
         u64 lower = $u64 (BAR0 & 0xFFFFFFF0);
         u64 upper = BAR1 << $u64 32;
         mmio_base_addr = upper | lower;
@@ -233,21 +233,23 @@ void e1000_pci_setup(u64 addr) {
 
     // read irq line, no safety checks here
     e1000->irq = pci_hdr->interrupt_line;
-    print("e1000_pci_setup() : Using IRQ: 0x");
-    print_hex(e1000->irq);
-    println("");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) {
+        print("e1000_pci_setup() : Using IRQ: 0x");
+        print_hex(e1000->irq);
+        println("");
+    }
     IRQ_clear_mask(e1000->irq);
 
     // convert the irq to int vec
     e1000->intno = IRQ_to_int_vec(e1000->irq);
     INTNO_E1000 = e1000->intno;
 
-    println("e1000_pci_setup() : Finished PCI setup");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_pci_setup() : Finished PCI setup");
 }
 
 // will write 6 bytes to mac
 void e1000_get_mac_address(u8[6]& mac) {
-    println("e1000_get_mac_address() : Begin getting NIC MAC address");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_get_mac_address() : Begin getting NIC MAC address");
 
     // check if eeprom exists
     e1000_eeprom_check();
@@ -264,17 +266,17 @@ void e1000_get_mac_address(u8[6]& mac) {
         mac[mac_idx++] = $u8 (temp >> $u16 8);
     }
 
-    print("e1000_get_mac_address() : NIC MAC address is ");
-    print("[");
-    print_mac_addr(mac);
-    print("]");
-    println("");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) {
+        print("e1000_get_mac_address() : NIC MAC address is [");
+        print_mac_addr(mac);
+        println("]");
+    }
 
-    println("e1000_get_mac_address() : Finished getting NIC MAC address");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_get_mac_address() : Finished getting NIC MAC address");
 }
 
 void e1000_startup() {
-    println("e1000_startup() : Beginning general intialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_startup() : Beginning general intialization");
 
     // general configuration (14.3 in specs)
 
@@ -307,11 +309,11 @@ void e1000_startup() {
         *mta_ptr = $u32 0;
     }
 
-    println("e1000_startup() : Finished general intialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_startup() : Finished general intialization");
 }
 
 void e1000_enable_interrupts() {
-    println("e1000_enable_interrupts() : Beginning enabling interrupts");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_enable_interrupts() : Beginning enabling interrupts");
 
     // register the interrupt vector
     idt_set_entry($u64 e1000->intno, $u64 @e1000_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
@@ -332,11 +334,11 @@ void e1000_enable_interrupts() {
     u32 ims = E1000_IMS_LSC | E1000_IMS_RXT0;
     *ims_ptr = ims;
 
-    println("e1000_enable_interrupts() : Finished enabling interrupts");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_enable_interrupts() : Finished enabling interrupts");
 }
 
 void e1000_eeprom_check() {
-    println("e1000_eeprom_check() : Beginning checking NIC EEPROM");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_eeprom_check() : Beginning checking NIC EEPROM");
     u32* eerd_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_EERD + $u64 E1000_EERD_START);
     *eerd_ptr = $u32 0x1; // set start bit
     for(i32 i = 0; i < 10000; i++) {
@@ -347,12 +349,12 @@ void e1000_eeprom_check() {
     }
 
     if(e1000->eeprom_exists) {
-        println("e1000_eeprom_check() : EEPROM found");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_eeprom_check() : EEPROM found");
     } else {
-        println("e1000_eeprom_check() : EEPROM not found");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_eeprom_check() : EEPROM not found");
     }
 
-    println("e1000_eeprom_check() : Finished checking NIC EEPROM");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_eeprom_check() : Finished checking NIC EEPROM");
 }
 
 u16 e1000_eeprom_read(u8 addr) {
@@ -378,7 +380,7 @@ u16 e1000_eeprom_read(u8 addr) {
 }
 
 void e1000_init_rx() {
-    println("e1000_init_rx() : Beginning RX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_init_rx() : Beginning RX initialization");
     
     // allocate ring memory
     void* ring_base = palloc();
@@ -416,11 +418,11 @@ void e1000_init_rx() {
     rctl &= ~(E1000_RCTL_BSIZE | E1000_RCTL_BSEX);
     *rctl_ptr = rctl;
 
-    println("e1000_init_rx() : Finished RX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_init_rx() : Finished RX initialization");
 }
 
 void e1000_init_tx() {
-    println("e1000_init_tx() : Beginning TX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_init_tx() : Beginning TX initialization");
 
     // allocate ring memory
     void* ring_base = palloc();
@@ -458,13 +460,13 @@ void e1000_init_tx() {
     u32 tctl = (E1000_TCTL_EN | E1000_TCTL_PSP);
     *tctl_ptr = tctl;
 
-    println("e1000_init_tx() : Finished TX initialization");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_init_tx() : Finished TX initialization");
 }
 
 // hardware moves the head and software writes to tail
 // hardware will act when head != tail, otherwise it sleeps
 void e1000_send(u8* data, u16 len) {
-    println("e1000_send() : Beginning send operation");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_send() : Beginning send operation");
 
     // get tail index from hardware
     u32* tdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_TDT);
@@ -484,11 +486,11 @@ void e1000_send(u8* data, u16 len) {
     u32 next_idx = (tx_idx + $u32 1) % $u32 e1000->num_tdesc;
     *tdt_ptr = next_idx;
 
-    println("e1000_send() : Finished send operation");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_send() : Finished send operation");
 }
 
 void e1000_receive_poll() {
-    println("e1000_receive_poll() : Polling receive");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_receive_poll() : Polling receive");
 
     u32* rdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDT);
     
@@ -499,7 +501,7 @@ void e1000_receive_poll() {
             u16 len = e1000->rdesc_ring[e1000->curr_rdesc].length;
             u8* buffer = $u8* e1000->rdesc_ring[e1000->curr_rdesc].addr;
 
-            println("e1000_receive_poll() : Frame received");
+            if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_receive_poll() : Frame received");
             ethernet_handle_frame(buffer, len);
 
             e1000->rdesc_ring[e1000->curr_rdesc].status = $u8 0;
@@ -510,7 +512,7 @@ void e1000_receive_poll() {
 }
 
 void e1000_handle_receive() {
-    println("e1000_handle_receive() : Handling frame receive");
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_handle_receive() : Handling frame receive");
     u32* rdt_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_RDT);
 
     while((e1000->rdesc_ring[e1000->curr_rdesc].status & E1000_RDESC_STATUS_DD) != $u8 0) {
@@ -531,19 +533,19 @@ void e1000_interrupt_handler(trapframe* tf) {
     u32 status = *icr_ptr;
 
     if(status & E1000_IMS_LSC) {
-        println("e1000_interrupt_handler() : Link status changed");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_interrupt_handler() : Link status changed");
 
         if(e1000_get_link_status()) {
-            println("e1000_interrupt_handler() : Link is UP");
+            if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_interrupt_handler() : Link is UP");
         } else {
-            println("e1000_interrupt_handler() : Link is DOWN");
+            if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_interrupt_handler() : Link is DOWN");
             CURRENT_INTERFACE->dhcp_configured = 0;
             CURRENT_INTERFACE->ip_address = $u32 0;
         }
     }
 
     if(status & E1000_IMS_RXT0) {
-        println("e1000_interrupt_handler() : Frame received");
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_interrupt_handler() : Frame received");
         e1000_handle_receive();
     }
 
