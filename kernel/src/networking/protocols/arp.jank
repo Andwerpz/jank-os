@@ -39,27 +39,29 @@ struct PendingPacket {
 }
 
 void arp_handle(ARPHeader* arp) {
-    println("arp_handle() : Handling incoming ARP message");
+    if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_handle() : Handling incoming ARP message");
 
     u16 opcode = be_to_cpu(arp->opcode);
     u32 target_ip = be_to_cpu(arp->target_ip);
 
     if(opcode == ARP_OPCODE_REPLY) {
-        println("arp_handle() : Detected ARP reply");
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_handle() : Detected ARP reply");
         u32 sender_ip = be_to_cpu(arp->sender_ip);
 
-        print("arp_handle() : Sender IP [");
-        print_ipv4_addr(sender_ip);
-        print("] is at MAC [");
-        print_mac_addr(arp->sender_mac);
-        println("]");
+        if(NETWORKING_NETWORK_LAYER_DEBUG) {
+            print("arp_handle() : Sender IP [");
+            print_ipv4_addr(sender_ip);
+            print("] is at MAC [");
+            print_mac_addr(arp->sender_mac);
+            println("]");
+        }
 
         arp_flush_pending(sender_ip, arp->sender_mac);
 
     } else if(opcode == ARP_OPCODE_REQUEST) {
-        println("arp_handle() : Detected ARP request");
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_handle() : Detected ARP request");
         if(target_ip == CURRENT_INTERFACE->ip_address) {
-            println("arp_handle() : Target IP matched with host, sending reply back");
+            if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_handle() : Target IP matched with host, sending reply back");
 
             u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
             u8* buffer = $u8* malloc(size);
@@ -96,19 +98,23 @@ void arp_handle(ARPHeader* arp) {
             
             free($void* buffer, size);
         } else {
-            print("arp_handle() : Target IP is [");
-            print_ipv4_addr(target_ip);
-            println("], no match with host IP, ignoring");
+            if(NETWORKING_NETWORK_LAYER_DEBUG) {
+                print("arp_handle() : Target IP is [");
+                print_ipv4_addr(target_ip);
+                println("], no match with host IP, ignoring");
+            }
         }
     } else {
-        println("arp_handle() : Unknown ARP opcode");
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_handle() : Unknown ARP opcode");
     }
 }
 
 void send_arp_request(u32 target_ip) {
-    print("send_arp_request() : Sending ARP request to [");
-    print_ipv4_addr(target_ip);
-    println("]");
+    if(NETWORKING_NETWORK_LAYER_DEBUG) {
+        print("send_arp_request() : Sending ARP request to [");
+        print_ipv4_addr(target_ip);
+        println("]");
+    }
     
     u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
     u8* buffer = $u8* malloc(size);
@@ -165,7 +171,7 @@ i32 arp_lookup(u32 ip, u8[6]& mac) {
     if(ARP_TABLE.contains(ip)) {
         ARPEntry* entry = ARP_TABLE.get(ip);
 
-        if(entry->expire_at > hpet_get_ns()) {
+        if(entry->expire_at < hpet_get_ns()) {
             return 0;
         }
 
@@ -176,7 +182,7 @@ i32 arp_lookup(u32 ip, u8[6]& mac) {
 }
 
 void arp_table_dump() {
-    println("=-----=");
+    println("=-------------------------=");
     println("Current ARP Table:");
     for(u64 i = 0x0; i < ARP_TABLE_IPS.size(); i++) {
         if(ARP_TABLE.contains(ARP_TABLE_IPS[i])) {
@@ -188,7 +194,7 @@ void arp_table_dump() {
             println(entry->expire_at);
         }
     }
-    println("=-----=");
+    println("=-------------------------=");
 }
 
 void arp_queue_packet(u32 target_ip, u8* packet, u16 len) {
@@ -207,14 +213,14 @@ void arp_queue_packet(u32 target_ip, u8* packet, u16 len) {
 }
 
 void arp_flush_pending(u32 resolved_ip, u8[6]& dst_mac) {
-    println("arp_flush_pending() : Checking ARP queue for resolved IP");
+    if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_flush_pending() : Checking ARP queue for resolved IP");
 
     PendingPacket* curr = ARP_WAIT_QUEUE_HEAD;
     PendingPacket* prev = $PendingPacket* nullptr;
 
     while(curr != nullptr) {
         if(curr->target_ip == resolved_ip) {
-            println("arp_flush_pending() : Found a match, sending queued packet out");
+            if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_flush_pending() : Found a match, sending queued packet out");
 
             // there is now an arp table entry for this
             ethernet_send_frame(dst_mac, curr->data, curr->len, ETHERNET_TYPE_IPV4);
@@ -246,7 +252,7 @@ void arp_check_timeouts() {
     while(curr != nullptr) {
         if(now - curr->last_attempt >= ARP_WAIT_QUEUE_RETRY_INTERVAL) {
             if(curr->retries < ARP_WAIT_QUEUE_MAX_RETRIES) {
-                println("arp_check_timeouts() : Retrying ARP request");
+                if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_check_timeouts() : Retrying ARP request");
                 send_arp_request(curr->target_ip);
                 
                 curr->retries++;
@@ -255,9 +261,11 @@ void arp_check_timeouts() {
                 prev = curr;
                 curr = curr->next;
             } else {
-                print("arp_check_timeouts() : ARP resolution failed for [");
-                print_ipv4_addr(curr->target_ip);
-                println("], dropping packet");
+                if(NETWORKING_NETWORK_LAYER_DEBUG) {
+                    print("arp_check_timeouts() : ARP resolution failed for [");
+                    print_ipv4_addr(curr->target_ip);
+                    println("], dropping packet");
+                }
 
                 PendingPacket* to_free = curr;
                 if(prev == nullptr) {

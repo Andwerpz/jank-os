@@ -1,0 +1,47 @@
+#include <iostream>;
+#include <assert>;
+#include <string>;
+#include <vector>;
+#include <networking/inet>;
+
+i32 main(u64 argc, u8** argv) {
+    cout << "TCP test" << "\n";
+    cout.flush();
+
+    i32 fd = sys_socket(2, 1, 6);
+    assert(fd >= 0, "socket create failed");
+
+    sockaddr_in remote;
+    remote.sin_family = $u16 AF_INET;
+    remote.sin_port = inet_hton($u16 80);
+    remote.sin_addr = inet_hton($u32 (70 << 24 | 38 << 16 | 95 << 8 | 141 << 0));
+
+    // motherfuckingwebsite.com
+
+    i32 res = sys_connect(fd, $sockaddr* @remote, sizeof(sockaddr_in));
+    cout << res << "\n";
+    cout.flush();
+    assert(res == 0, "connect failed");
+    
+    u8* req = "GET / HTTP/1.0\r\nHost: www.motherfuckingwebsite.com\r\n\r\n";
+    u64 len = strlen(req);
+
+    i64 r = sys_write(fd, $void* req, len);
+    assert(r > $i64 0, "send failed");
+
+    u64 size = $u64 1024;
+    u8* buf = $u8* malloc(size);
+
+    r = sys_recvfrom(fd, $void* buf, size, MSG_DONTWAIT, $sockaddr* nullptr, $u64* nullptr);
+    while(r > $i64 0 || r == $i64 -ERR_AGAIN) {
+        if(r > $i64 0) {
+            cout.write_to_fd(buf, $u64 r);
+        }
+        r = sys_recvfrom(fd, $void* buf, size, MSG_DONTWAIT, $sockaddr* nullptr, $u64* nullptr);
+    }
+
+    cout << "\n";
+    cout.flush();
+
+    return 0;
+}

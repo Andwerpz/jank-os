@@ -18,10 +18,10 @@ struct ICMPHeader {
 }
 
 void icmp_handle(ICMPHeader* icmp, u16 len, u32 src_ip) {
-    println("icmp_handle() : Handling incoming ICMP message");
+    if(NETWORKING_NETWORK_LAYER_DEBUG) println("icmp_handle() : Handling incoming ICMP message");
 
     if(!(icmp->type == ICMP_CTRL_MSG_REQUEST_TYPE)) {
-        println("icmp_handle() : not ICMP request, exiting");
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("icmp_handle() : not ICMP request, exiting");
         return;
     }
 
@@ -34,9 +34,11 @@ void icmp_handle(ICMPHeader* icmp, u16 len, u32 src_ip) {
 }
 
 void icmp_send_request(u32 dst_ip, u16 id, u16 seq) {
-    print("icmp_send_request() : Sending ICMP request to [");
-    print_ipv4_addr(dst_ip);
-    println("]");
+    if(NETWORKING_NETWORK_LAYER_DEBUG) {
+        print("icmp_send_request() : Sending ICMP request to [");
+        print_ipv4_addr(dst_ip);
+        println("]");
+    }
 
     u8* buffer = $u8* malloc(sizeof(ICMPHeader));
     memset($void* buffer, 0 , sizeof(ICMPHeader));
@@ -51,7 +53,7 @@ void icmp_send_request(u32 dst_ip, u16 id, u16 seq) {
     icmp->checksum = $u16 0;
     icmp->checksum = ones_comp_checksum($void* icmp, sizeof(ICMPHeader), $u64 1);
 
-    println("icmp_send_request() : sending ICMP echo request");
+    if(NETWORKING_NETWORK_LAYER_DEBUG) println("icmp_send_request() : sending ICMP echo request");
     ipv4_send_packet(dst_ip, IPv4_PROTOCOL_ICMP, buffer, $u16 sizeof(ICMPHeader));
 
     free($void* buffer, sizeof(ICMPHeader));

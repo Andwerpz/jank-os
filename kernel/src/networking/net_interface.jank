@@ -43,7 +43,8 @@ void print_ipv4_addr(u32 ip) {
 }
 
 void dump_network_interface(NetInterface* net) {
-    println("=-----=");
+    println("=-------------------------=");
+    println("Current interface information:");
 
     print("Device Name      ");
     print(net->name);
@@ -73,7 +74,7 @@ void dump_network_interface(NetInterface* net) {
     print_ipv4_addr(net->dns_server);
     println("");
 
-    println("=-----=");
+    println("=-------------------------=");
 }
 
 // group header into 16 bit words, sum them all up excluding the checksum field.

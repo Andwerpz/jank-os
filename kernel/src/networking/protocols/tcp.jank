@@ -63,7 +63,7 @@ struct TCPSock {
 }
 
 void tcp_init(socket* sock) {
-    println("tcp_init() : Initializing TCP socket information");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_init() : Initializing TCP socket information");
 
     TCPSock* tcb = $TCPSock* malloc(sizeof(TCPSock));
     memset($void* tcb, 0, sizeof(TCPSock));
@@ -76,7 +76,7 @@ void tcp_init(socket* sock) {
     tcb->state = TCP_STATE_CLOSED;
     sock->proto_info = $void* tcb;
 
-    println("tcp_init() : TCP socket information initialized");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_init() : TCP socket information initialized");
 }
 
 // https://en.wikipedia.org/wiki/Transmission_Control_Protocol#TCP_checksum_for_IPv4
@@ -122,14 +122,14 @@ u16 tcp_checksum(u32 src_ip, u32 dst_ip, u8* packet, u16 len) {
 }
 
 void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
-    println("tcp_handle() : Handling incoming TCP message");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Handling incoming TCP message");
     
     u16 dst_port = be_to_cpu(tcp->dst_port);
     socket* sock = TCP_PORT_TABLE[dst_port];
     if(TCP_PORT_TABLE[dst_port] == nullptr) {
-        println("tcp_handle() : Nothing listening on port");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Nothing listening on port");
         if((tcp->flags & TCP_FLAG_RST) == $u8 0) {
-            println("tcp_handle() : Sending RST");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Sending RST");
             tcp_send_reset(src_ip, tcp);
         }
         return;
@@ -156,7 +156,7 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
 
     // handle reset
     if(flags & TCP_FLAG_RST) {
-        println("tcp_handle() : Received RST");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Received RST");
         tcb->state = TCP_STATE_CLOSED;
         waitq_wake_all(@(sock->wait_queue));
         return;
@@ -164,7 +164,7 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
 
     if(tcb->state == TCP_STATE_LISTEN) {
         if(flags & TCP_FLAG_SYN) {
-            println("tcp_handle() : Listener received SYN");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Listener received SYN");
 
             socket* child = $socket* malloc(sizeof(socket));
 
@@ -208,9 +208,9 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
         i32 is_ack = (flags & TCP_FLAG_ACK) != $u8 0;
 
         if(is_syn && is_ack) {
-            println("tcp_handle() : Received the SYN-ACK, attempting to complete handshake");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Received the SYN-ACK, attempting to complete handshake");
             if(ack_num != tcb->iss + $u32 1) {
-                println("tcp_handle() : ACK number invalid, not completing the handshake");
+                if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : ACK number invalid, not completing the handshake");
                 return;
             }
 
@@ -223,7 +223,7 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
             tcb->state = TCP_STATE_ESTABLISHED;
             tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
         
-            println("tcp_handle() : Connection established");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Connection established");
 
             waitq_wake_all(@(sock->wait_queue));
         }
@@ -232,7 +232,7 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
         i32 is_ack = (flags & TCP_FLAG_ACK) != $u8 0;
         
         if(is_ack && ack_num == tcb->iss + $u32 1) {
-            println("tcp_handle() : Server child received ACK");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Server child received ACK");
             
             tcb->state = TCP_STATE_ESTABLISHED;
             tcb->snd_una = ack_num;
@@ -245,14 +245,13 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
             waitq_wake_all(@(parent->wait_queue));
         }
     } else if(tcb->state == TCP_STATE_ESTABLISHED) {
-        println("tcp_handle() : Recieved payload");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Recieved payload");
 
         if(seq_num != tcb->rcv_nxt) {
-            print("tcp_handle() : Out of order packet. Expected ");
-            print($u64 tcb->rcv_nxt);
-            print(", got ");
-            println($u64 seq_num);
-
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) {
+                println("tcp_handle() : Out of order packet. Expected ",$u64 tcb->rcv_nxt, ", got ", $u64 seq_num);
+            }
+            
             tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
             return;
         }
@@ -278,7 +277,7 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
         }
 
         if(flags & TCP_FLAG_FIN) {
-            println("tcp_handle() : Received FIN, connection closing");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Received FIN, connection closing");
 
             tcb->rcv_nxt++;
 
@@ -292,13 +291,13 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
     } else if(tcb->state == TCP_STATE_FIN_WAIT_1 || tcb->state == TCP_STATE_FIN_WAIT_2) {
         if($i32 (flags & TCP_FLAG_ACK) && tcb->state == TCP_STATE_FIN_WAIT_1) {
             if(ack_num == tcb->snd_nxt) {
-                println("tcp_handle() : Received ACK for our FIN. Transitioning to FIN_WAIT_2");
+                if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Received ACK for our FIN. Transitioning to FIN_WAIT_2");
                 tcb->state = TCP_STATE_FIN_WAIT_2;
             }
         }
 
         if(flags & TCP_FLAG_FIN) {
-            println("tcp_handle() : Received their FIN. Sending ACK and Cleaning up");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Received their FIN. Sending ACK and Cleaning up");
         
             tcb->rcv_nxt++; 
             tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK);
@@ -331,13 +330,13 @@ void tcp_handle(TCPHeader* tcp, u16 len, u32 src_ip) {
             return;
         }
     } else if(tcb->state == TCP_STATE_CLOSE_WAIT || tcb->state == TCP_STATE_LAST_ACK) {
-        println("tcp_handle() : Already closing connection, dropping");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_handle() : Already closing connection, dropping");
         return;
     }
 }
 
 void tcp_send_packet(socket* sock, u8* data, u16 len, u8 flags) {
-    println("tcp_send_packet() : Sending TCP packet");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_send_packet() : Sending TCP packet");
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
 
@@ -413,16 +412,16 @@ void init_tcp_ops() {
 }
 
 i32 tcp_listen(socket* sock, i32 backlog) {
-    println("tcp_listen() : Beginning TCP listen socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_listen() : Beginning TCP listen socket operation");
 
     if(sock->proto_info == nullptr) {
-        println("tcp_listen() : Socket missing additional TCP information, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_listen() : Socket missing additional TCP information, returning");
         return -ERR_INVAL;
     }
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
     if(tcb->state != TCP_STATE_CLOSED && tcb->state != TCP_STATE_LISTEN) {
-        println("tcp_listen() : Unable to listen due to current TCP state, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_listen() : Unable to listen due to current TCP state, returning");
         return -ERR_INVAL;
     }
 
@@ -430,22 +429,22 @@ i32 tcp_listen(socket* sock, i32 backlog) {
 
     tcb->state = TCP_STATE_LISTEN;
 
-    println("tcp_listen() : Finished TCP listen socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_listen() : Finished TCP listen socket operation");
 
     return 0;
 }
 
 socket* tcp_accept(socket* sock, sockaddr* client_addr, u64* addr_len) {
-    println("tcp_accept() : Beginning TCP accept socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_accept() : Beginning TCP accept socket operation");
 
     if(sock->proto_info == nullptr) {
-        println("tcp_accept() : Socket missing additional TCP information, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_accept() : Socket missing additional TCP information, returning");
         return $socket* nullptr;
     }
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
     if(tcb->state != TCP_STATE_LISTEN) {
-        println("tcp_accept() : Socket is not listening, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_accept() : Socket is not listening, returning");
         return $socket* nullptr;
     }
 
@@ -464,22 +463,22 @@ socket* tcp_accept(socket* sock, sockaddr* client_addr, u64* addr_len) {
         *addr_len = sizeof(sockaddr_in);
     }
 
-    println("tcp_accept() : Finished TCP accept socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_accept() : Finished TCP accept socket operation");
 
     return child_sock;
 }
 
 i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
-    println("tcp_connect() : Beginning TCP connect socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_connect() : Beginning TCP connect socket operation");
 
     if(len < sizeof(sockaddr_in)) {
-        println("tcp_connect() : Invalid sockaddr size (too small), exiting");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_connect() : Invalid sockaddr size (too small), exiting");
         return -ERR_INVAL;
     }
 
     sockaddr_in* sin = $sockaddr_in* addr;
     if(sin->sin_family != $u16 AF_INET) {
-        println("tcp_connect() : Address family does not match IPv4 (no support for anything else currently), exiting");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_connect() : Address family does not match IPv4 (no support for anything else currently), exiting");
         return -ERR_AFNOSUPPORT;
     }
 
@@ -491,16 +490,18 @@ i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
     // should this be here? needs this for checksum hehe
     sock->local_addr = CURRENT_INTERFACE->ip_address;
 
-    print("tcp_connect() : Connecting to [");
-    print_ipv4_addr(sock->remote_addr);
-    print(":");
-    print($u64 sock->remote_port);
-    println("]");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) {
+        print("tcp_connect() : Connecting to [");
+        print_ipv4_addr(sock->remote_addr);
+        print(":");
+        print($u64 sock->remote_port);
+        println("]");
+    }
 
     if(sock->local_port == $u16 0) {
         i32 port = get_next_ephemeral_port(TCP_PORT_TABLE);
         if(port < 0) {
-            println("tcp_connect() : Unable to find an open ephemeral port, exiting");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_connect() : Unable to find an open ephemeral port, exiting");
             return -ERR_ADDRINUSE;
         }
 
@@ -524,22 +525,22 @@ i32 tcp_connect(socket* sock, sockaddr* addr, u64 len) {
     // block here.
     wait_on(@(sock->wait_queue));
 
-    println("tcp_connect() : Finished TCP connect socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_connect() : Finished TCP connect socket operation");
 
     return 0;
 }
 
 i32 tcp_close(socket* sock) {
-    println("tcp_close() : Beginning TCP close socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_close() : Beginning TCP close socket operation");
 
     if(sock->proto_info == nullptr) {
-        println("tcp_close() : Socket missing additional TCP information, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_close() : Socket missing additional TCP information, returning");
         return -ERR_INVAL;
     }
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
     if(tcb->state == TCP_STATE_ESTABLISHED || tcb->state == TCP_STATE_SYN_RECEIVED) {
-        println("tcp_close() : Changing state to FIN_WAIT_1");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_close() : Changing state to FIN_WAIT_1");
         tcp_send_packet(sock, $u8* nullptr, $u16 0, TCP_FLAG_ACK | TCP_FLAG_FIN);
         tcb->snd_nxt++;
         tcb->state = TCP_STATE_FIN_WAIT_1;
@@ -548,11 +549,11 @@ i32 tcp_close(socket* sock) {
         if(sock->local_port != $u16 0) {
             socket* entry = TCP_PORT_TABLE[sock->local_port];
             if(entry == sock) {
-                println("tcp_close() : Closing the parent listener");
+                if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_close() : Closing the parent listener");
                 TCP_PORT_TABLE[sock->local_port] = $socket* nullptr;
 
             } else if(entry != nullptr) {
-                println("tcp_close() : Closing the child socket");
+                if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_close() : Closing the child socket");
                 TCPSock* parent_tcb = $TCPSock* entry->proto_info;
 
                 for(u64 i = 0x0; i < parent_tcb->children.size(); i++) {
@@ -574,14 +575,14 @@ i32 tcp_close(socket* sock) {
         free($void* sock, sizeof(socket));
     }
 
-    println("tcp_close() : Finished TCP close socket operation");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_close() : Finished TCP close socket operation");
 
     return 0;
 }
 
 i32 tcp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
     if(sock->proto_info == nullptr) {
-        println("tcp_receive() : Socket missing additional TCP information, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_receive() : Socket missing additional TCP information, returning");
         return -ERR_INVAL;
     }
 
@@ -618,14 +619,14 @@ i32 tcp_receive(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* src_addr) {
 
 i32 tcp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dst) {
     if(sock->proto_info == nullptr) {
-        println("tcp_send() : Socket missing additional TCP information, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_send() : Socket missing additional TCP information, returning");
         return -ERR_INVAL;
     }
 
     TCPSock* tcb = $TCPSock* sock->proto_info;
 
     if(tcb->state != TCP_STATE_ESTABLISHED) {
-        println("tcp_send() : TCP connection has not been established yet, returning");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_send() : TCP connection has not been established yet, returning");
         return -ERR_NOTCONN;
     }
 
@@ -656,7 +657,7 @@ i32 tcp_send(socket* sock, u8* buf, u64 len, i32 flags, sockaddr* dst) {
 
 i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     if(len < sizeof(sockaddr_in)) {
-        println("tcp_bind() : Invalid sockaddr size (too small), exiting");
+        if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_bind() : Invalid sockaddr size (too small), exiting");
         return -ERR_INVAL;
     }
     
@@ -670,34 +671,36 @@ i32 tcp_bind(socket* sock, sockaddr* addr, u64 len) {
     if(sin_port == $u16 0) {
         i32 port = get_next_ephemeral_port(TCP_PORT_TABLE);
         if(port < 0) {
-            println("tcp_bind() : Unable to find an open ephemeral port, exiting");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_bind() : Unable to find an open ephemeral port, exiting");
             return -ERR_ADDRINUSE;
         }
         sin_port = $u16 port;
         sin->sin_port = cpu_to_be($u16 port);
     } else {
         if($u32 sin_port >= MAX_PORTS) {
-            println("tcp_bind() : Port outside allowed range, exiting");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_bind() : Port outside allowed range, exiting");
             return -ERR_INVAL;
         }
 
         if(TCP_PORT_TABLE[sin_port] != nullptr) {
-            println("tcp_bind() : Port already in use, exiting");
+            if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_bind() : Port already in use, exiting");
             return -ERR_ADDRINUSE;
         }
     }
 
-    print("tcp_bind() : TCP bind called for [");
-    print_ipv4_addr(sin_addr);
-    print(":");
-    print($u64 sin_port);
-    println("]");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) {
+        print("tcp_bind() : TCP bind called for [");
+        print_ipv4_addr(sin_addr);
+        print(":");
+        print($u64 sin_port);
+        println("]");
+    }
 
     TCP_PORT_TABLE[sin_port] = sock;
     sock->local_port = sin_port;
     sock->local_addr = sin_addr;
 
-    println("tcp_bind() : Finished TCP bind sock");
+    if(NETWORKING_TRANSPORT_LAYER_DEBUG) println("tcp_bind() : Finished TCP bind sock");
 
     return 0;
 }
