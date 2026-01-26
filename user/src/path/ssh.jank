@@ -78,6 +78,8 @@ channel session_channel;
 
 i32 disconnected = 0;
 
+bump_allocator balloc;
+
 struct preferred_algorithms {
     vector<string> kex_algorithms;
     vector<string> server_host_key_algorithms;
@@ -100,6 +102,37 @@ struct selected_algorithms {
     string mac_algorithm_server_to_client;
     string compression_algorithm_client_to_server;
     string compression_algorithm_server_to_client;
+}
+
+struct bump_allocator {
+    u64 ptr;
+    u64 bufsz;
+    void* buf;
+
+    bump_allocator() {
+        this.ptr = 0x0;
+        this.bufsz = 0x10000;
+        this.buf = malloc(this.bufsz);
+    }
+
+    ~bump_allocator() {
+        free(this.buf, this.bufsz);
+    }
+
+    void init() {
+        assert(this.ptr == 0x0, "bump_allocator::init() : ptr not at 0");
+    }
+
+    void free() {
+        this.ptr = 0x0;
+    }
+
+    void* malloc(u64 sz) {
+        assert(this.ptr + sz <= this.bufsz, "bump_allocator::malloc() : out of memory");
+        void* ret = $void* ($u64 this.buf + this.ptr);
+        this.ptr += sz;
+        return ret;
+    }
 }
 
 struct channel {
@@ -147,6 +180,7 @@ struct packet_builder {
     i32 is_encrypted;
     u32 seq_no;
     string payload;
+    string key_material;
 
     void init() {
         assert(this.payload.size() == 0x0, "packet builder payload should be empty on init");
@@ -155,10 +189,11 @@ struct packet_builder {
     void flush_packet() {
         if(this.is_encrypted) {
             if(sa.encryption_algorithm_client_to_server == "chacha20-poly1305@openssh.com") {
+                assert(this.key_material.size() >= $u64 64, "packet_builder::read_packet() : not enough key material for chacha20-poly1305@openssh.com");
                 void* key = malloc($u64 64);
-                generate_key_material('C', key, $u64 64);
+                memcpy(key, $void* this.key_material.jstr(), $u64 64);
                 void* K1 = key;
-                void* K2 = $void* ($u64 key + $u64 32);
+                void* K2 = $void* ($u64 K1 + $u64 32);
 
                 //nonce is big-endian 64-bit representation of seq_no
                 void* nonce = malloc($u64 12);
@@ -362,6 +397,7 @@ struct packet_parser {
     u32 seq_no;
     u64 ptr;
     string payload;
+    string key_material;
 
     void set_payload(string payload) {
         this.payload = payload;
@@ -373,13 +409,13 @@ struct packet_parser {
         sr.init();
         if(this.is_encrypted) {
             if(sa.encryption_algorithm_server_to_client == "chacha20-poly1305@openssh.com") {
-                void* key = malloc($u64 64);
-                void* nonce = malloc($u64 12);
-                void* header_buf = malloc(0x4);
-
-                generate_key_material('D', key, $u64 64);
+                assert(this.key_material.size() >= $u64 64, "packet_parser::read_packet() : not enough key material for chacha20-poly1305@openssh.com");
+                void* key = balloc.malloc($u64 64);
+                void* nonce = balloc.malloc($u64 12);
+                void* header_buf = balloc.malloc(0x4);
+                memcpy(key, $void* this.key_material.jstr(), $u64 64);
                 void* K1 = key;
-                void* K2 = $void* ($u64 key + $u64 32);
+                void* K2 = $void* ($u64 K1 + $u64 32);
 
                 //nonce is big-endian 64-bit representation of seq_no
                 memset(nonce, 0, $u64 12);
@@ -392,9 +428,7 @@ struct packet_parser {
                 u32 packet_length;
                 {   
                     if(sr.read_bytes(header_buf, 0x4, blocking)) {
-                        free(key, $u64 64);
-                        free(nonce, $u64 12);
-                        free(header_buf, 0x4);
+                        balloc.free();
                         assert(!blocking, "packet_parser::read_packet() : read header failed");
                         return 1;
                     }
@@ -410,9 +444,7 @@ struct packet_parser {
                 void* packet_buf = malloc($u64 packet_length);
                 {
                     if(sr.read_bytes(packet_buf, $u64 packet_length, blocking)) {
-                        free(key, $u64 64);
-                        free(nonce, $u64 12);
-                        free(header_buf, 0x4);
+                        balloc.free();
                         free(packet_buf, $u64 packet_length);
                         assert(!blocking, "packet_parser::read_packet() : read payload failed");
                         return 1;
@@ -432,9 +464,7 @@ struct packet_parser {
                 {
                     void* tag = malloc($u64 16);
                     if(sr.read_bytes(tag, $u64 16, blocking)) {
-                        free(key, $u64 64);
-                        free(nonce, $u64 12);
-                        free(header_buf, 0x4);
+                        balloc.free();
                         free(packet_buf, $u64 packet_length);
                         free(tag, $u64 16);
                         assert(!blocking, "packet_parser::read_packet() : read tag failed");
@@ -479,9 +509,7 @@ struct packet_parser {
                     free(whole_buf, 0x4 + $u64 packet_length);
                 }
 
-                free(key, $u64 64);
-                free(nonce, $u64 12);
-                free(header_buf, 0x4);
+                balloc.free();
                 free(packet_buf, $u64 packet_length);
             }
             else {
@@ -881,6 +909,13 @@ void do_KEX() {
     if(session_id.size() == 0x0) {
         session_id = new_exchange_hash;
     }
+
+    void* keymat_buf = malloc($u64 512);
+    generate_key_material('C', keymat_buf, $u64 512);
+    pb.key_material = new string($u8* keymat_buf, $u64 512);
+    generate_key_material('D', keymat_buf, $u64 512);
+    pp.key_material = new string($u8* keymat_buf, $u64 512);
+    free(keymat_buf, $u64 512);
 }
 
 void do_service_request(string service_name) {
@@ -1585,11 +1620,12 @@ i32 main(u64 argc, u8** argv) {
     stdin_pollfd->fd = STDIN;
     stdin_pollfd->events = POLLIN;
 
+    u64 stdin_bufsz = 0x1000;
+    void* stdin_buf = malloc(stdin_bufsz);
     while(!disconnected) {
         //poll bytes from stdin
         {
-            string s;
-            void* buf = malloc(0x1);
+            u64 ptr = 0x0;
             while(1) {
                 i32 poll_status = sys_poll(stdin_pollfd, $u32 1, 0);
                 if(poll_status < 0) {
@@ -1601,16 +1637,19 @@ i32 main(u64 argc, u8** argv) {
                     //no more bytes
                     break;
                 }
-
-                i64 read_status = sys_read(STDIN, buf, 0x1);
+                i64 read_status = sys_read(STDIN, $void* ($u64 stdin_buf + ptr), 0x1);
                 assert(read_status == $i64 1, "sys_read failed");
-                s.push_back(($u8* buf)[0]);
-            }
-            free(buf, 0x1);
+                ptr ++;
 
-            if(s.size() != 0x0) {
+                if(ptr == stdin_bufsz) {
+                    //send user input to server
+                    do_channel_data(session_channel, new string($u8* stdin_buf, ptr));
+                    ptr = 0x0;
+                }
+            }
+            if(ptr != 0x0) {
                 //send user input to server
-                do_channel_data(session_channel, s);
+                do_channel_data(session_channel, new string($u8* stdin_buf, ptr));
             }   
         }
 
