@@ -1,0 +1,198 @@
+#include <iostream>;
+#include <assert>;
+#include <wait>;
+#include <exec>;
+#include <termios>;
+#include <time>;
+
+u8 ESC = $u8 0x1B;
+u8 DEL = $u8 0x7F;
+
+termios* gen_canonical_termios() {
+    termios* t = $termios* malloc(sizeof(termios));
+    memset($void* t, 0, sizeof(termios));
+
+    // --- input flags ---
+    t->c_iflag |= $u32 TTY_ICRNL;    //map CR -> NL
+
+    // --- output flags ---
+    t->c_oflag |= $u32 TTY_OPOST;    //enable post-processing 
+    t->c_oflag |= $u32 TTY_ONLCR;    //map NL -> CR NL
+
+    // --- control flags ---
+
+    // --- local flags ---
+    t->c_lflag |= $u32 TTY_ICANON;   //enable line discipline
+    t->c_lflag |= $u32 TTY_ECHO;     //echo characters back to backend
+    t->c_lflag |= $u32 TTY_ECHOE;    //visually delete the last character typed on backspace
+
+    // --- control chars ---
+    t->c_cc[TTY_VERASE] = $u8 0x7F;      //set backspace char to be DEL
+
+    return t;
+}
+
+termios* gen_raw_termios() {
+    termios* t = gen_canonical_termios();
+
+    // turn off canonical, echo, signals
+    t->c_lflag &= $u32 ~(TTY_ICANON | TTY_ECHO | TTY_ISIG);
+
+    // read returns as soon as 1 byte is available
+    t->c_cc[TTY_VMIN]  = $u8 1;
+    t->c_cc[TTY_VTIME] = $u8 0;
+
+    return t;
+}
+
+i32 enable_raw_mode(i32 fd) {
+    if(tcsetattr(fd, gen_raw_termios())) {
+        return -1;
+    }
+    return 0;
+}
+
+i32 enable_canonical_mode(i32 fd) {
+    if(tcsetattr(fd, gen_canonical_termios())) {
+        return -1;
+    }
+    return 0;
+}
+
+pollfd* stdin_pollfd;
+
+void sleep_until(u64 sys_ns) {
+    while(get_sys_time_ns() < sys_ns) {
+        if(sys_poll(stdin_pollfd, $u32 1, 0)) {
+            //recieved some keyboard input, void first char
+            sys_read(STDIN, malloc(0x1), 0x1);
+
+            //exit
+            cleanup_and_exit(0);
+        }
+        sys_sched_yield();
+    }
+}
+
+void sleep(u64 ms) {
+    sleep_until(get_sys_time_ns() + ms * $u64 1000000);
+}
+
+void cleanup_and_exit(i32 status) {
+    cout << ESC << "[?25h"; // show cursor
+    cout << ESC << "[2J";   // clear screen
+    cout << ESC << "[0m";   // reset rendering settings
+    cout << ESC << "[H";    // re-home cursor
+    cout.flush();
+    sys_exit(status);
+}
+
+i32 main() {
+
+    if(enable_raw_mode(STDIN)) {
+        assert(0, "enable raw mode failed");
+    }
+
+    stdin_pollfd = $pollfd* malloc(sizeof(pollfd));
+    stdin_pollfd->fd = STDIN;
+    stdin_pollfd->events = POLLIN;
+
+    u64 width;
+    u64 height;
+    winsize* wsz = $winsize* malloc(sizeof(winsize));
+    if(tcgetwinsize(STDIN, wsz)) {
+        assert(0, "tcgetwinsize failed");
+    }
+    width = $u64 wsz->ws_col;
+    height = $u64 wsz->ws_row;
+    free($void* wsz, sizeof(winsize));
+    
+    cout << ESC << "[?25l"; // hide cursor
+    cout << ESC << "[2J";   // clear screen
+    cout << ESC << "[0m";   // reset rendering settings
+
+    u8* buf = $u8* malloc(width * height + 0x1);
+    for(u64 i = 0x0; i < width * height; i++) buf[i] = ' ';
+    buf[width * height] = '\0';
+
+    u64 bm_width = $u64 50;
+    u64 bm_height = $u64 5;
+
+    if(width < bm_width || height < bm_height) {
+        cleanup_and_exit(1);
+    }
+    u64 bm_xoff = (width - bm_width) / 0x2;
+    u64 bm_yoff = (height - bm_height) / 0x2;
+    {
+        u64[5] bitmap;
+        bitmap[0] = 0b00000110011111001110000110110001100111111001111111;
+        bitmap[1] = 0b00000110110001101111000110110011001100001101100000;
+        bitmap[2] = 0b00000110111111101101100110111110001100001101111111;
+        bitmap[3] = 0b11000110110001101100110110110011001100001100000011;
+        bitmap[4] = 0b01111100110001101100011110110001100111111001111111;
+        
+        for(u64 i = 0x0; i < bm_height; i++) {
+            for(u64 j = 0x0; j <= bm_width && j < width; j++) {
+                u64 bit = 0x0;
+                u64 next_bit = 0x0;
+                if(i < bm_height) bit = (bitmap[i] >> (bm_width - j - 0x1)) & 0x1;
+                if(i <= bm_height) next_bit = (bitmap[i] >> (bm_width - j)) & 0x1;
+                u64 x = bm_xoff + j;
+                u64 y = bm_yoff + i;
+                u8 c;
+                if(bit) c = $u8 219;
+                else if(next_bit) c = $u8 177;
+                else c = ' ';
+                buf[y * width + x] = c;
+            }
+        }
+    }
+
+    u64 ns_ptr = get_sys_time_ns();
+    for(i32 i = 0; i <= 20; i++) {
+        u64 rgb = ($u64 255 * $u64 i) / $u64 20;
+        if(rgb > $u64 255) rgb = $u64 255;
+        cout << ESC << "[38;2;" << rgb << ";" << rgb << ";" << rgb << "m";
+        for(u64 r = 0x0; r < bm_height; r++) {
+            u64 y = r + bm_yoff;
+            u64 x = bm_xoff;
+            cout << ESC << "[" << (y + 0x1) << ";" << (x + 0x1) << "H";
+            for(u64 c = 0x0; c <= bm_width; c++) {
+                cout << buf[y * width + x];
+                x ++;
+            }
+        }
+        cout.flush();
+        
+        ns_ptr += $u64 50 * $u64 1000000;
+        sleep_until(ns_ptr);
+    }
+
+    ns_ptr += $u64 1500 * $u64 1000000;
+    sleep_until(ns_ptr);
+
+    for(i32 i = 20; i >= 0; i--) {
+        u64 rgb = ($u64 255 * $u64 i) / $u64 20;
+        if(rgb > $u64 255) rgb = $u64 255;
+        cout << ESC << "[38;2;" << rgb << ";" << rgb << ";" << rgb << "m";
+        for(u64 r = 0x0; r < bm_height; r++) {
+            u64 y = r + bm_yoff;
+            u64 x = bm_xoff;
+            cout << ESC << "[" << (y + 0x1) << ";" << (x + 0x1) << "H";
+            for(u64 c = 0x0; c <= bm_width; c++) {
+                cout << buf[y * width + x];
+                x ++;
+            }
+        }
+        cout.flush();
+
+        ns_ptr += $u64 50 * $u64 1000000;
+        sleep_until(ns_ptr);
+    }
+
+    free($void* buf, width * height + 0x1);
+
+    cleanup_and_exit(0);
+    
+    return 0;
+}

@@ -1,11 +1,10 @@
 above all, WRITE MORE TESTS!!!
 
-overall goal : get jankos to run bare metal
-this means we need a graphic interface, and replace the bootloader with something I understand
-ok, next we have to consider from what we're going to boot from. Since writing to a hard drive is too hard, 
-  I decided that I would try to make bootable USBs. However, this requires that I implement USB drivers.
-got some basic USB drivers working, can support storage devices that use SCSI BOT protocol. 
-  now just have to actually get a physical drive and reformat it so we can test on bare metal
+okok, taking a break as of february 2026, some things you have to look into when getting back:
+ - there seems to be a bug with networking, try to `ls` a large directory thru ssh and we always run into OOM
+ - USB drivers do not work with some USB storage devices, specifically ChipsBanks SCSI BOT
+   - apparently these USBs specifically don't adhere to the spec very well, so may have to have some special behaviour for them
+ - currently, we're shoving everything that needs to be executed periodically into the timer interrupt. Look into kernel threading to solve this issue.
 
 - TODO
   - ACPI power off

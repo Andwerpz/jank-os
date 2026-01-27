@@ -269,7 +269,7 @@ i64 sys_getrandom(void* buf, u64 buf_len, u64 flags) {
     if(SYS_GETRANDOM_CHACHA20_CTX == nullptr) {
         SYS_GETRANDOM_CHACHA20_CTX = $chacha20_ctx* malloc(sizeof(chacha20_ctx));
         SYS_GETRANDOM_KEY_MATERIAL = malloc($u64 64);
-        u64 x = $u64 1337;
+        u64 x = hpet_get_ns() % $u64 10923;
         for(u64 i = 0x0; i < $u64 64; i++) {
             x = (x * $u64 1529) % $u64 10923;
             ($u8* SYS_GETRANDOM_KEY_MATERIAL)[i] = $u8 x;

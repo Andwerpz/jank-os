@@ -3,6 +3,21 @@
 #include <wait>;
 #include <exec>;
 
+void exec_proc(u8* path, u8* child_home) {
+    pid_t pid = sys_fork();
+    if(pid == $pid_t 0) {   //child
+        sys_chdir(child_home);
+        exec(path);
+        cout << "exec " << path << " failed\n";
+        sys_exit(1);
+    }
+    else {  //parent
+        while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
+            //continue
+        }
+    }
+}
+
 i32 main() {
 
     //make sure this is pid 1
@@ -11,20 +26,11 @@ i32 main() {
     //change CWD to root
     sys_chdir("/");
 
+    //exec splash screen
+    exec_proc("/bin/sys/splash", "/");
+
     //exec user shell
-    pid_t pid = sys_fork();
-    if(pid == $pid_t 0) {   //child
-        sys_chdir("/home");
-        exec("/bin/sys/shell");
-        cout << "exec shell failed\n";
-        return 1;
-    }
-    else {  //parent
-        while(waitpid(pid, $i32* nullptr, WNOHANG) == $pid_t 0) {
-            //continue
-        }
-        cout << "PARENT DONE WAIT\n";
-    }
+    exec_proc("/bin/sys/shell", "/home");
 
     //shouldn't return
     assert(0, "init shouldn\'t return");
