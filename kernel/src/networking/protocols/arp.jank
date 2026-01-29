@@ -63,21 +63,13 @@ void arp_handle(ARPHeader* arp) {
         if(target_ip == CURRENT_INTERFACE->ip_address) {
             if(NETWORKING_NETWORK_LAYER_DEBUG) println("arp_handle() : Target IP matched with host, sending reply back");
 
-            u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
+            // Sending the reply back
+
+            u64 size = sizeof(ARPHeader);
             u8* buffer = $u8* malloc(size);
             memset($void* buffer, 0, size);
 
-            EthernetHeader* eth_reply = $EthernetHeader* buffer;
-            ARPHeader* arp_reply = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
-
-            // set dst mac to sender mac
-            set_mac(eth_reply->dst, arp->sender_mac);
-
-            // set src mac
-            set_mac(eth_reply->src, CURRENT_INTERFACE->mac_address);
-
-            // set ethertype
-            eth_reply->type = cpu_to_be(ETHERNET_TYPE_ARP);
+            ARPHeader* arp_reply = $ARPHeader* buffer;
 
             // arp header
             arp_reply->hw_type = cpu_to_be(ARP_HW_TYPE_ETHERNET);
@@ -94,8 +86,9 @@ void arp_handle(ARPHeader* arp) {
             set_mac(arp_reply->target_mac, arp->sender_mac);
             arp_reply->target_ip = arp->sender_ip;
 
-            CURRENT_INTERFACE->send#(buffer, $u16 size);
-            
+            // send 
+            ethernet_send_frame(arp->sender_mac, buffer, $u16 size, ETHERNET_TYPE_ARP);
+
             free($void* buffer, size);
         } else {
             if(NETWORKING_NETWORK_LAYER_DEBUG) {
