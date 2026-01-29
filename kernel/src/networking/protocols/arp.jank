@@ -116,21 +116,11 @@ void send_arp_request(u32 target_ip) {
         println("]");
     }
     
-    u64 size = sizeof(EthernetHeader) + sizeof(ARPHeader);
+    u64 size = sizeof(ARPHeader);
     u8* buffer = $u8* malloc(size);
     memset($void* buffer, 0, size);
 
-    EthernetHeader* eth = $EthernetHeader* buffer;
-    ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
-
-    // set dst mac to FF:FF:FF:FF:FF:FF (broadcast)
-    for(i32 i = 0; i < 6; i++) eth->dst[i] = $u8 0xFF;
-
-    // set src mac
-    set_mac(eth->src, CURRENT_INTERFACE->mac_address);
-
-    // set ethertype
-    eth->type = cpu_to_be(ETHERNET_TYPE_ARP);
+    ARPHeader* arp = $ARPHeader* buffer;
 
     // arp header
     arp->hw_type = cpu_to_be(ARP_HW_TYPE_ETHERNET);
@@ -147,9 +137,13 @@ void send_arp_request(u32 target_ip) {
     for(i32 i = 0; i < 6; i++) arp->target_mac[i] = $u8 0;
     arp->target_ip = cpu_to_be(target_ip);
 
+    // set broadcast MAC (for passing to ethernet)
+    u8[6] dst_mac;
+    for(i32 i = 0; i < 6; i++) dst_mac[i] = $u8 0xFF;
+
     // send
-    CURRENT_INTERFACE->send#(buffer, $u16 size);
-    
+    ethernet_send_frame(dst_mac, buffer, $u16 size, ETHERNET_TYPE_ARP);
+
     free($void* buffer, size);
 }
 
