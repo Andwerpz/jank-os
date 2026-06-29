@@ -83,6 +83,11 @@ i32 rsdp_validate(RSDP* rsdp) {
         rsdp->signature[5] != 'T' || 
         rsdp->signature[6] != 'R' || 
         rsdp->signature[7] != ' ') {
+        
+        cout << "rsdp_validate() : signature : ";
+        for(u64 i = 0x0; i < $u64 8; i++) cout << rsdp->signature[i];
+        cout << "\n";
+        cout << "rsdp_validate() : bad signature\n";
         return 0;
     }
 

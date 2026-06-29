@@ -314,10 +314,34 @@ EFI_STATUS get_framebuffer(
     return EFI_SUCCESS;
 }
 
+static void print_guid(EFI_GUID *g) {
+    Print(
+        L"%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        g->Data1,
+        g->Data2,
+        g->Data3,
+        g->Data4[0],
+        g->Data4[1],
+        g->Data4[2],
+        g->Data4[3],
+        g->Data4[4],
+        g->Data4[5],
+        g->Data4[6],
+        g->Data4[7]
+    );
+}
+
 static void dump8(VOID *p) {
     UINT8 *b = (UINT8*)p;
     Print(L"first8: %c%c%c%c%c%c%c%c\n",
           b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]);
+}
+
+static int compare_guid(EFI_GUID* a, EFI_GUID* b) {
+    for(UINT64 i = 0; i < sizeof(EFI_GUID); i++) {
+        if(((char*) a)[i] != ((char*) b)[i]) return 1;
+    }
+    return 0;
 }
 
 VOID *find_rsdp(EFI_SYSTEM_TABLE *ST) {
@@ -328,14 +352,13 @@ VOID *find_rsdp(EFI_SYSTEM_TABLE *ST) {
 
     for (UINTN i = 0; i < ST->NumberOfTableEntries; i++) {
         EFI_CONFIGURATION_TABLE *ct = &ST->ConfigurationTable[i];
-
-        if (!CompareGuid(&ct->VendorGuid, &acpi20)) {
-            Print(L"Found ACPI 2.0 table: 0x%lx\n", (UINT64) (UINTN) ct->VendorTable);
+        if (!compare_guid(&ct->VendorGuid, &acpi20)) {
+            Print(L"Found ACPI 2.0 RSDP: 0x%lx\n", (UINT64) (UINTN) ct->VendorTable);
             dump8(ct->VendorTable);
             return ct->VendorTable;
         }
-        if (!CompareGuid(&ct->VendorGuid, &acpi10)) {
-            Print(L"Found ACPI 1.0 table: 0x%p\n", (UINT64) (UINTN) ct->VendorTable);
+        if (!compare_guid(&ct->VendorGuid, &acpi10)) {
+            Print(L"Found ACPI 1.0 RSDP: 0x%p\n", (UINT64) (UINTN) ct->VendorTable);
             dump8(ct->VendorTable);
             fallback = ct->VendorTable;
         }
