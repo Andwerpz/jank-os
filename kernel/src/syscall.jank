@@ -34,40 +34,40 @@ i32 init_syscall() {
 
 // -- SYSCALL IDENTIFIERS --
 //linux syscalls
-[__GLOBAL_FIRST__] u64 SYS_READ             = $u64 0;
-[__GLOBAL_FIRST__] u64 SYS_WRITE            = $u64 1;
-[__GLOBAL_FIRST__] u64 SYS_OPEN             = $u64 2;
-[__GLOBAL_FIRST__] u64 SYS_CLOSE            = $u64 3;
-[__GLOBAL_FIRST__] u64 SYS_STAT             = $u64 4;
-[__GLOBAL_FIRST__] u64 SYS_FSTAT            = $u64 5;
-[__GLOBAL_FIRST__] u64 SYS_POLL             = $u64 7;
-[__GLOBAL_FIRST__] u64 SYS_LSEEK            = $u64 8;
-[__GLOBAL_FIRST__] u64 SYS_MMAP             = $u64 9;
-[__GLOBAL_FIRST__] u64 SYS_MUNMAP           = $u64 11;
-[__GLOBAL_FIRST__] u64 SYS_IOCTL            = $u64 16;
-[__GLOBAL_FIRST__] u64 SYS_PIPE             = $u64 22;
-[__GLOBAL_FIRST__] u64 SYS_SCHED_YIELD      = $u64 24;
-[__GLOBAL_FIRST__] u64 SYS_DUP2             = $u64 33;
-[__GLOBAL_FIRST__] u64 SYS_GETPID           = $u64 39;
-[__GLOBAL_FIRST__] u64 SYS_SOCKET           = $u64 41;
-[__GLOBAL_FIRST__] u64 SYS_CONNECT          = $u64 42;
-[__GLOBAL_FIRST__] u64 SYS_ACCEPT           = $u64 43;
-[__GLOBAL_FIRST__] u64 SYS_SENDTO           = $u64 44;
-[__GLOBAL_FIRST__] u64 SYS_RECVFROM         = $u64 45;
-[__GLOBAL_FIRST__] u64 SYS_BIND             = $u64 49;
-[__GLOBAL_FIRST__] u64 SYS_LISTEN           = $u64 50;
-[__GLOBAL_FIRST__] u64 SYS_FORK             = $u64 57;
-[__GLOBAL_FIRST__] u64 SYS_EXECVE           = $u64 59;
-[__GLOBAL_FIRST__] u64 SYS_EXIT             = $u64 60;
-[__GLOBAL_FIRST__] u64 SYS_WAIT4            = $u64 61;
-[__GLOBAL_FIRST__] u64 SYS_GETCWD           = $u64 79;
-[__GLOBAL_FIRST__] u64 SYS_CHDIR            = $u64 80;
-[__GLOBAL_FIRST__] u64 SYS_MKDIR            = $u64 83;
-[__GLOBAL_FIRST__] u64 SYS_RMDIR            = $u64 84;
-[__GLOBAL_FIRST__] u64 SYS_UNLINK           = $u64 87;
-[__GLOBAL_FIRST__] u64 SYS_GETDENTS64       = $u64 217;
-[__GLOBAL_FIRST__] u64 SYS_CLOCK_GETTIME    = $u64 228;
-[__GLOBAL_FIRST__] u64 SYS_GETRANDOM        = $u64 318;
+[SYSCALL] u64 SYS_READ             = $u64 0;
+[SYSCALL] u64 SYS_WRITE            = $u64 1;
+[SYSCALL] u64 SYS_OPEN             = $u64 2;
+[SYSCALL] u64 SYS_CLOSE            = $u64 3;
+[SYSCALL] u64 SYS_STAT             = $u64 4;
+[SYSCALL] u64 SYS_FSTAT            = $u64 5;
+[SYSCALL] u64 SYS_POLL             = $u64 7;
+[SYSCALL] u64 SYS_LSEEK            = $u64 8;
+[SYSCALL] u64 SYS_MMAP             = $u64 9;
+[SYSCALL] u64 SYS_MUNMAP           = $u64 11;
+[SYSCALL] u64 SYS_IOCTL            = $u64 16;
+[SYSCALL] u64 SYS_PIPE             = $u64 22;
+[SYSCALL] u64 SYS_SCHED_YIELD      = $u64 24;
+[SYSCALL] u64 SYS_DUP2             = $u64 33;
+[SYSCALL] u64 SYS_GETPID           = $u64 39;
+[SYSCALL] u64 SYS_SOCKET           = $u64 41;
+[SYSCALL] u64 SYS_CONNECT          = $u64 42;
+[SYSCALL] u64 SYS_ACCEPT           = $u64 43;
+[SYSCALL] u64 SYS_SENDTO           = $u64 44;
+[SYSCALL] u64 SYS_RECVFROM         = $u64 45;
+[SYSCALL] u64 SYS_BIND             = $u64 49;
+[SYSCALL] u64 SYS_LISTEN           = $u64 50;
+[SYSCALL] u64 SYS_FORK             = $u64 57;
+[SYSCALL] u64 SYS_EXECVE           = $u64 59;
+[SYSCALL] u64 SYS_EXIT             = $u64 60;
+[SYSCALL] u64 SYS_WAIT4            = $u64 61;
+[SYSCALL] u64 SYS_GETCWD           = $u64 79;
+[SYSCALL] u64 SYS_CHDIR            = $u64 80;
+[SYSCALL] u64 SYS_MKDIR            = $u64 83;
+[SYSCALL] u64 SYS_RMDIR            = $u64 84;
+[SYSCALL] u64 SYS_UNLINK           = $u64 87;
+[SYSCALL] u64 SYS_GETDENTS64       = $u64 217;
+[SYSCALL] u64 SYS_CLOCK_GETTIME    = $u64 228;
+[SYSCALL] u64 SYS_GETRANDOM        = $u64 318;
 
 //jank syscalls
 //TODO add talk-to-jank 
@@ -83,7 +83,7 @@ trapframe* get_user_trapframe() {
 }   
 
 //all this syscall code is happening on the process's kstack. 
-[__GLOBAL_FIRST__] extern u8 syscall_handler_entry;
+[SYSCALL] extern u8 syscall_handler_entry;
 void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", but we shouldn't use it
     //this assumes we come from user mode
 
@@ -249,8 +249,8 @@ export u64 syscall_handler() {
     return $u64 ans;
 }
 
-[__GLOBAL_FIRST__] chacha20_ctx* SYS_GETRANDOM_CHACHA20_CTX = $chacha20_ctx* nullptr;
-[__GLOBAL_FIRST__] void* SYS_GETRANDOM_KEY_MATERIAL = nullptr;
+[SYSCALL] chacha20_ctx* SYS_GETRANDOM_CHACHA20_CTX = $chacha20_ctx* nullptr;
+[SYSCALL] void* SYS_GETRANDOM_KEY_MATERIAL = $void* nullptr;
 i64 sys_getrandom(void* buf, u64 buf_len, u64 flags) {
     if(flags != 0x0) {
         cout << "sys_getrandom() : not supporting any flags for now\n";
@@ -1396,7 +1396,7 @@ u64 sys_sched_yield() {
     return 0x0;
 }
 
-[__GLOBAL_FIRST__] u64 MMAP_COUNTER = 0x0;
+[SYSCALL] u64 MMAP_COUNTER = 0x0;
 void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 offset) {
     // switch to kernel_pt
     pagetable_t user_pt = pt_get_current();
