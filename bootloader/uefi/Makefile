@@ -78,7 +78,7 @@ $(SO): $(OBJ)
 $(EFI): $(SO)
 	$(OBJCOPY) -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym \
            	-j .rel -j .rela -j .reloc \
-           	--target=efi-app-$(ARCH) $< $@
+           	--output-target=efi-app-$(ARCH) $< $@
 
 clean:
 	rm -rf $(BUILD_DIR)

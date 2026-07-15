@@ -20,7 +20,7 @@ Tested on WSL2 and Debian.
 Make sure you have **jank** installed. To install **jank**, you can follow the instructions in the repository [here](https://github.com/Andwerpz/jank-pl). Next, you need `x86_64-elf-gcc`, you can install it from [here](https://formulae.brew.sh/formula/x86_64-elf-gcc) (you'll need `brew`). The remaining dependencies can be installed by running the following:
 ```
 sudo apt update
-sudo apt install qemu-system gnu-efi
+sudo apt install qemu-system gnu-efi dosfstools binutils
 ```
 
 ## Bootable Drive
