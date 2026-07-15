@@ -1570,6 +1570,7 @@ i32 sys_pipe(i32[2]* fds) {
         }
     }
     if(fdind0 == -1 || fdind1 == -1) {
+        pt_switch(user_pt);
         return -ERR_NFILE; //file table overflow
     }
 

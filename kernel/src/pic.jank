@@ -18,7 +18,9 @@
 [__GLOBAL_FIRST__] u16 PIC_SLAVE_COMMAND    = $u16 0x00a0;
 [__GLOBAL_FIRST__] u16 PIC_SLAVE_DATA       = $u16 0x00a1;
 
-// When you enter protected mode (or even before hand, if you're not using GRUB) the first command you will need to give the two PICs is the initialise command (code 0x11). This command makes the PIC wait for 3 extra "initialisation words" on the data port. These bytes give the PIC:
+// When you enter protected mode (or even before hand, if you're not using GRUB) 
+// the first command you will need to give the two PICs is the initialise command (code 0x11). 
+// This command makes the PIC wait for 3 extra "initialisation words" on the data port. These bytes give the PIC:
 // - Its vector offset on the IDT. (ICW2)
 // - Tell it how it is wired to master/slaves. (ICW3)
 // - Gives additional information about the environment. (ICW4)

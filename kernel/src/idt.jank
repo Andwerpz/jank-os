@@ -104,7 +104,7 @@ void interrupt_entry_stubs() {
     // CS
     // %rip
     // error code   : if interrupt doesn't push this itself, this should be 0
-    // trap id      : equal to idt entry index
+    // interrupt id 
 
     //general protection fault
     asm!("general_protection_fault_interrupt_entry_stub:");
@@ -166,7 +166,7 @@ void interrupt_handler() {
     // CS
     // %rip
     // error code   : if interrupt doesn't push this itself, this should be 0
-    // trap id      : equal to idt entry index
+    // interrupt id : pushed by interrupt entry stub
     
     asm!("interrupt_handler_entry:");
 

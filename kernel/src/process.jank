@@ -184,6 +184,7 @@ process* create_process(u64 flags) {
     proc->pid = pid_ptr ++;
     proc->brk = USER_HEAP_BOTTOM;
     proc->status = PROCESS_NEW;
+    memset($void* @(proc->fd_table), 0, sizeof(file*) * PROCESS_MAX_FD);
 
     //alloc new kstack for process, need to map in kernel
     assert(kstack_ptr + KSTACK_SIZE <= KSTACK_AREA_TOP, "create_process() : ran out of room for kstacks");
@@ -328,8 +329,9 @@ process* create_process(string path) {
 process* create_process(process* parent, trapframe* parent_tf) {
     process* child = create_process(0x0);
 
-    //make sure this process is alive
+    //make sure this process is in correct state
     assert(parent->status != PROCESS_ZOMBIE, "create_process() : can only clone from alive process");
+    assert(parent->status != PROCESS_NEW, "create_process() : can\'t clone from new process");
 
     //set child's parent 
     child->parent = parent;
