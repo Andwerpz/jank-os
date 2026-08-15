@@ -1,4 +1,6 @@
 #include "./src/file_utils.jank";
+#include <syscall>;
+#include <iostream>;
 
 void test_file() {
     mkchdir("test_file");

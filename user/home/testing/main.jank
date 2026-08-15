@@ -2,6 +2,9 @@
 #include <dirent>;
 #include <exec>;
 #include <wait>;
+#include <vector>;
+#include <string>;
+#include <syscall>;
 
 //automated test runner
 
@@ -186,6 +189,7 @@ void build_sandbox() {
                 args.push_back(new string(root_files[j]));
                 args.push_back(new string("-o"));
                 args.push_back(strip_file_ext(root_files[j]));
+                args.push_back(new string("--follow-includes"));
                 do_exec(args);
             }
         }

@@ -1,7 +1,8 @@
 #include <iostream>;
-#include <assert>;
 #include <dirent>;
 #include <string>;
+#include <syscall>;
+#include <jstring>;
 
 u64 count_dir_children(u8* path) {
     dirstream* dir = opendir(path);

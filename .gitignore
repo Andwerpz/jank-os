@@ -20,3 +20,9 @@ bootloader/uefi/build/*
 
 *.pcap
 *.log
+
+**/tmp/
+**/build/
+**/bin/
+**/deps.toml
+**/hash.toml

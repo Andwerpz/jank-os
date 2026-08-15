@@ -3,7 +3,7 @@
 all: main
 
 main: main.jank
-	jjc main.jank -o main
+	jjc main.jank -o main --follow-includes
 
 run: main
 	./main

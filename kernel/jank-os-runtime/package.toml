@@ -1,0 +1,12 @@
+[package]
+name = "jank-os-runtime"
+type = "runtime"
+environment = "freestanding"
+
+[[dependency]]
+package = "jank-stdlib-freestanding"
+alias = "std"
+
+[[dependency]]
+package = "jank-os-kernel"
+alias = "kernel"

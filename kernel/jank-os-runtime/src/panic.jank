@@ -1,0 +1,12 @@
+#include <kernel::vga>;
+#include <kernel::serial>;
+#include <kernel::utils>;
+
+intrinsic("panic")
+void intrinsic_panic(u8* msg) {
+    enable_vga_print();
+    print(msg);
+    while(1) {
+        asm!("hlt");
+    }
+}

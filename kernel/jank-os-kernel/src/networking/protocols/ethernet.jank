@@ -1,0 +1,72 @@
+#include "debug.jank";
+#include "utils.jank";
+#include "networking/protocols/arp.jank";
+#include "networking/protocols/ip.jank";
+#include "networking/net_interface.jank";
+
+// https://en.wikipedia.org/wiki/Ethernet_frame#Ethernet_II
+// https://en.wikipedia.org/wiki/EtherType#Values
+
+[__GLOBAL_FIRST__] u16 ETHERNET_TYPE_IPV4   = $u16 0x0800; // Internet Protocol version 4 (IPv4) 
+[__GLOBAL_FIRST__] u16 ETHERNET_TYPE_ARP    = $u16 0x0806; // Address Resolution Protocol (ARP)
+
+struct EthernetHeader {
+    u8[6]   dst;    // Destination MAC
+    u8[6]   src;    // Source MAC
+    u16     type;   // Protocol Type
+}
+
+void ethernet_handle_frame(u8* buffer, u16 length) {
+    if(NETWORKING_ACCESS_LAYER_DEBUG) println("ethernet_handle_frame() : Handling incoming frame");
+    if($u64 length < sizeof(EthernetHeader)) return;
+
+    EthernetHeader* eth = $EthernetHeader* buffer;
+
+    u16 type = be_to_cpu(eth->type);
+
+    if(type == ETHERNET_TYPE_ARP) {
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("ethernet_handle_frame() : ARP packet received");
+        ARPHeader* arp = $ARPHeader* ($u64 buffer + sizeof(EthernetHeader));
+        // snoop for free addresses for free!!!
+        arp_update(be_to_cpu(arp->sender_ip), arp->sender_mac);
+        arp_handle(arp);
+        if(NETWORKING_ACCESS_LAYER_DEBUG) arp_table_dump();
+
+    } else if(type == ETHERNET_TYPE_IPV4) {
+        if(NETWORKING_ACCESS_LAYER_DEBUG) println("ethernet_handle_frame() : IPv4 packet received");
+        IPv4Header* ip = $IPv4Header* ($u64 buffer + sizeof(EthernetHeader));
+        ipv4_handle(ip);
+
+    } else {
+        if(NETWORKING_ACCESS_LAYER_DEBUG) {
+            print("ethernet_handle_frame() : Unknown packet type: ");
+            println($void* ($u64 type));
+        }
+    }
+}
+
+void ethernet_send_frame(u8[6]& dst_mac, u8* data, u16 len, u16 eth_type) {
+    if(NETWORKING_ACCESS_LAYER_DEBUG) {
+        print("ethernet_send_frame() : Sending Ethernet frame to [");
+        print_mac_addr(dst_mac);
+        println("]");
+    }
+
+    u64 frame_len = sizeof(EthernetHeader) + $u64 len;
+
+    u8* buffer = $u8* malloc(frame_len);
+    memset($void* buffer, 0, frame_len);
+
+    EthernetHeader* eth = $EthernetHeader* buffer;
+    eth->type = cpu_to_be(eth_type);
+
+    set_mac(eth->src, CURRENT_INTERFACE->mac_address);
+    set_mac(eth->dst, dst_mac);
+
+    u8* payload_ptr = $u8* ($u64 buffer + sizeof(EthernetHeader));
+    memcpy($void* payload_ptr, $void* data, $u64 len);
+
+    CURRENT_INTERFACE->send#(buffer, $u16 frame_len);
+
+    free($void* buffer, frame_len);
+}

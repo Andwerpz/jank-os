@@ -1,0 +1,59 @@
+[package]
+name = "jank-os-kernel"
+type = "library"
+environment = "freestanding"
+
+[[dependency]]
+package = "jank-stdlib-freestanding"
+alias = "std"
+
+[[default-include]]
+package = "core"
+path = "defs"
+
+[[default-include]]
+package = "core"
+path = "memory"
+
+[[default-include]]
+package = "core"
+path = "malloc"
+
+[[default-include]]
+package = "core"
+path = "error"
+
+[[dependency]]
+package = "jank-os-runtime"
+
+[[assembler]]
+name = "elf-gcc"
+command = "x86_64-elf-gcc"
+args = [
+    "-ffreestanding",
+    "-mcmodel=large",
+    "-mno-red-zone",
+    "-mno-mmx",
+    "-mno-sse",
+    "-mno-sse2",
+    "-r",                       # produce a relocatable object file
+]
+
+[[linker]]
+name = "ld"
+command = "ld"
+args = [
+    "-nostdlib",
+    "--oformat=binary",         # make ld produce a flat binary
+    "-T", "./res/link.ld",
+    "-b", "binary", "./res/font.psf",
+]
+
+[[target]]
+name = "kernel"
+emit = "linked"
+entry = "kernel.jank"
+output = "kernel.bin"
+runtime = "jank-os-runtime"
+assembler = "elf-gcc"
+linker = "ld"

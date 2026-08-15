@@ -1,0 +1,177 @@
+#include "debug.jank";
+#include "utils.jank";
+#include "networking/net_interface.jank";
+#include "networking/protocols/icmp.jank";
+#include "networking/protocols/tcp.jank";
+#include "networking/protocols/udp.jank";
+#include "networking/protocols/ethernet.jank";
+#include "networking/protocols/arp.jank";
+
+// https://en.wikipedia.org/wiki/IPv4#Header
+
+struct IPv4Header {
+    u8  version_ihl;        // Version: 4 bits + Internet Header Length (IHL): 4 bits
+    u8  tos;                // Differentiated Services Code Point (DSCP): 6 bits + Explicit Congestion Notification (ECN): 2 bits
+    u16 total_length;       // Total Length: 16 bits
+    u16 id;                 // Identification: 16 bits
+    u16 flags_fragment;     // Flags: 3 bits + Fragment Offset: 13 bits
+    u8  ttl;                // Time to live (TTL): 8 bits
+    u8  protocol;           // Protocol: 8 bits
+    u16 header_checksum;    // Header Checksum: 16 bits
+    u32 src_ip;             // Source address: 32 bits
+    u32 dst_ip;             // Destination address: 32 bits
+}
+
+[__GLOBAL_FIRST__] u8 IPv4_DEFAULT_TTL = $u8 64;
+
+[__GLOBAL_FIRST__] u8 IPv4_VALID_VERSION = $u8 4;
+
+[__GLOBAL_FIRST__] u8 IPv4_PROTOCOL_ICMP = $u8 1;
+[__GLOBAL_FIRST__] u8 IPv4_PROTOCOL_TCP = $u8 6;
+[__GLOBAL_FIRST__] u8 IPv4_PROTOCOL_UDP = $u8 17;
+
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_VERSION_MASK = $u8 0xF0;
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_IHL_MASK = $u8 0x0F;
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_DSCP_MASK = $u8 0xFC;
+[__GLOBAL_FIRST__] u8 IPv4_HEADER_ECN_MASK = $u8 0x03;
+[__GLOBAL_FIRST__] u16 IPv4_HEADER_FLAGS_MASK = $u16 0xE000;
+[__GLOBAL_FIRST__] u16 IPv4_HEADER_FRAGMENT_OFFSET_MASK = $u16 0x1FFF;
+
+[__GLOBAL_FIRST__] u32 IPv4_BROADCAST_ADDR = $u32 0xFFFFFFFF;
+
+[__GLOBAL_FIRST__] u32 IPv4_LOOPBACK_NETWORK = $u32 (127 << 24 | 0 << 16 | 0 << 8 | 0 << 0);
+[__GLOBAL_FIRST__] u32 IPv4_LOOPBACK_MASK = $u32 (255 << 24 | 0 << 16 | 0 << 8 | 0 << 0);
+
+void ipv4_handle(IPv4Header* ip) {
+    if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : Handling incoming IP message");
+
+    u16 total_length = be_to_cpu(ip->total_length);
+    if(total_length < $u16 20) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : Packet length shorter than minimum (20 bytes), dropping");
+        return;
+    }
+
+    u8 version = (ip->version_ihl & IPv4_HEADER_VERSION_MASK) >> $u8 4;
+    if(version != IPv4_VALID_VERSION) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : Invalid version in header, dropping");
+        return;
+    }
+    
+    // for now i only support length 20 headers, no support for options...
+    u8 ihl = ip->version_ihl & IPv4_HEADER_IHL_MASK;
+    u16 header_len = $u16 ihl * $u16 4; // ihl * 32 bits = header length 
+    if(header_len != $u16 20) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : Invalid IHL, header length not supported, dropping");
+        return;
+    }
+
+    // u16 calc = calculate_ipv4_header_checksum(ip);
+    u16 calc = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
+    if(calc != ip->header_checksum) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : Checksum failed, dropping");
+        return;
+    }
+
+    u32 dst_ip = be_to_cpu(ip->dst_ip);
+    if(!(dst_ip == CURRENT_INTERFACE->ip_address || dst_ip == IPv4_BROADCAST_ADDR || is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK))) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) {
+            print("ipv4_handle() : Destination IP [");
+            print_ipv4_addr(dst_ip);
+            println("] does not match with host, dropping");
+        }
+        return;
+    }
+
+    u32 src_ip = be_to_cpu(ip->src_ip);
+    u8* payload = $u8* ($u64 ip + $u64 header_len);
+    u16 payload_size = total_length - header_len;
+
+    if(ip->protocol == IPv4_PROTOCOL_ICMP) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : ICMP packet received");
+        ICMPHeader* icmp = $ICMPHeader* payload;
+        icmp_handle(icmp, payload_size, src_ip);
+    } else if(ip->protocol == IPv4_PROTOCOL_TCP) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : TCP packet received");
+        TCPHeader* tcp = $TCPHeader* payload;
+        tcp_handle(tcp, payload_size, src_ip);
+    } else if(ip->protocol == IPv4_PROTOCOL_UDP) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_handle() : UDP packet received");
+        UDPHeader* udp = $UDPHeader* payload;
+        udp_handle(udp, payload_size, src_ip);
+    } else {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) {
+            print("ipv4_handle() : Unknown protocol 0x");
+            print_hex(ip->protocol);
+            println("");
+        }
+    }
+}
+
+void ipv4_send_packet(u32 dst_ip, u8 protocol, u8* payload, u16 payload_len) {
+    if(NETWORKING_NETWORK_LAYER_DEBUG) {
+        print("ipv4_send_packet() : Sending IPv4 packet to [");
+        print_ipv4_addr(dst_ip);
+        println("]");
+    }
+
+    u64 ipv4_packet_len = sizeof(IPv4Header) + $u64 payload_len;
+    u8* ip_buffer = $u8* malloc(ipv4_packet_len);
+    memset($void* ip_buffer, 0, ipv4_packet_len);
+
+    IPv4Header* ip = $IPv4Header* ip_buffer;
+    u8* ip_payload = $u8* ($u64 ip_buffer + sizeof(IPv4Header));
+
+    ip->version_ihl = $u8 0x45; // ip ver 4 and len 5
+    ip->tos = $u8 0;
+    ip->total_length = cpu_to_be($u16 ipv4_packet_len);
+    ip->id = $u16 0;
+    ip->flags_fragment = $u16 0;
+    ip->ttl = IPv4_DEFAULT_TTL;
+    ip->protocol = protocol;
+    ip->src_ip = cpu_to_be(CURRENT_INTERFACE->ip_address);
+    ip->dst_ip = cpu_to_be(dst_ip);
+
+    ip->header_checksum = $u16 0;
+    ip->header_checksum = ones_comp_checksum($void* ip, sizeof(IPv4Header), $u64 5);
+
+    memcpy($void* ip_payload, $void* payload, $u64 payload_len);
+
+    // check loopback
+    if(is_address_in_subnet(dst_ip, IPv4_LOOPBACK_NETWORK, IPv4_LOOPBACK_MASK) || dst_ip == CURRENT_INTERFACE->ip_address) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_send_packet() : Loopback detected, routing back to handler");
+        ipv4_handle(ip);
+        free($void* ip_buffer, ipv4_packet_len);
+        return;
+    }
+
+    // check broadcast
+    if(dst_ip == IPv4_BROADCAST_ADDR) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_send_packet() : Destination is broadcast");
+        u8[6] broadcast_mac;
+        // dst ip is a broadcast, change mac to broadcast and send
+        for(i32 i = 0; i < 6; i++) broadcast_mac[i] = $u8 0xFF;
+        ethernet_send_frame(broadcast_mac, ip_buffer, $u16 ipv4_packet_len, ETHERNET_TYPE_IPV4);
+        free($void* ip_buffer, ipv4_packet_len);
+        return;
+    }
+
+    // routing
+    u32 next_hop = dst_ip;
+    // checks if ip is local on subnet, if not set next hop to gateway, arp will set eth dst mac to gateway.
+    if(!is_address_in_subnet(dst_ip, CURRENT_INTERFACE->ip_address, CURRENT_INTERFACE->subnet_mask)) {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_send_packet() : Destination is not in host subnet, sending it to the default gateway");
+        next_hop = CURRENT_INTERFACE->gateway_ip;
+    }
+
+    u8[6] dst_mac;
+    // do an ARP lookup.
+    if(arp_lookup(next_hop, dst_mac)) {
+        ethernet_send_frame(dst_mac, ip_buffer, $u16 ipv4_packet_len, ETHERNET_TYPE_IPV4);
+    } else {
+        if(NETWORKING_NETWORK_LAYER_DEBUG) println("ipv4_send_packet() : Destination not in ARP table, queuing the packet and sending an ARP request instead");
+        arp_queue_packet(next_hop, ip_buffer, $u16 ipv4_packet_len);
+        send_arp_request(next_hop);
+    }
+
+    free($void* ip_buffer, ipv4_packet_len);
+}

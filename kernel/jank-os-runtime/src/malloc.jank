@@ -1,0 +1,11 @@
+#include <kernel::kmalloc>;
+
+intrinsic("malloc")
+void* intrinsic_malloc(u64 sz) {
+    return __malloc(sz);
+}
+
+intrinsic("free")
+i32 intrinsic_free(void* addr, u64 sz) {
+    return __free(addr, sz);
+}

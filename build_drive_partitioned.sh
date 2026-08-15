@@ -11,7 +11,7 @@ IMG="${2:-drive.img}"
 IMG_SIZE="${3:-128M}"
 MNT="${4:-.mnt_drive}"
 EFI_BIN_ARG="${5:-./bootloader/uefi/build/BOOTX64.EFI}"
-KERNEL_BIN_ARG="${6:-./kernel/build/kernel.bin}"
+KERNEL_BIN_ARG="${6:-./kernel/jank-os-kernel/bin/kernel.bin}"
 
 EFI_BIN="${EFI_BIN:-$EFI_BIN_ARG}"         # allow override via env var
 KERNEL_BIN="${KERNEL_BIN:-$KERNEL_BIN_ARG}" # allow override via env var

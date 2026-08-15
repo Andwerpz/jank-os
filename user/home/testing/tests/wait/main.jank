@@ -2,6 +2,7 @@
 #include <string>;
 #include <iostream>;
 #include <wait>;
+#include <syscall>;
 
 i32 main() {
 

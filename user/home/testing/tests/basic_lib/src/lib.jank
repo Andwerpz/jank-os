@@ -1,3 +1,4 @@
+#include <iostream>;
 
 void libfunc() {
     cout << "libfunc test\n";

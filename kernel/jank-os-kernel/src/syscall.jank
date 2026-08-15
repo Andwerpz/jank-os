@@ -1,0 +1,1922 @@
+#include <crypto::crypto/chacha20>;
+#include <containers::vector>;
+#include <core::jstring>;
+#include <containers::string>;
+
+#include "serial.jank";
+#include "utils.jank";
+#include "globals.jank";
+#include "pagetable.jank";
+#include "pma.jank";
+#include "scheduler.jank";
+#include "acpi.jank";
+#include "process.jank";
+#include "file.jank";
+#include "networking/socket.jank";
+#include "networking/protocols/udp.jank";
+#include "networking/protocols/tcp.jank";
+#include "vfs.jank";
+#include "elf.jank";
+#include "pipe.jank";
+#include "tty.jank";
+
+i32 init_syscall() {
+    cout << "start init syscalls\n";
+
+    //setup STAR
+    //syscall and sysret automatically loads new segment from descriptor table based off of these values
+    u64 SELECTOR_1 = 0x08;  //kernel code
+    u64 SELECTOR_2 = 0x13;  //kernel data
+    wrmsr(STAR_MSR, (SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48));
+    cout << "STAR : " << $void* ((SELECTOR_1 << $u64 32) | (SELECTOR_2 << $u64 48)) << "\n";
+
+    //setup LSTAR
+    wrmsr(LSTAR_MSR, $u64 @syscall_handler_entry);
+
+    //setup FMASK (clear interrupt flag on syscall entry)
+    wrmsr(FMASK_MSR, 0x200);  // Clear IF (bit 9) on syscall
+    
+    //enable syscalls
+    u64 efer = rdmsr(EFER_MSR);
+    efer |= 0x1;
+    wrmsr(EFER_MSR, efer);
+
+    //setup GS_BASE
+    pagetable_t kernel_pt = pt_get_current();
+    pt_map_page(kernel_pt, $void* GSDATA_PAGE, palloc(), PTE_WRITEABLE);
+
+    GSData* gs_data = $GSData* GSDATA_PAGE;
+    gs_data->kernel_pt = kernel_pt;
+    wrmsr(GS_BASE_MSR, $u64 gs_data);
+
+    cout << "done init syscalls\n";
+    return 0;
+}
+
+// -- SYSCALL IDENTIFIERS --
+//linux syscalls
+[SYSCALL] u64 SYS_READ             = $u64 0;
+[SYSCALL] u64 SYS_WRITE            = $u64 1;
+[SYSCALL] u64 SYS_OPEN             = $u64 2;
+[SYSCALL] u64 SYS_CLOSE            = $u64 3;
+[SYSCALL] u64 SYS_STAT             = $u64 4;
+[SYSCALL] u64 SYS_FSTAT            = $u64 5;
+[SYSCALL] u64 SYS_POLL             = $u64 7;
+[SYSCALL] u64 SYS_LSEEK            = $u64 8;
+[SYSCALL] u64 SYS_MMAP             = $u64 9;
+[SYSCALL] u64 SYS_MUNMAP           = $u64 11;
+[SYSCALL] u64 SYS_IOCTL            = $u64 16;
+[SYSCALL] u64 SYS_PIPE             = $u64 22;
+[SYSCALL] u64 SYS_SCHED_YIELD      = $u64 24;
+[SYSCALL] u64 SYS_DUP2             = $u64 33;
+[SYSCALL] u64 SYS_GETPID           = $u64 39;
+[SYSCALL] u64 SYS_SOCKET           = $u64 41;
+[SYSCALL] u64 SYS_CONNECT          = $u64 42;
+[SYSCALL] u64 SYS_ACCEPT           = $u64 43;
+[SYSCALL] u64 SYS_SENDTO           = $u64 44;
+[SYSCALL] u64 SYS_RECVFROM         = $u64 45;
+[SYSCALL] u64 SYS_BIND             = $u64 49;
+[SYSCALL] u64 SYS_LISTEN           = $u64 50;
+[SYSCALL] u64 SYS_FORK             = $u64 57;
+[SYSCALL] u64 SYS_EXECVE           = $u64 59;
+[SYSCALL] u64 SYS_EXIT             = $u64 60;
+[SYSCALL] u64 SYS_WAIT4            = $u64 61;
+[SYSCALL] u64 SYS_GETCWD           = $u64 79;
+[SYSCALL] u64 SYS_CHDIR            = $u64 80;
+[SYSCALL] u64 SYS_MKDIR            = $u64 83;
+[SYSCALL] u64 SYS_RMDIR            = $u64 84;
+[SYSCALL] u64 SYS_UNLINK           = $u64 87;
+[SYSCALL] u64 SYS_GETDENTS64       = $u64 217;
+[SYSCALL] u64 SYS_CLOCK_GETTIME    = $u64 228;
+[SYSCALL] u64 SYS_GETRANDOM        = $u64 318;
+
+//jank syscalls
+//TODO add talk-to-jank 
+
+//gets the calling user process's saved trapframe when they just entered syscall
+//assumes we saved trapframe near top of process kernel stack
+trapframe* get_user_trapframe() {
+    trapframe* ret;
+    asm!("movq %gs:16, %rax");  //%rax now holds top of process kstack
+    asm!("sub $192, %rax");     //192 = 168 + 24
+    asm!("movq %rax, {ret}");
+    return ret;
+}   
+
+//all this syscall code is happening on the process's kstack. 
+[SYSCALL] extern u8 syscall_handler_entry;
+void syscall_handler_asm() {    //this generates label "syscall_handler_asm:", but we shouldn't use it
+    //this assumes we come from user mode
+
+    //cpu should put this stuff in these registers:
+    //%rsp : user %rsp
+    //%r11 : user RFLAGS
+    //%rcx : user %rip
+    
+    asm!("syscall_handler_entry:");
+    asm!("swapgs");
+
+    //switch to process kstack
+    asm!("movq %rsp, %gs:8");       //save original %rsp
+    asm!("movq %gs:16, %rsp");      //%rsp now points to top of process kstack
+
+    //push sysret info
+    asm!("pushq %gs:8");    //user stack pointer
+    asm!("pushq %r11");     //user rflags
+    asm!("pushq %rcx");     //user RIP
+
+    //push trapframe (make sure trapframe is correct size)
+    asm!("sub $168, %rsp");
+    asm!("movq %rcx,  128(%rsp)");  //%rip
+
+    asm!("movq %rax,  0(%rsp)");
+    asm!("movq %rbx,  8(%rsp)");
+    asm!("movq %rcx,  16(%rsp)");
+    asm!("movq %rdx,  24(%rsp)");
+    asm!("movq %rsi,  32(%rsp)");
+    asm!("movq %rdi,  40(%rsp)");
+    asm!("movq %rbp,  48(%rsp)");
+    asm!("movq %gs:8, %rcx");
+    asm!("movq %rcx,  56(%rsp)");
+    asm!("movq %r8,   64(%rsp)");
+    asm!("movq %r9,   72(%rsp)");
+    asm!("movq %r10,  80(%rsp)");
+    asm!("movq %r11,  88(%rsp)");
+    asm!("movq %r12,  96(%rsp)");
+    asm!("movq %r13,  104(%rsp)");
+    asm!("movq %r14,  112(%rsp)");
+    asm!("movq %r15,  120(%rsp)");
+    //already set %rip    
+    asm!("movq %r11,  136(%rsp)");
+    asm!("movq %cr3, %rcx");
+    asm!("movq %rcx,  144(%rsp)");
+    asm!("movq $0x23, 152(%rsp)");  //user mode selectors
+    asm!("movq $0x1B, 160(%rsp)");  
+
+    //call higher level syscall handler
+    asm!("call syscall_handler");
+
+    //pop trapframe
+    asm!("add $8, %rsp");   //skip %rax
+    asm!("popq %rbx");
+    asm!("popq %rcx");
+    asm!("popq %rdx");
+    asm!("popq %rsi");
+    asm!("popq %rdi");
+    asm!("popq %rbp");
+    asm!("add $8, %rsp");   //skip %rsp
+    asm!("popq %r8");
+    asm!("popq %r9");
+    asm!("popq %r10");
+    asm!("popq %r11");
+    asm!("popq %r12");
+    asm!("popq %r13");
+    asm!("popq %r14");
+    asm!("popq %r15");
+    asm!("add $8, %rsp");   //skip %rip
+    asm!("add $8, %rsp");   //skip RFLAGS
+    asm!("add $8, %rsp");   //assume we're currently using user_pt
+    asm!("add $8, %rsp");   //skip CS
+    asm!("add $8, %rsp");   //skip SS
+
+    //pop sysret info
+    asm!("popq %rcx");  //user RIP
+    asm!("popq %r11");  //user RFLAGS
+    asm!("popq %rsp");  //switch back to user stack
+
+    asm!("swapgs");
+    asm!("sysretq");
+}
+
+//this should generate label 'syscall_handler:'
+//when adding syscall preemption, interrupt flag should be enabled/disabled in here
+export u64 syscall_handler() {
+    u64 sys_id;
+    u64 arg1;
+    u64 arg2;
+    u64 arg3;
+    u64 arg4;
+    u64 arg5;
+    u64 arg6;
+
+    asm!("movq %rax, {sys_id}");
+    asm!("movq %rdi, {arg1}");
+    asm!("movq %rsi, {arg2}");
+    asm!("movq %rdx, {arg3}");
+    asm!("movq %r10, {arg4}");
+    asm!("movq %r8,  {arg5}");
+    asm!("movq %r9,  {arg6}");
+
+    if(0) {
+        pagetable_t user_pt = pt_get_current();
+        pt_switch_to_kernel();
+        cout << "SYSCALL : " << sys_id << "\n";
+        pt_switch(user_pt);
+    }
+
+    //asm!("sti");      //enable timer interrupts
+
+    u64 ans;
+    if(sys_id == SYS_READ)                  ans = $u64 sys_read($i32 arg1, $u8* arg2, arg3);
+    else if(sys_id == SYS_WRITE)            ans = $u64 sys_write($i32 arg1, $u8* arg2, arg3);
+    else if(sys_id == SYS_OPEN)             ans = $u64 sys_open($u8* arg1, $i32 arg2, $mode_t arg3);
+    else if(sys_id == SYS_CLOSE)            ans = $u64 sys_close($i32 arg1);
+    else if(sys_id == SYS_EXIT)             ans = $u64 sys_exit($i32 arg1);
+    else if(sys_id == SYS_SCHED_YIELD)      ans = $u64 sys_sched_yield();
+    else if(sys_id == SYS_MMAP)             ans = $u64 sys_mmap($void* arg1, $u64 arg2, $u64 arg3, $u64 arg4, $i32 arg5, $u64 arg6);
+    else if(sys_id == SYS_MUNMAP)           ans = $u64 sys_munmap($void* arg1, $u64 arg2);
+    else if(sys_id == SYS_GETPID)           ans = $u64 sys_getpid();
+    else if(sys_id == SYS_SOCKET)           ans = $u64 sys_socket($i32 arg1, $i32 arg2, $i32 arg3);
+    else if(sys_id == SYS_CONNECT)          ans = $u64 sys_connect($i32 arg1, $sockaddr* arg2, $u64 arg3);
+    else if(sys_id == SYS_ACCEPT)           ans = $u64 sys_accept($i32 arg1, $sockaddr* arg2, $u64* arg3);
+    else if(sys_id == SYS_SENDTO)           ans = $u64 sys_sendto($i32 arg1, $u8* arg2, $u64 arg3, $i32 arg4, $sockaddr* arg5, $u64 arg6);
+    else if(sys_id == SYS_RECVFROM)         ans = $u64 sys_recvfrom($i32 arg1, $u8* arg2, $u64 arg3, $i32 arg4, $sockaddr* arg5, $u64* arg6);
+    else if(sys_id == SYS_BIND)             ans = $u64 sys_bind($i32 arg1, $sockaddr* arg2, $u64 arg3);
+    else if(sys_id == SYS_LISTEN)           ans = $u64 sys_listen($i32 arg1, $i32 arg2);
+    else if(sys_id == SYS_FORK)             ans = $u64 sys_fork();
+    else if(sys_id == SYS_WAIT4)            ans = $u64 sys_wait4($pid_t arg1, $i32* arg2, $i32 arg3, $void* arg4);
+    else if(sys_id == SYS_CLOCK_GETTIME)    ans = $u64 sys_clock_gettime($u64 arg1, $timespec* arg2);
+    else if(sys_id == SYS_EXECVE)           ans = $u64 sys_execve($u8* arg1, $u8** arg2, $u8** arg3);
+    else if(sys_id == SYS_GETCWD)           ans = $u64 sys_getcwd($u8* arg1, $u64 arg2);
+    else if(sys_id == SYS_CHDIR)            ans = $u64 sys_chdir($u8* arg1);
+    else if(sys_id == SYS_GETDENTS64)       ans = $u64 sys_getdents64($i32 arg1, $u8* arg2, $u64 arg3);
+    else if(sys_id == SYS_PIPE)             ans = $u64 sys_pipe($i32[2]* arg1);
+    else if(sys_id == SYS_DUP2)             ans = $u64 sys_dup2($i32 arg1, $i32 arg2);
+    else if(sys_id == SYS_MKDIR)            ans = $u64 sys_mkdir($u8* arg1, $mode_t arg2);
+    else if(sys_id == SYS_RMDIR)            ans = $u64 sys_rmdir($u8* arg1);
+    else if(sys_id == SYS_UNLINK)           ans = $u64 sys_unlink($u8* arg1);
+    else if(sys_id == SYS_LSEEK)            ans = $u64 sys_lseek($i32 arg1, $i64 arg2, $i32 arg3);
+    else if(sys_id == SYS_IOCTL)            ans = $u64 sys_ioctl($i32 arg1, $u32 arg2, $void* arg3);
+    else if(sys_id == SYS_STAT)             ans = $u64 sys_stat($u8* arg1, $stat* arg2);
+    else if(sys_id == SYS_FSTAT)            ans = $u64 sys_fstat($i32 arg1, $stat* arg2);
+    else if(sys_id == SYS_POLL)             ans = $u64 sys_poll($pollfd* arg1, $u32 arg2, $i32 arg3);
+    else if(sys_id == SYS_GETRANDOM)        ans = $u64 sys_getrandom($void* arg1, $u64 arg2, $u64 arg3);
+
+    else {
+        pt_switch_to_kernel();
+        cout << "SYS ID : " << sys_id << "\n";
+        panic("syscall_handler() : unrecognized sys_id");
+    }
+
+    //asm!("cli");      //disable timer interrupts
+
+    if(0) {
+        pagetable_t user_pt = pt_get_current();
+        pt_switch_to_kernel();
+        cout << "DONE SYSCALL : " << sys_id << "\n";
+        pt_switch(user_pt);
+    }
+
+    return $u64 ans;
+}
+
+[SYSCALL] chacha20_ctx* SYS_GETRANDOM_CHACHA20_CTX = $chacha20_ctx* nullptr;
+[SYSCALL] void* SYS_GETRANDOM_KEY_MATERIAL = $void* nullptr;
+i64 sys_getrandom(void* buf, u64 buf_len, u64 flags) {
+    if(flags != 0x0) {
+        cout << "sys_getrandom() : not supporting any flags for now\n";
+        return $i64 -ERR_INVAL;
+    }
+
+    //is len == 0?
+    if(buf_len == 0x0) {
+        return $i64 0;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //initialize chacha20 
+    if(SYS_GETRANDOM_CHACHA20_CTX == nullptr) {
+        SYS_GETRANDOM_CHACHA20_CTX = $chacha20_ctx* malloc(sizeof(chacha20_ctx));
+        SYS_GETRANDOM_KEY_MATERIAL = malloc($u64 64);
+        u64 x = hpet_get_ns() % $u64 10923;
+        for(u64 i = 0x0; i < $u64 64; i++) {
+            x = (x * $u64 1529) % $u64 10923;
+            ($u8* SYS_GETRANDOM_KEY_MATERIAL)[i] = $u8 x;
+        }
+    }
+    chacha20_init(
+        SYS_GETRANDOM_CHACHA20_CTX, 
+        SYS_GETRANDOM_KEY_MATERIAL, 
+        $u32 0, 
+        $void* ($u64 SYS_GETRANDOM_KEY_MATERIAL + $u64 32)
+    );
+
+    //generate random bytes
+    void* kbuf = malloc(buf_len);
+    chacha20_keystream(SYS_GETRANDOM_CHACHA20_CTX, kbuf, buf_len);
+
+    //create new key material
+    chacha20_keystream(SYS_GETRANDOM_CHACHA20_CTX, SYS_GETRANDOM_KEY_MATERIAL, $u64 64);
+
+    //copy to kernel
+    if(copy_to_user(user_pt, $u8* kbuf, $u8* buf, buf_len) != 0) {
+        free(kbuf, buf_len);
+        pt_switch(user_pt);
+        return $i64 -ERR_FAULT;
+    }
+
+    free(kbuf, buf_len);
+    pt_switch(user_pt);
+    return $i64 buf_len;
+}
+
+i32 sys_poll(pollfd* fds, u32 nfds, i32 timeout) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+    process* proc = get_cur_proc();
+
+    //copy fds array from user
+    u64 copy_size = sizeof(pollfd) * $u64 nfds;
+    pollfd* k_fds = $pollfd* malloc(copy_size);
+    if(copy_from_user(user_pt, $u8* k_fds, $u8* fds, copy_size) != 0) {
+        free($void* k_fds, copy_size);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
+
+    //ensure all fds are valid
+    for(u32 i = $u32 0; i < nfds; i++) {
+        i32 fd = k_fds[i].fd;
+        if(fd < 0 || fd >= $i32 PROCESS_MAX_FD || proc->fd_table[fd] == nullptr) {
+            free($void* k_fds, copy_size);
+            pt_switch(user_pt);
+            return -ERR_BADF;
+        }
+    }
+
+    i32 num_ready = 0;
+    u64 start = hpet_get_ns();
+    u64 timeout_ns = $u64 timeout * 0xF4240;
+    while(1) {
+        for(u32 i = $u32 0; i < nfds; i++) {
+            file* f = proc->fd_table[k_fds[i].fd];
+            if($void* f != nullptr) {
+                u16 mask = f->ops->op_poll#(f);
+                u16 events = k_fds[i].events | POLLERR | POLLHUP; // add implicit flags?
+                if(mask & events) {
+                    k_fds[i].revents = mask & events;
+                    num_ready++;
+                } else {
+                    k_fds[i].revents = $u16 0;
+                }
+            } else {
+                k_fds[i].revents = POLLNVAL;
+                num_ready++;
+            }
+        }
+        if(num_ready > 0) {
+            break;
+        }
+        if(timeout >= 0) {
+            u64 curr = hpet_get_ns();
+            if((curr - start) >= timeout_ns) {
+                break;
+            }
+        }
+
+        //yield and wait for more events
+        yield();
+    }
+
+    if(copy_to_user(user_pt, $u8* k_fds, $u8* fds, copy_size) != 0) {
+        free($void* k_fds, copy_size);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
+
+    free($void* k_fds, copy_size);
+    pt_switch(user_pt);
+    return num_ready;
+}
+
+i32 sys_listen(i32 fd, i32 backlog) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    i32 ret = sock->ops->listen#(sock, backlog);
+
+    // sock->state = listening...;
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+i32 sys_accept(i32 fd, sockaddr* client_addr, u64* addr_len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    u64 k_addr_len = 0x0;
+    if(addr_len != nullptr) {
+        if(copy_from_user(user_pt, $u8* @k_addr_len, $u8* addr_len, sizeof(u64)) != 0) {
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+    }
+
+    sockaddr* kaddr = $sockaddr* nullptr;
+    if(client_addr != nullptr) {
+        kaddr = $sockaddr* malloc(sizeof(sockaddr));
+        if(copy_from_user(user_pt, $u8* kaddr, $u8* client_addr, k_addr_len) != 0) {
+            free($void* kaddr, k_addr_len);
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+    }
+
+    socket* child_sock = sock->ops->accept#(sock, kaddr, @k_addr_len);
+    if(child_sock == nullptr) {
+        if(kaddr != nullptr) {
+            free($void* kaddr, k_addr_len);
+            pt_switch(user_pt);
+        }
+        return -ERR_INVAL;
+    }
+
+    i32 new_fd = -1;
+    for(i32 i = 0; i < $i32 PROCESS_MAX_FD; i++) {
+        if($void* proc->fd_table[i] == nullptr) {
+            new_fd = i;
+            break;
+        }
+    }
+    if(new_fd == -1) {
+        if(kaddr != nullptr) {
+            free($void* kaddr, k_addr_len);
+            pt_switch(user_pt);
+        }
+        pt_switch(user_pt);
+        return -ERR_NFILE;
+    }
+
+    proc->fd_table[new_fd] = file_create_socket($u64 O_RDWR, child_sock);
+
+    if(client_addr != nullptr && kaddr != nullptr) {
+        if(copy_to_user(user_pt, $u8* kaddr, $u8* client_addr, k_addr_len) != 0) {
+            proc->fd_table[new_fd] = $file* nullptr;
+
+            child_sock->ops->close#(child_sock);
+            free($void* child_sock, sizeof(socket));
+
+            free($void* kaddr, k_addr_len);
+            
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+        
+        if(addr_len != nullptr) {
+            if(copy_to_user(user_pt, $u8* @k_addr_len, $u8* addr_len, sizeof(u64)) != 0) {
+                proc->fd_table[new_fd] = $file* nullptr;
+
+                child_sock->ops->close#(child_sock);
+                free($void* child_sock, sizeof(socket));
+
+                free($void* kaddr, k_addr_len);
+                
+                pt_switch(user_pt);
+                return -ERR_FAULT;
+            }
+        }
+
+        free($void* kaddr, k_addr_len);
+    }
+
+    pt_switch(user_pt);
+    return new_fd;
+}
+
+i32 sys_connect(i32 fd, sockaddr* addr, u64 len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    if(len > sizeof(sockaddr)) {
+        len = sizeof(sockaddr);
+    }
+
+    sockaddr* kaddr = $sockaddr* malloc(len);
+    if(copy_from_user(user_pt, $u8* kaddr, $u8* addr, len) != 0) {
+        free($void* kaddr, len);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
+
+    i32 ret = sock->ops->connect#(sock, kaddr, len);
+
+    // sock->state = SOCKET_STATE_CONNECTED;
+
+    free($void* kaddr, len);
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+i32 sys_sendto(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* dest_addr, u64 addr_len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    u8* kbuf = $u8* malloc(size);
+    if(copy_from_user(user_pt, kbuf, buf, size) != 0) {
+        free($void* kbuf, size);
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
+
+    u64 copy_amt = addr_len;
+    sockaddr* kaddr_dest = $sockaddr* nullptr;
+    if(dest_addr != nullptr) {
+        kaddr_dest = $sockaddr* malloc(sizeof(sockaddr));
+        memset($void* kaddr_dest, 0, sizeof(sockaddr));
+
+        if(copy_amt > sizeof(sockaddr)) copy_amt = sizeof(sockaddr);
+        if(copy_from_user(user_pt, $u8* kaddr_dest, $u8* dest_addr, copy_amt) != 0) {
+            free($void* kbuf, size);
+            free($void* kaddr_dest, copy_amt);
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+    }
+
+    i32 ret = sock->ops->send#(sock, kbuf, size, flags, kaddr_dest);
+
+    free($void* kbuf, size);
+    if(kaddr_dest != nullptr) {
+        free($void* kaddr_dest, copy_amt);
+    }
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+i32 sys_bind(i32 fd, sockaddr* addr, u64 addr_len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    if(addr == nullptr) {
+        pt_switch(user_pt);
+        return -ERR_INVAL;
+    }
+
+    sockaddr* kaddr = $sockaddr* malloc(sizeof(sockaddr));
+    memset($void* kaddr, 0, sizeof(sockaddr));
+
+    u64 copy_len = addr_len;
+
+    if(copy_len > sizeof(sockaddr)) {
+        copy_len = sizeof(sockaddr);
+    }
+
+    if(copy_from_user(user_pt, $u8* kaddr, $u8* addr, copy_len) != 0) {
+        free($void* kaddr, sizeof(sockaddr));
+        pt_switch(user_pt);
+        return -ERR_FAULT;
+    }
+
+    sockaddr_in* temp = $sockaddr_in* kaddr;
+
+    i32 ret = sock->ops->bind#(sock, kaddr, copy_len);
+
+    sock->state = SOCKET_STATE_BOUND;
+
+    free($void* kaddr, sizeof(sockaddr));
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+i32 sys_recvfrom(i32 fd, u8* buf, u64 size, i32 flags, sockaddr* src_addr, u64* addr_len) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* f = proc->fd_table[fd];
+
+    if(f == nullptr || f->type != FILE_TYPE_SOCKET) {
+        pt_switch(user_pt);
+        return -ERR_NOTSOCK;
+    }
+
+    socket* sock = $socket* f->resource_ptr;
+
+    u8* kbuf = $u8* malloc(size);
+
+    sockaddr* kaddr_src = $sockaddr* nullptr;
+    if(src_addr != nullptr) { // src_addr is an optional field, only if user cares about the sender ip
+        kaddr_src = $sockaddr* malloc(sizeof(sockaddr));
+    }
+
+    i32 ret = sock->ops->receive#(sock, kbuf, size, flags, kaddr_src);
+
+    if(ret >= 0) {
+        if(copy_to_user(user_pt, kbuf, buf, $u64 ret) != 0) {
+            free($void* kbuf, size);
+            if(src_addr != nullptr) {
+                free($void* kaddr_src, sizeof(sockaddr));
+            }
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+
+        u64 user_addr_len = 0x0;
+        if(copy_from_user(user_pt, $u8* @user_addr_len, $u8* addr_len, sizeof(u64)) != 0) {
+            free($void* kbuf, size);
+            if(src_addr != nullptr) {
+                free($void* kaddr_src, sizeof(sockaddr));
+            }
+            pt_switch(user_pt);
+            return -ERR_FAULT;
+        }
+
+        if(src_addr != nullptr) {
+            u64 copy_amt = sizeof(sockaddr);
+            if(copy_amt > user_addr_len) {
+                copy_amt = user_addr_len;
+            }
+            if(copy_to_user(user_pt, $u8* kaddr_src, $u8* src_addr, copy_amt) != 0) {
+                free($void* kbuf, size);
+                free($void* kaddr_src, sizeof(sockaddr));
+                pt_switch(user_pt);
+                return -ERR_FAULT;
+            }
+            
+            if(copy_to_user(user_pt, $u8* @copy_amt, $u8* addr_len, sizeof(u64)) != 0) {
+                free($void* kbuf, size);
+                free($void* kaddr_src, sizeof(sockaddr));
+                pt_switch(user_pt);
+                return -ERR_FAULT;
+            }
+        }
+    }
+
+    free($void* kbuf, size);
+    if(src_addr != nullptr) {
+        free($void* kaddr_src, sizeof(sockaddr));
+    }
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+// https://man7.org/linux/man-pages/man2/socket.2.html
+i32 sys_socket(i32 domain, i32 type, i32 protocol) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // For later, rn i only support ipv4
+    if(domain != $i32 AF_INET) {
+        pt_switch(user_pt);
+        return -ERR_AFNOSUPPORT;
+    }
+
+    // For later, rn i only support udp and tcp
+    if(type != SOCK_DGRAM && type != SOCK_STREAM) {
+        pt_switch(user_pt);
+        return -ERR_SOCKTNOSUPPORT; 
+    }
+
+    process* proc = get_cur_proc();
+    i32 fd_ind = -1;
+    for(i32 i = 0; i < $i32 PROCESS_MAX_FD; i++) {
+        if($void* proc->fd_table[i] == nullptr) {
+            fd_ind = i;
+            break;
+        }
+    }
+    if(fd_ind == -1) {
+        pt_switch(user_pt);
+        return -ERR_NFILE;
+    }
+
+    socket* socket = $socket* malloc(sizeof(socket));
+    new (socket) socket();
+
+    socket->domain = domain;
+    socket->type = type;
+    socket->protocol = protocol;
+
+    if(type == SOCK_DGRAM) {
+        socket->ops = UDP_OPS;
+        udp_init(socket);
+    } else if(type == SOCK_STREAM) {
+        socket->ops = TCP_OPS;
+        tcp_init(socket);
+    } else {
+        panic("sys_socket() : Should not get here");
+    }
+
+    socket->state = SOCKET_STATE_CREATED;
+
+    proc->fd_table[fd_ind] = file_create_socket($u64 O_RDWR, socket);
+
+    pt_switch(user_pt);
+    return fd_ind;
+}
+
+//on success, populates ts with the current time in the requested clock and returns 0
+//on failure, returns some negative error code
+//currently only supports CLOCK_REALTIME
+u64 sys_clock_gettime(u64 clock_id, timespec* ts) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    assert(clock_id == CLOCK_REALTIME, "sys_clock_gettime() : currently only support CLOCK_REALTIME");
+
+    timespec* kts = $timespec* malloc(sizeof(timespec));
+    hpet_get_sys_time(kts);
+    i64 tv_sec = kts->tv_sec;
+    i64 tv_nsec = kts->tv_nsec;
+    free($void* kts, sizeof(timespec));
+
+    pt_switch(user_pt);
+
+    ts->tv_sec = tv_sec;
+    ts->tv_nsec = tv_nsec;
+
+    return 0x0;
+}
+
+//on success, returns the pid of the child that got WAIT'd
+//if WNOHANG was specified and no child was WAIT'd, returns 0
+//TODO if wstatus != nullptr, save the exit status there
+//on failure some negative error code is returned
+pid_t sys_wait4(pid_t pid, i32* wstatus, i32 options, void* rusage) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    assert(rusage == nullptr, "sys_wait4() : no support for rusage");
+    assert(pid > $pid_t -1 && pid != $pid_t 0, "sys_wait4() : pgids not supported");
+
+    pid_t retval = $pid_t 0;
+    process* proc = get_cur_proc();
+    if(proc->children.size() == 0x0) {
+        pt_switch(user_pt);
+        return $pid_t -ERR_CHILD;
+    }
+    while(retval == $pid_t 0) {
+        for(u64 i = 0x0; i < proc->children.size(); i++){
+            process* child = proc->children[i];
+            if(child->status != PROCESS_ZOMBIE) continue;
+            if(pid == $pid_t -1 || pid == child->pid) {
+                retval = child->pid;
+                if(wstatus != nullptr) {
+                    copy_to_user(user_pt, $u8* @(child->exit_status), $u8* wstatus, sizeof(i32));
+                }
+                remove_process(child->pid);
+                break;
+            }
+        }
+        if(options & WNOHANG) break;
+    }
+
+    pt_switch(user_pt);
+    return retval;
+}
+
+//reads amt bytes into buf at the file descriptor specified by ind
+i64 sys_read(i32 fd_ind, u8* buf, u64 amt) {
+    // switch to kernel pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* fd = proc->fd_table[fd_ind];
+
+    // check if file descriptor exists
+    if(fd == nullptr) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor has read flags
+    if(!((O_ACCMODE & $i32 fd->flags) == O_RDONLY || (O_ACCMODE & $i32 fd->flags) == O_RDWR)) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    //do read
+    u8* kbuf = $u8* malloc(amt);
+    i64 retval = file_read(fd, kbuf, amt);
+
+    //transfer data to user buffer
+    if(retval > $i64 0) {
+        i64 cpy_status = $i64 copy_to_user(user_pt, kbuf, buf, $u64 retval);
+        if(cpy_status < $i64 0) retval = cpy_status;
+    }
+
+    //free kbuf
+    free($void* kbuf, amt);
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return $i64 retval;
+}
+
+i64 sys_getdents64(i32 fd_ind, u8* buf, u64 amt) {
+    // switch to kernel pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* fd = proc->fd_table[fd_ind];
+
+    // check if file descriptor exists
+    if(fd == nullptr) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor has read flags
+    if(!((O_ACCMODE & $i32 fd->flags) == O_RDONLY || (O_ACCMODE & $i32 fd->flags) == O_RDWR)) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // do getdents
+    u8* kbuf = $u8* malloc(amt);
+    i64 retval = file_getdents(fd, kbuf, amt);
+
+    // transfer data to user buffer
+    if(retval > $i64 0) {
+        i64 cpy_status = $i64 copy_to_user(user_pt, kbuf, buf, $u64 retval);
+        if(cpy_status < $i64 0) retval = cpy_status;
+    }
+
+    // free kbuf
+    free($void* kbuf, amt);
+
+    // return
+    pt_switch(user_pt);
+    return $i64 retval;
+}
+
+//writes amt bytes of buf to the file descriptor at ind. 
+i64 sys_write(i32 fd_ind, u8* buf, u64 amt) {
+    // switch to kernel pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* fd = proc->fd_table[fd_ind];
+
+    // check if file descriptor exists
+    if(fd == nullptr) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor has write flags
+    if(!((O_ACCMODE & $i32 fd->flags) == O_WRONLY || (O_ACCMODE & $i32 fd->flags) == O_RDWR)) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    //transfer data from user buffer
+    u8* kbuf = $u8* malloc(amt);
+    i64 cpy_status = $i64 copy_from_user(user_pt, kbuf, buf, amt);
+    if(cpy_status < $i64 0) {
+        free($void* kbuf, amt);
+        pt_switch(user_pt);
+        return cpy_status;
+    }
+
+    //do write
+    i64 retval = file_write(fd, kbuf, amt);
+
+    //free kbuf
+    free($void* kbuf, amt);
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return $i64 retval;
+}
+
+//creates a file descriptor on file with specified path
+//returns fd index on success, -1 on failure
+i32 sys_open(u8* path, i32 flags, mode_t mode) {
+    //invalid flag combinations
+    if((flags & O_CREAT) && (flags & O_DIRECTORY)) {
+        //O_CREAT and O_DIRECTORY together doesn't make sense
+        return -ERR_UNKNOWN;
+    }
+    if(!(
+        ((flags & O_ACCMODE) == O_RDONLY) ||
+        ((flags & O_ACCMODE) == O_WRONLY) ||
+        ((flags & O_ACCMODE) == O_RDWR) ||
+        ((flags & O_ACCMODE) == 0)
+    )) {
+        //accmode needs to be valid
+        return -ERR_UNKNOWN;
+    }
+    if((flags & O_DIRECTORY) && ((flags & O_ACCMODE) == O_WRONLY || (flags & O_ACCMODE) == O_RDWR)) {
+        //cannot write to a directory
+        return -ERR_UNKNOWN;
+    }
+
+    u64 path_len = strlen(path);
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    //see if we can walk path
+    process* proc = get_cur_proc();
+    vfs_inode* walk_res;
+    i32 walk_status;
+    if(kpath[0] == '/') walk_status = vfs_walk(new string(kpath), walk_res);    //absolute path
+    else walk_status = vfs_walk(proc->cwd, new string(kpath), walk_res);        //relative path
+    if(walk_status) {
+        //walk failed somehow
+        if(walk_status == VFS_WALK_MISSING && (flags & O_CREAT)) {
+            //try to create file here
+            i32 create_status;
+            if(kpath[0] == '/') create_status = vfs_create(new string(kpath));
+            else create_status = vfs_create(proc->cwd, new string(kpath));
+
+            if(create_status) {
+                free($void* kpath, path_len + 0x1);
+                cout << "sys_open() : vfs create failed\n";
+                pt_switch(user_pt);
+                return -ERR_UNKNOWN;
+            }
+
+            //walk to created file
+            if(kpath[0] == '/') walk_status = vfs_walk(new string(kpath), walk_res);
+            else walk_status = vfs_walk(proc->cwd, new string(kpath), walk_res);
+
+            if(walk_status) {
+                free($void* kpath, path_len + 0x1);
+                cout << "sys_open() : walk to new file failed\n";
+                pt_switch(user_pt);
+                return -ERR_UNKNOWN;
+            }
+        }
+        else {
+            free($void* kpath, path_len + 0x1);
+            cout << "sys_open() : wrong walk status\n";
+            cout << "sys_open() : walk status : " << walk_status << "\n";
+            pt_switch(user_pt);
+            return -ERR_UNKNOWN;
+        }
+    }
+    else {
+        //O_EXCL requires that file not exist 
+        if(flags & O_EXCL) {
+            free($void* kpath, path_len + 0x1);
+            cout << "sys_open() : file already existing and O_EXCL\n";
+            pt_switch(user_pt);
+            return -ERR_UNKNOWN;
+        }
+    }
+    free($void* kpath, path_len + 0x1);
+
+    //O_DIRECTORY requires opened file to be a directory
+    if((O_DIRECTORY & flags) == O_DIRECTORY && !walk_res->is_directory()) {
+        vfs_dec_refcnt(walk_res);
+        pt_switch(user_pt);
+        return -ERR_NOTDIR;
+    }
+
+    //allocate spot for new file descriptor
+    i32 fd_ind = -1;
+    for(i32 i = 0; i < $i32 PROCESS_MAX_FD; i++) {
+        if($void* proc->fd_table[i] == nullptr) {
+            fd_ind = i;
+            break;
+        }
+    }
+    if(fd_ind == -1) {
+        //no available slot for fd
+        vfs_dec_refcnt(walk_res);
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    //create fd (this should inc walk_res refcnt)
+    proc->fd_table[fd_ind] = file_create_vfs($u64 flags, walk_res);
+
+    //dec extra refcount due to walk
+    vfs_dec_refcnt(walk_res);
+
+    //if O_TRUNC is set and write access mode is set, truncate the file to length 0
+    if((O_TRUNC & flags) && (((flags & O_ACCMODE) == O_WRONLY) || ((flags & O_ACCMODE) == O_RDWR))) {
+        file_truncate(proc->fd_table[fd_ind], 0x0);
+    }
+    
+    pt_switch(user_pt);
+    return fd_ind;
+}
+
+//closes the file descriptor at the specified index
+i32 sys_close(i32 fd_ind) {
+    // switch to kernel_pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    process* proc = get_cur_proc();
+    file* fd = proc->fd_table[fd_ind];
+    proc->fd_table[fd_ind] = $file* nullptr;
+    
+    // check if file descriptor exists
+    if($u64 fd == $u64 nullptr) {
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    i32 retval = file_close(fd);
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return retval;
+}
+
+// repositions file offset of fd to the argument off according to whence
+// returns the new position on success
+// returns -1 on error
+i64 sys_lseek(i32 fd_ind, i64 off, i32 whence) {
+    //make sure whence is valid value
+    if(whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+        return $i64 -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // make sure fd_ind is in bounds
+    if(fd_ind < 0 || fd_ind >= $i32 PROCESS_MAX_FD) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // check if file descriptor exists
+    process* proc = get_cur_proc();
+    file* fd = proc->fd_table[fd_ind];
+    if($u64 fd == $u64 nullptr) {
+        pt_switch(user_pt);
+        return $i64 -ERR_BADF;
+    }
+
+    // call fd lseek
+    i64 ret = file_lseek(fd, off, whence);
+
+    pt_switch(user_pt);
+    return ret;
+}
+
+//terminates the calling process
+u64 sys_exit(i32 status) {
+    //switch to kernel_pt
+    pt_switch_to_kernel();
+
+    //kill current process
+    kill_process(get_cur_pid(), status);
+
+    //point %rsp to top of kernel stack
+    asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
+
+    //jump to scheduler
+    scheduler();
+
+    return 0x0;
+}
+
+//returns the pid of the calling process
+pid_t sys_getpid() {
+    return get_cur_pid();
+}
+
+//creates clone of this process, the 'child'. the calling process is the 'parent'
+//in the parent, fork returns with pid of the child
+//in the child, fork returns with 0
+pid_t sys_fork() {
+    // switch to kernel_pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    // create child process
+    process* parent = get_cur_proc();
+    trapframe* parent_tf = get_user_trapframe();
+    process* child = create_process(parent, parent_tf);
+    pid_t retval = child->pid;
+
+    // set child return value to 0
+    trapframe* child_tf = $trapframe* (child->kstack_bottom + KSTACK_TRAPFRAME);
+    child_tf->rax = 0x0;
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return retval;
+}
+
+//executes the program referrred to by path, replacing the current program. 
+//argv is a null terminated array of pointers to strings that are commandline arguments. 
+// by convention, the first string contains the filename to be executed
+//envp is a null terminated array of pointers to strings that are environment variables
+//if this succeeds, this should not return to the original process, should inject new trapframe
+//if this fails, will return to the original process with an error
+i32 sys_execve(u8* path, u8** argv, u8** envp) {
+    //make sure argv and envp aren't nullptr
+    if($void* argv == nullptr || $void* envp == nullptr) {
+        return ERR_UNKNOWN;
+    }
+
+    //copy pathname into kernel space
+    pagetable_t user_pt = pt_get_current();
+    u64 pathlen = strlen(path);
+    pt_switch_to_kernel();
+    u8* kpath = $u8* malloc(pathlen + 0x1);
+    copy_from_user(user_pt, kpath, path, pathlen + 0x1);
+    string* kpath_str = $string* malloc(sizeof(string));
+    new (kpath_str) string(kpath);
+    free($void* kpath, pathlen + 0x1);
+
+    //see if path is valid 
+    vfs_inode* inode;
+    i32 walk_stat;
+    if((*kpath_str)[0] == '/') {
+        //absolute path
+        walk_stat = vfs_walk(*kpath_str, inode);
+    }
+    else {
+        //relative to CWD
+        process* proc = get_cur_proc();
+        walk_stat = vfs_walk(proc->cwd, *kpath_str, inode);
+    }
+    kpath_str->~();
+    free($void* kpath_str, sizeof(string));
+    if(walk_stat) {
+        //path is not valid
+        cout << "INVALID PATH\n";
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+    
+    //see if there is a regular file at walk result
+    i32 is_file;
+    i32 is_file_stat = vfs_is_file(inode, is_file);
+    if(is_file_stat) {
+        cout << "IS FILE CHECK FAILED\n";
+        vfs_dec_refcnt(inode);
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+    if(!is_file) {
+        cout << "NOT A FILE\n";
+        vfs_dec_refcnt(inode);
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+
+    //read in file
+    u64 file_len;
+    if(vfs_get_size(inode, file_len)) {
+        //getting size failed
+        cout << "GETTING FILE SIZE FAILED\n";
+        vfs_dec_refcnt(inode);
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+    u64 amt_read;
+    u8* file_buf = $u8* malloc(file_len);
+    if(vfs_read_file(inode, file_buf, file_len, 0x0, amt_read)) {
+        //reading file failed
+        cout << "READ FILE FAILED\n";
+        free($void* file_buf, file_len);
+        vfs_dec_refcnt(inode);
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+    vfs_dec_refcnt(inode);
+    assert(amt_read == file_len, "sys_execve() : should always read entire file");
+
+    //start building new process user_pt
+    pagetable_t n_user_pt = pt_alloc_new();
+    process* proc = get_cur_proc();
+    process_pt_map_kernel(proc, n_user_pt);
+    process_pt_alloc_userspace(proc, n_user_pt, PROCESS_CREATE_STACK);
+    u64 entry_off;
+    i32 elf_status = elf_load(file_buf, file_len, n_user_pt, entry_off);
+    free($void* file_buf, file_len);
+    if(elf_status) {
+        //failed to load file as elf
+        cout << "FAILED TO LOAD ELF\n";
+        pt_free(n_user_pt);
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+
+    //replace current process, no heading back now. 
+    //copy argv, envp to kernel
+    u8** kargv;
+    u8** kenvp;
+    u64 argc;
+    u64 envc;
+    {
+        pt_switch(user_pt);
+
+        //figure out argc, envc
+        argc = 0x0;
+        while($void* argv[argc] != nullptr) argc ++;
+        envc = 0x0;
+        while($void* envp[envc] != nullptr) envc ++;
+
+        pt_switch_to_kernel();
+
+        //copy argument string addresses 
+        u8** kargv_uptrs = $u8** malloc(sizeof(u8*) * (argc + 0x1));
+        u8** kenvp_uptrs = $u8** malloc(sizeof(u8*) * (envc + 0x1));
+        kargv = $u8** malloc(sizeof(u8*) * (argc + 0x1));
+        kenvp = $u8** malloc(sizeof(u8*) * (envc + 0x1));
+
+        copy_from_user(user_pt, $u8* kargv_uptrs, $u8* argv, sizeof(u8*) * (argc + 0x1));
+        copy_from_user(user_pt, $u8* kenvp_uptrs, $u8* envp, sizeof(u8*) * (envc + 0x1));
+        kargv[argc] = $u8* nullptr;
+        kenvp[envc] = $u8* nullptr;
+
+        //copy argument strings
+        for(u64 i = 0x0; i < argc; i++) {
+            pt_switch(user_pt);
+            u64 len = strlen(argv[i]);
+            pt_switch_to_kernel();
+
+            kargv[i] = $u8* malloc(sizeof(u8) * (len + 0x1));
+            copy_from_user(user_pt, $u8* kargv[i], $u8* kargv_uptrs[i], len + 0x1);
+        }
+        for(u64 i = 0x0; i < envc; i++) {
+            pt_switch(user_pt);
+            u64 len = strlen(envp[i]);
+            pt_switch_to_kernel();
+
+            kenvp[i] = $u8* malloc(sizeof(u8) * (len + 0x1));
+            copy_from_user(user_pt, $u8* kenvp[i], $u8* kenvp_uptrs[i], len + 0x1);
+        }
+
+        //free uptrs
+        free($void* kargv_uptrs, sizeof(u8*) * (argc + 0x1));
+        free($void* kenvp_uptrs, sizeof(u8*) * (envc + 0x1));
+    }
+
+    //destroy old pt, replace with new one
+    process_pt_unmap_kernel(proc, user_pt);
+    pt_free(user_pt);
+    proc->pt = n_user_pt;
+
+    //new trapframe
+    trapframe* tf = $trapframe* malloc(sizeof(trapframe));
+    memset($void* tf, 0, sizeof(trapframe));
+    tf->rip = entry_off;
+    tf->rsp = USER_STACK_TOP;
+    tf->rflags = 0x202;     //enable timer interrupt
+    tf->pt = $u64 proc->pt;
+    tf->cs = 0x23;          //user mode selectors
+    tf->ss = 0x1b;
+    process_set_trapframe(proc, tf);
+    free($void* tf, sizeof(trapframe));
+
+    //place argv, envp onto stack
+    process_populate_stack(proc, kargv, kenvp);
+
+    //dealloc kargv, kenvp
+    for(u64 i = 0x0; i < argc; i++) {
+        free($void* kargv[i], strlen(kargv[i]) + 0x1);
+    }
+    for(u64 i = 0x0; i < envc; i++) {
+        free($void* kenvp[i], strlen(kenvp[i]) + 0x1);
+    }
+    free($void* kargv, sizeof(u8*) * (argc + 0x1));
+    free($void* kenvp, sizeof(u8*) * (envc + 0x1));
+
+    //set status to READY
+    proc->status = PROCESS_READY;
+
+    //jump to scheduler
+    scheduler();
+
+    panic("sys_execve() : should not return to syscall handler on success");
+    return 0;
+}
+
+//current process is yielding control to the scheduler
+u64 sys_sched_yield() {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+    
+    yield();
+
+    pt_switch(user_pt);
+    return 0x0;
+}
+
+[SYSCALL] u64 MMAP_COUNTER = 0x0;
+void* sys_mmap(void* addr, u64 len, u64 prot_flags, u64 map_flags, i32 fd, u64 offset) {
+    // switch to kernel_pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    MMAP_COUNTER ++;
+    if((MMAP_COUNTER % $u64 1000) == 0x0) {
+        cout << "MMAP COUNT : " << MMAP_COUNTER << "\n";
+    }
+
+    process* proc = get_cur_proc();
+
+    // check if len is page aligned
+    if(len % PAGE_SIZE != 0x0) {
+        cout << "MMAP FAILED : LEN NOT PAGE ALIGNED\n";
+        pt_switch(user_pt);
+        return $void* $u64 -ERR_UNKNOWN;
+    }
+
+    // check if we've ran out of heap space
+    if(proc->brk + len > USER_HEAP_TOP) {
+        cout << "MMAP FAILED : OUT OF HEAP SPACE\n";
+        pt_switch(user_pt);
+        return $void* $u64 -ERR_UNKNOWN;
+    }
+
+    // alloc mem
+    void* vaddr = $void* proc->brk;
+    for(u64 i = 0x0; i < len; i += PAGE_SIZE) {
+        pt_alloc_and_map_page(user_pt, $void* ($u64 vaddr + i), map_flags | PTE_USER);
+    }
+    proc->brk += len;
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return vaddr; 
+}
+
+i32 sys_munmap(void* addr, u64 len) {
+    // switch to kernel_pt
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //ensure addr and len are page aligned
+    if($u64 addr % PAGE_SIZE != 0x0 || len % PAGE_SIZE != 0x0) return -ERR_UNKNOWN;
+
+    //unmap memory
+    for(u64 i = 0x0; i < len; i += PAGE_SIZE) {
+        void* curr_vaddr = $void* ($u64 addr + i);
+        if(!pt_is_vaddr_mapped(user_pt, curr_vaddr)) {
+            //double free
+            return -ERR_UNKNOWN;
+        }
+        void* paddr = pt_translate(user_pt, curr_vaddr);
+        pt_unmap_page(user_pt, curr_vaddr);
+        pfree(paddr);
+    }
+
+    // set user pt back
+    pt_switch(user_pt);
+
+    return 0;
+}
+
+//returns the calling process's CWD as a null terminated string. 
+//on success, writes to buf and returns length of pathname
+//on failure, returns nullptr
+//note that if size is too small, this could fail. 
+u64 sys_getcwd(u8* buf, u64 size) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //try to get pathname
+    process* proc = get_cur_proc();
+    string* pathname = $string* malloc(sizeof(string));
+    new (pathname) string();
+    if(vfs_get_pathname(proc->cwd, *pathname)) {
+        //getting pathname failed
+        pathname->~();
+        free($void* pathname, sizeof(string));
+        return 0x0;
+    }
+    u64 path_size = pathname->size();
+    
+    //check if buffer is big enough
+    if(path_size + 0x1 > size) {
+        //buffer not big enough
+        pathname->~();
+        free($void* pathname, sizeof(string));
+        return 0x0;
+    }
+
+    //copy string over to user buffer
+    copy_to_user(user_pt, pathname->jstr(), buf, path_size + 0x1);
+    pathname->~();
+    free($void* pathname, sizeof(string));
+
+    pt_switch(user_pt);
+    return path_size;
+}
+
+//changes the calling process's CWD to the one specified by path. 
+//if path starts with '/', it is treated as an absolute path, otherwise it's treated as relative from the current CWD
+//returns 0 on success.
+i32 sys_chdir(u8* path) {
+    //get length of path
+    u64 path_len = strlen(path);
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    //see if we can walk path
+    process* proc = get_cur_proc();
+    vfs_inode* ncwd;
+    i32 walk_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        walk_status = vfs_walk(new string(kpath), ncwd);
+    }
+    else {
+        //relative path
+        walk_status = vfs_walk(proc->cwd, new string(kpath), ncwd);
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(walk_status) {
+        //walk failed
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+
+    //make sure this is a directory
+    if(!ncwd->is_directory()) {
+        //is_directory check failed
+        vfs_dec_refcnt(ncwd);
+        pt_switch(user_pt);
+        return ERR_UNKNOWN;
+    }
+
+    //decrement refcount of current cwd, replace it with new cwd
+    vfs_dec_refcnt(proc->cwd);
+    proc->cwd = ncwd;
+
+    pt_switch(user_pt);
+    return 0;
+}   
+
+// creates a new pipe
+// on success, fds[0] = read end, fds[1] = write end, returns 0
+// on failure, returns -1
+i32 sys_pipe(i32[2]* fds) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //see if there are two free file descriptors 
+    process* proc = get_cur_proc();
+    i32 fdind0 = -1;
+    i32 fdind1 = -1;
+    for(u64 i = 0x0; i < PROCESS_MAX_FD; i++) {
+        if($void* proc->fd_table[i] == nullptr) {
+            if(fdind0 == -1) fdind0 = $i32 i;
+            else {
+                fdind1 = $i32 i;
+                break;
+            }
+        }
+    }
+    if(fdind0 == -1 || fdind1 == -1) {
+        return -ERR_NFILE; //file table overflow
+    }
+
+    //create the pipe
+    pipe* pipe = $pipe* malloc(sizeof(pipe));
+    new (pipe) pipe();
+
+    //create read / write references to pipe
+    pipe_ref* read_ref = $pipe_ref* malloc(sizeof(pipe_ref));
+    pipe_ref* write_ref = $pipe_ref* malloc(sizeof(pipe_ref));
+    new (read_ref) pipe_ref(pipe, 0);
+    new (write_ref) pipe_ref(pipe, 1);
+
+    //create file descriptors
+    assert($void* proc->fd_table[fdind0] == nullptr, "sys_pipe() : this should be available");
+    assert($void* proc->fd_table[fdind1] == nullptr, "sys_pipe() : this should be available");
+    proc->fd_table[fdind0] = file_create_pipe($u64 O_RDONLY, read_ref);
+    proc->fd_table[fdind1] = file_create_pipe($u64 O_WRONLY, write_ref);
+
+    //copy fds to user
+    i32[2]* kfds = $i32[2]* malloc(sizeof(i32[2]));
+    (*kfds)[0] = fdind0;
+    (*kfds)[1] = fdind1;
+    copy_to_user(user_pt, $u8* kfds, $u8* fds, sizeof(i32[2]));
+    free($void* kfds, sizeof(i32[2]));
+
+    pt_switch(user_pt);
+    return 0;
+}   
+
+// makes new_fd into a reference to the underlying fd referred to by old_fd.
+// if new_fd is already taken, silently closes it
+// returns new_fd on success
+// returns -1 on failure
+i32 sys_dup2(i32 old_fd, i32 new_fd) {
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //ensure given fds are in bounds
+    if(old_fd < 0 || new_fd < 0 || $u64 old_fd >= PROCESS_MAX_FD || $u64 new_fd >= PROCESS_MAX_FD) {
+        return -ERR_UNKNOWN;
+    }
+
+    //ensure old_fd != new_fd
+    if(old_fd == new_fd) {
+        return -ERR_UNKNOWN;
+    }
+
+    //ensure old_fd refers to an active fd
+    process* proc = get_cur_proc();
+    if($void* proc->fd_table[old_fd] == nullptr) {
+        return -ERR_UNKNOWN;
+    }
+
+    //if new_fd refers to an active fd, close it
+    //if any errors occur, they should be ignored
+    file_close(proc->fd_table[new_fd]);
+    proc->fd_table[new_fd] = $file* nullptr;
+
+    //make copy of old_fd in new_fd
+    proc->fd_table[new_fd] = proc->fd_table[old_fd];
+    proc->fd_table[new_fd]->refcount ++;
+
+    pt_switch(user_pt);
+    return new_fd;
+}
+
+//creates a new directory at the specified path
+//the parent of the newly created directory must exist initially
+//returns 0 on success
+//returns -1 on failure
+i32 sys_mkdir(u8* path, mode_t mode) {
+    u64 path_len = strlen(path);
+    if(path_len == 0x0) {
+        //path cannot be of size 0
+        return -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    process* proc = get_cur_proc();
+    vfs_inode* cwd = proc->cwd;
+    i32 mkdir_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        mkdir_status = vfs_mkdir(new string(kpath));
+    }
+    else {
+        //relative path
+        mkdir_status = vfs_mkdir(cwd, new string(kpath));
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(mkdir_status) {
+        //failed to mkdir
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+//removes the directory specified by path
+//returns 0 on success
+//returns -1 on failure
+i32 sys_rmdir(u8* path) {
+    u64 path_len = strlen(path);
+    if(path_len == 0x0) {
+        //path cannot be size 0
+        return -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    process* proc = get_cur_proc();
+    vfs_inode* cwd = proc->cwd;
+    i32 rmdir_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        rmdir_status = vfs_rmdir(new string(kpath));
+    }
+    else {
+        //relative path
+        rmdir_status = vfs_rmdir(cwd, new string(kpath));
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(rmdir_status) {
+        //failed to rmdir
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+//removes the hard link to the regular file specified by path
+//path must refer to a regular file
+//if the number of hard links to this file drops to 0, then this file is removed from the filesystem
+//returns 0 on success
+//returns -1 on error
+i32 sys_unlink(u8* path) {
+    u64 path_len = strlen(path);
+    if(path_len == 0x0) {
+        //path cannot be size 0
+        return -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len + 0x1);
+
+    process* proc = get_cur_proc();
+    vfs_inode* cwd = proc->cwd;
+    i32 unlink_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        unlink_status = vfs_unlink(new string(kpath));
+    }
+    else {
+        //relative path
+        unlink_status = vfs_unlink(cwd, new string(kpath));
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(unlink_status) {
+        //failed to unlink
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+//fills the stat struct for the file referred to by path
+//this differs from lstat in that if the path refers to a symbolic link, 
+// lstat returns information about the link itself
+//returns 0 on success
+//returns -1 on failure
+i32 sys_stat(u8* path, stat* statbuf) {
+    u64 path_len = strlen(path);
+    if(path_len == 0x0) {
+        //path cannot be size 0
+        return -ERR_UNKNOWN;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //copy path to kernel
+    u8* kpath = $u8* malloc(path_len + 0x1);
+    copy_from_user(user_pt, kpath, path, path_len);
+    kpath[path_len] = '\0';
+
+    //see if we can walk path
+    process* proc = get_cur_proc();
+    vfs_inode* ncwd;
+    i32 walk_status;
+    if(kpath[0] == '/') {
+        //absolute path
+        walk_status = vfs_walk(new string(kpath), ncwd);
+    }
+    else {
+        //relative path
+        walk_status = vfs_walk(proc->cwd, new string(kpath), ncwd);
+    }
+    free($void* kpath, path_len + 0x1);
+
+    if(walk_status) {
+        //walk failed
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    //call vfs fstat
+    stat* kstat = $stat* malloc(sizeof(stat));
+    i32 fstat_status = vfs_fstat(ncwd, kstat);
+    if(fstat_status) {
+        //fstat failed
+        free($void* kstat, sizeof(stat));
+        pt_switch(user_pt);
+        return -ERR_UNKNOWN;
+    }
+
+    //copy stat to user
+    copy_to_user(user_pt, $u8* kstat, $u8* statbuf, sizeof(stat));
+    free($void* kstat, sizeof(stat));
+
+    pt_switch(user_pt);
+    return 0;
+}
+
+//fills the stat struct for the file referred to by the open file descriptor
+//returns 0 on success
+//returns -1 on failure
+i32 sys_fstat(i32 fd, stat* statbuf) {
+    //make sure fd is in range
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        return -ERR_BADF;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //get file
+    process* proc = get_cur_proc();
+    file* file = proc->fd_table[fd];
+    if(file == nullptr) {
+        //file doesn't exist
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    //call file fstat
+    stat* kstat = $stat* malloc(sizeof(stat));
+    memset($void* kstat, 0, sizeof(stat));
+    i32 retval = file_fstat(file, kstat);
+    copy_to_user(user_pt, $u8* kstat, $u8* statbuf, sizeof(stat));
+    free($void* kstat, sizeof(stat));
+
+    pt_switch(user_pt);
+    return retval;
+}
+
+//catch-all io-control syscall
+//for functionality that didn't fit well into other syscalls
+//essentially just a huge special case syscall
+i32 sys_ioctl(i32 fd, u32 op, void* arg) {
+    //make sure fd is in range
+    if(fd < 0 || fd >= $i32 PROCESS_MAX_FD) {
+        return -ERR_BADF;
+    }
+
+    pagetable_t user_pt = pt_get_current();
+    pt_switch_to_kernel();
+
+    //get file
+    process* proc = get_cur_proc();
+    file* file = proc->fd_table[fd];
+    if(file == nullptr) {
+        //file doesn't exist
+        pt_switch(user_pt);
+        return -ERR_BADF;
+    }
+
+    i32 retval = -ERR_UNKNOWN;
+    if(file->type == FILE_TYPE_TTY) {
+        if(op == $u32 TCGETS) {
+            //retrieve current termios
+            termios* t = $termios* malloc(sizeof(termios));
+            retval = tty_get_termios($tty* file->resource_ptr, t);
+            copy_to_user(user_pt, $u8* t, $u8* arg, sizeof(termios));
+            free($void* t, sizeof(termios));
+        }
+        else if(op == $u32 TCSETS) {
+            //set current termios
+            termios* t = $termios* malloc(sizeof(termios));
+            copy_from_user(user_pt, $u8* t, $u8* arg, sizeof(termios));
+            retval = tty_set_termios($tty* file->resource_ptr, t);
+            free($void* t, sizeof(termios));
+        }
+        else if(op == $u32 TIOCGWINSZ) {
+            //retrieve winsize
+            winsize* w = $winsize* malloc(sizeof(winsize));
+            retval = tty_get_winsize($tty* file->resource_ptr, w);
+            copy_to_user(user_pt, $u8* w, $u8* arg, sizeof(winsize));
+            free($void* w, sizeof(winsize));
+        }
+    }
+
+    pt_switch(user_pt);
+    return retval;
+}

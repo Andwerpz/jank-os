@@ -1,0 +1,13 @@
+#include <kernel::vga>;
+#include <kernel::serial>;
+#include <kernel::utils>;
+
+intrinsic("exit")
+void intrinsic_exit(i32 status) {
+    enable_vga_print();
+    print("tried to exit!! should not be exiting kernel");
+    while(1) {
+        asm!("hlt");
+    }
+}
+

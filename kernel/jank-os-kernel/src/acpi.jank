@@ -1,0 +1,601 @@
+#include "serial.jank";
+#include "globals.jank";
+#include "utils.jank";
+#include "pagetable.jank";
+#include "networking/nic/e1000.jank";
+#include "networking/nic/rtl_8111_8168.jank";
+#include "usb/xhci.jank";
+
+// Advanced Configuration and Power Interface (ACPI)
+// to use the ACPI, we first must find the RSDP
+
+// Root System Description Pointer (RSDP)
+// with revision >= 2, the RSDP struct has been extended
+struct RSDP {
+    u8[8] signature;        // "RSD PTR "
+    u8    checksum;         // checksum of first 20 bytes
+    u8[6] OEMID;
+    u8    revision;         // 0 = ACPI 1.0, 2+ = ACPI 2.0+
+    u32   rsdt_address;     // 32-bit RSDT address (still present)
+
+    // ACPI 2.0+ only:
+    u32   length;               // total length of RSDP structure
+    u64   xsdt_address;         // 64-bit XSDT address
+    u8    extended_checksum;    // checksum of entire table (length bytes)
+    u8[3] reserved;
+}
+
+// Root System Description Table (RSDT)
+// eXtended System Description Table (XSDT)
+// contains pointers to all the other System Description Tables
+struct RSDT {
+    ACPIHeader  header;
+
+    //usage (RSDT) : $u32* @(RSDT->pstart). There will be header->length of them
+    //usage (XSDT) : $u64* @(XSDT->pstart)
+    u8          pstart; 
+}
+
+struct ACPIHeader {
+    u8[4]   signature;  
+    u32     length;
+    u8      revision;
+    u8      checksum;
+    u8[6]   OEMID;
+    u64     oem_tableid;
+    u32     oem_revision;
+    u32     creator_id;
+    u32     creator_revision;
+}
+
+struct ACPIAddress {
+    u8      address_space_id;    // 0 - system memory, 1 - system I/O
+    u8      register_bit_width;
+    u8      register_bit_offset;
+    u8      reserved;
+    u64     address;
+} 
+
+// High Precision Event Timer (HPET)
+struct HPET {
+    ACPIHeader  header;
+    u8          hardware_rev_id;
+    u8          info_bits;      // comparator_count:5, counter_size:1, reserved:1, legacy_replacement:1
+    u16         pci_vendor_id;
+    ACPIAddress address;        // address to HPET registers
+    u8          hpet_number;
+    u16         minimum_tick;
+    u8          page_protection;
+}
+
+//pointed to by HPET->address
+struct HPETRegisters {
+    u64     capabilities;
+    u64     reserved0;
+    u64     config;
+    u64     reserved1;
+    u64     interrupt_status;
+    u64[25] reserved2;
+    u64     main_counter;
+    u64     reserved3;
+}
+
+//returns 1 if good
+i32 rsdp_validate(RSDP* rsdp) {
+    // check signature
+    if( rsdp->signature[0] != 'R' ||
+        rsdp->signature[1] != 'S' || 
+        rsdp->signature[2] != 'D' || 
+        rsdp->signature[3] != ' ' || 
+        rsdp->signature[4] != 'P' || 
+        rsdp->signature[5] != 'T' || 
+        rsdp->signature[6] != 'R' || 
+        rsdp->signature[7] != ' ') {
+        
+        cout << "rsdp_validate() : signature : ";
+        for(u64 i = 0x0; i < $u64 8; i++) cout << rsdp->signature[i];
+        cout << "\n";
+        cout << "rsdp_validate() : bad signature\n";
+        return 0;
+    }
+
+    // v1 checksum
+    u8 sum1 = $u8 0;
+    for (u64 i = 0x0; i < $u64 20; i++) sum1 += ($u8* rsdp)[i];
+    if (sum1 != $u8 0) return 0;
+
+    // v2+ extended checksum
+    if (rsdp->revision >= $u8 2) {
+        u32 len = rsdp->length;
+        if (len < $u32 36) return 0;
+        u8 sum2 = $u8 0;
+        for(u64 i = 0x0; i < $u64 len; i++) sum2 += ($u8* rsdp)[i];
+        if (sum2 != $u8 0) return 0;
+    }
+
+    return 1;
+}
+
+//returns 1 if good
+i32 acpi_validate(ACPIHeader* header, u8* exp_sig) {
+    // check signature
+    for(u64 i = 0x0; i < 0x4; i++) {    
+        if(header->signature[i] != exp_sig[i]) return 0;
+    }
+
+    // checksum. Should sum the entire table including the header
+    u64 sum = 0x0;
+    for(u64 i = 0x0; i < $u64 header->length; i++) {
+        sum += $u64 ($u8* header)[i];
+    }
+    if($u8 sum != $u8 0x0) return 0;
+
+    return 1;
+}
+
+//on success, returns a pointer to the struct with the provided signature
+//on failure, returns nullptr
+void* sdt_find_entry(void* sdt, i32 is_xsdt, u8* exp_sig) {
+    ACPIHeader* hdr = $ACPIHeader* sdt;
+    if(is_xsdt) assert(acpi_validate(hdr, "XSDT"), "sdt_find_entry() : xsdt failed to validate");
+    else assert(acpi_validate(hdr, "RSDT"), "sdt_find_entry() : rsdt failed to validate");
+
+    u64 entries_bytes = $u64 hdr->length - sizeof(ACPIHeader);
+    u64 count;
+    if(is_xsdt) count = entries_bytes / $u64 8;
+    else count = entries_bytes / $u64 4;
+    u8* base = $u8* ($u64 sdt + sizeof(ACPIHeader));
+
+    for (u64 i = 0x0; i < count; i++) {
+        u64 addr;
+        if(is_xsdt) addr = ($u64* base)[i];
+        else addr = $u64 ($u32* base)[i];
+        ACPIHeader* th = $ACPIHeader* addr;
+        if (acpi_validate(th, exp_sig)) return $void* th;
+    }
+
+    return nullptr;
+}
+
+i32 init_acpi() {
+    cout << "start init acpi\n";
+
+    //get physical location of RSDP struct from bootinfo
+    RSDP* rsdp = $RSDP* bootinfo->rsdp_phys;
+    assert(rsdp != nullptr, "init_acpi() : could not find RSDP");
+    assert(rsdp_validate(rsdp), "init_acpi() : RSDP failed to validate");
+    cout << "ACPI REVISION : " << ($u64 rsdp->revision) << "\n";
+
+    //validate RSDT / XSDT
+    void* sdt = nullptr;
+    i32 is_xsdt = 0;
+    if ($i32 rsdp->revision >= 2 && rsdp->xsdt_address != 0x0) {
+        sdt = $void* $u64 rsdp->xsdt_address;
+        is_xsdt = 1;
+        assert(acpi_validate($ACPIHeader* sdt, "XSDT"), "init_acpi: bad XSDT");
+    } 
+    else {
+        sdt = $void* $u64 rsdp->rsdt_address;
+        is_xsdt = 0;
+        assert(acpi_validate($ACPIHeader* sdt, "RSDT"), "init_acpi: bad RSDT");
+    }
+
+    //initialize HPET
+    HPET* hpet = $HPET* sdt_find_entry(sdt, is_xsdt, "HPET");
+    assert(hpet != nullptr, "init_acpi() : failed to find HPET");
+    init_hpet(hpet);
+
+    //initialize MCFG
+    MCFG* mcfg = $MCFG* sdt_find_entry(sdt, is_xsdt, "MCFG");
+    assert(mcfg != nullptr, "init_mcfg() : failed to find MCFG");
+    init_mcfg(mcfg);
+
+    cout << "done init acpi\n";
+    return 0;
+}
+
+//the number of nanoseconds after the epoch should be equal to (roughly):
+// HPET_SECONDS_BASE * 10^9 + hpet_get_ns();
+[__GLOBAL_FIRST__] u64* HPET_MAIN_COUNTER;
+[__GLOBAL_FIRST__] u64  HPET_FREQUENCY_FS;
+[__GLOBAL_FIRST__] u64  HPET_SECONDS_BASE;  
+u64 hpet_get_ns() {
+    u64 val = HPET_MAIN_COUNTER[0];
+    u64 high = val >> $u64 32;
+    u64 low = val & 0xffffffff;
+    return  (low * HPET_FREQUENCY_FS) / $u64 1000000 + 
+            (((high * HPET_FREQUENCY_FS) / $u64 1000000) << $u64 32);
+}
+
+void hpet_get_sys_time(timespec* ts) {
+    u64 hpet_ns = hpet_get_ns();
+    ts->tv_sec = $i64 (HPET_SECONDS_BASE + hpet_ns / $u64 1000000000);
+    ts->tv_nsec = $i64 (hpet_ns % $u64 1000000000);
+}
+
+i32 init_hpet(HPET* hpet) {
+    println("start init HPET");
+    assert(hpet != nullptr, "init_hpet() : HPET should not be null");
+
+    //find HPET registers
+    HPETRegisters* regs = $HPETRegisters* hpet->address.address;
+
+    //if not mapped, identity map HPET MMIO memory
+    {
+        pagetable_t pt = pt_get_current();
+        void* vaddr = $void* (($u64 regs / PAGE_SIZE) * PAGE_SIZE);
+        pt_map_page_if_not_mapped(pt, vaddr, vaddr, PTE_WRITEABLE);
+    }
+
+    //enable counter
+    regs->config |= 0x01;
+
+    //get frequency in femtoseconds (10^15 seconds)
+    HPET_FREQUENCY_FS = regs->capabilities >> $u64 32;
+    cout << "HPET FREQUENCY FS : " << HPET_FREQUENCY_FS << "\n";
+
+    //get main counter address
+    HPET_MAIN_COUNTER = @regs->main_counter;
+
+    //get time in seconds after epoch from CMOS
+    u64 cmos_epoch_sec = cmos_get_epoch_time_sec();
+
+    //reset HPET counter
+    HPET_SECONDS_BASE = cmos_epoch_sec;
+    HPET_MAIN_COUNTER[0] = 0x0;
+
+    println("done init HPET");
+    return 0;
+}
+
+//when communicating with CMOS, you always have to mask out NMI
+[__GLOBAL_FIRST__] u16 CMOS_IN    = $u16 0x70;
+[__GLOBAL_FIRST__] u16 CMOS_OUT   = $u16 0x71;
+
+[__GLOBAL_FIRST__] u8 CMOS_NMI_DISABLE_BIT      = $u8 0x80;
+[__GLOBAL_FIRST__] u8 CMOS_UPDATE_IN_PROG_BIT   = $u8 0x80;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_SECONDS     = $u8 0x00;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_MINUTES     = $u8 0x02;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_HOURS       = $u8 0x04;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_DAY         = $u8 0x07;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_MONTH       = $u8 0x08;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_YEAR        = $u8 0x09;
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_CENTURY     = $u8 0x32;  //support for this one is questionable
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_STATUSA     = $u8 0x0a;     
+[__GLOBAL_FIRST__] u8 CMOS_REGISTER_STATUSB     = $u8 0x0b;
+
+//this should be 24 hour time
+struct rtc_time {
+    u64 seconds;    // [0, 59]
+    u64 minutes;    // [0, 59]
+    u64 hours;      // [0, 23]
+    u64 day;        // [1, 31]
+    u64 month;      // [1, 12]
+    u64 year;      
+}
+
+i32 is_leap_year(u64 year) {
+    return (year % $u64 4 == 0x0) && ((year % $u64 100 != 0x0) || (year % $u64 400 == 0x0));
+}
+
+//we'll need to figure out timezones, but this will do for now
+u64 cmos_get_epoch_time_sec() {
+    rtc_time time = cmos_read_time();
+    u64 ans = 0x0;
+
+    //figure out how many days have passed
+    u64 days_passed = 0x0;
+    days_passed += time.day - 0x1;
+    if(time.month > $u64 1) days_passed += $u64 31; //lmao
+    if(time.month > $u64 2) days_passed += $u64 28;
+    if(time.month > $u64 3) days_passed += $u64 31;
+    if(time.month > $u64 4) days_passed += $u64 30;
+    if(time.month > $u64 5) days_passed += $u64 31;
+    if(time.month > $u64 6) days_passed += $u64 30;
+    if(time.month > $u64 7) days_passed += $u64 31;
+    if(time.month > $u64 8) days_passed += $u64 31;
+    if(time.month > $u64 9) days_passed += $u64 30;
+    if(time.month > $u64 10) days_passed += $u64 31;
+    if(time.month > $u64 11) days_passed += $u64 30;
+    if(time.month > $u64 12) days_passed += $u64 31; 
+    if(is_leap_year(time.year) && time.month > $u64 2) days_passed ++;
+    for(u64 i = $u64 1970; i < time.year; i++){
+        days_passed += $u64 365;
+        if(is_leap_year(i)) days_passed ++;
+    }
+    ans += days_passed * $u64 86400;
+
+    //add the hour/minute/second 
+    ans += time.hours * $u64 3600 + time.minutes * $u64 60 + time.seconds;
+    
+    return ans;
+}
+
+u8 cmos_read_register(u8 which) {
+    outb(CMOS_IN, CMOS_NMI_DISABLE_BIT | which);
+    return inb(CMOS_OUT);
+}
+
+u8 bcd_to_bin(u8 val) {
+    return (val & $u8 0x0f) + ((val >> $u8 4) * $u8 10);
+}
+
+rtc_time cmos_read_time() { 
+    rtc_time t1 = new rtc_time();
+    rtc_time t2 = new rtc_time();
+
+    while(1) {
+        //wait until there's no update in progress
+        while(cmos_read_register(CMOS_REGISTER_STATUSA) & CMOS_UPDATE_IN_PROG_BIT) {
+            //idle
+        }
+
+        //read in stuff twice
+        t1.seconds = $u64 cmos_read_register(CMOS_REGISTER_SECONDS);
+        t1.minutes = $u64 cmos_read_register(CMOS_REGISTER_MINUTES);
+        t1.hours = $u64 cmos_read_register(CMOS_REGISTER_HOURS);
+        t1.day = $u64 cmos_read_register(CMOS_REGISTER_DAY);
+        t1.month = $u64 cmos_read_register(CMOS_REGISTER_MONTH);
+        t1.year = $u64 cmos_read_register(CMOS_REGISTER_YEAR);
+        u64 century1 = $u64 cmos_read_register(CMOS_REGISTER_CENTURY);
+
+        t2.seconds = $u64 cmos_read_register(CMOS_REGISTER_SECONDS);
+        t2.minutes = $u64 cmos_read_register(CMOS_REGISTER_MINUTES);
+        t2.hours = $u64 cmos_read_register(CMOS_REGISTER_HOURS);
+        t2.day = $u64 cmos_read_register(CMOS_REGISTER_DAY);
+        t2.month = $u64 cmos_read_register(CMOS_REGISTER_MONTH);
+        t2.year = $u64 cmos_read_register(CMOS_REGISTER_YEAR);
+        u64 century2 = $u64 cmos_read_register(CMOS_REGISTER_CENTURY);
+
+        //if they're the same, return
+        if(memcmp($void* @t1, $void* @t2, sizeof(rtc_time)) == 0 && century1 == century2) {
+            // how is it encoded?
+            u8 statusB = cmos_read_register(CMOS_REGISTER_STATUSB);
+
+            // BCD conversion if needed
+            if(!(statusB & $u8 0x04)) { // bit 2 = 0 -> BCD mode
+                t1.seconds  = $u64 bcd_to_bin($u8 t1.seconds);
+                t1.minutes  = $u64 bcd_to_bin($u8 t1.minutes);
+                t1.hours    = $u64 bcd_to_bin($u8 (t1.hours & 0x7f));
+                t1.day      = $u64 bcd_to_bin($u8 t1.day);
+                t1.month    = $u64 bcd_to_bin($u8 t1.month);
+                t1.year     = $u64 bcd_to_bin($u8 t1.year);
+                century1    = $u64 bcd_to_bin($u8 century1);
+            }
+
+            // handle 12-hour format
+            if(!(statusB & $u8 0x02)) { // bit 1 = 0 -> 12-hour
+                i32 is_pm = $i32 (t1.hours & 0x80);
+                t1.hours &= 0x7f;
+                if(is_pm && t1.hours != $u64 12) t1.hours += $u64 12;
+                else if(!is_pm && t1.hours == $u64 12) t1.hours = $u64 0;
+            }
+
+            // compute full year
+            if(century1 == $u64 0) {      // century register missing
+                century1 = $u64 20;       // assume 20xx
+            }
+            t1.year = century1 * $u64 100 + t1.year;
+
+            break;
+        }
+    }
+    
+    return t1;
+}
+
+// Memory mapped ConFiGuration table
+struct MCFG {
+    ACPIHeader  header;
+    u64         reserved;
+
+    // followed by 1+ entries:
+    // MCFGEntry[]   ent;
+}
+
+//each MCFG entry describes some contiguous region of MMIO memory
+//in ECAM, each device gets 4KB of memory.
+//A device's memory page can be identified by its bus, slot, and function id. 
+//the page that the device gets can be computed as
+// ((bus * 256) + (slot * 8) + func) * 4096 + base_address
+//where base_address is supplied from the MCFG entry that contains it. 
+//the page usually contains the PCIe configuration header that describes the device
+struct MCFGEntry {
+    u64 base_address;       // ECAM base address
+    u16 segment_group;      // PCI segment group number
+    u8  bus_start;          // start PCI bus number
+    u8  bus_end;            // end PCI bus number
+    u32 reserved;          
+}
+
+// PCI Type 0 Configuration Space Header 
+//used for most 'normal devices'
+struct PCIHeader0 {
+    u16 vendor_id;                      // identifies the manufacturer, 0xFFFF usually means no device present
+    u16 device_id;                      // identifies specific device model of vendor
+    u16 command;                        // bits the OS can control
+    u16 status;                         // what the device reports
+    u8 revision_id;                     // vendor-defined revision of silicon/implementation
+
+    // these three bits can tell you what kind of device this is
+    u8 prog_if;                         // programming interface
+    u8 subclass;                        
+    u8 class_code;
+
+    u8 cacheline_size;                  // how big the CPU cache line is, mostly irrelevant 
+    u8 latency_timer;                   // how long the device can hold the bus, mostly irrelevant
+    u8 header_type;                     // some flags
+    u8 bist;                            // built in self test
+    
+    u32 BAR0;                           // Base Address Registers
+    u32 BAR1;                           // these tell you the address ranges this device uses for MMIO
+    u32 BAR2;                           // low bits are sometimes flags, mask them off
+    u32 BAR3;
+    u32 BAR4;
+    u32 BAR5;
+
+    u32 cis_ptr;                        // card information structure pointer, mostly irrelevant
+    u16 subsystem_vendor_id;            // identifies board variant
+    u16 subsystem_id;                   // identifies OEM (original equipment manufacturer) variant
+    u32 expansion_rom_base_addr;        // pointer to optional option ROM
+    u8 capabilities_ptr;                // offset to standard capability struct if (1 << 4) set in status
+    u8[7] reserved0;
+    u8 interrupt_line;                  // tells you the PIC IRQ number 
+    u8 interrupt_pin;                   // tells you the INTx pin 
+    u8 min_gnt;                         // PCI bus timing hints, mostly irrelevant
+    u8 max_lat;
+}
+
+void init_mcfg(MCFG* mcfg) {
+    println("start init mcfg");
+
+    assert(sizeof(PCIHeader0) == $u64 64, "init_mcfg() : PCIHeader0 must be 64 bytes");
+
+    u64 total_length = $u64 mcfg->header.length;
+    u64 total_off = sizeof(ACPIHeader) + sizeof(u64);
+    assert(total_length >= total_off, "init_mcfg() : MCFG table too small"); 
+    assert((total_length - total_off) % sizeof(MCFGEntry) == 0x0, "init_mcfg() : MCFG entries not aligned");
+    u64 nr_ent = (total_length - total_off) / sizeof(MCFGEntry);
+
+    MCFGEntry* ents = $MCFGEntry* ($u64 mcfg + total_off);
+    for(u64 i = 0x0; i < nr_ent; i++) {
+        MCFGEntry* ent = @(ents[i]);
+        for(u64 bus = $u64 ent->bus_start; bus <= $u64 ent->bus_end; bus++) {
+            for(u64 slot = 0x0; slot < $u64 32; slot++) {
+                for(u64 func = 0x0; func < $u64 8; func++) {
+                    u64 addr = ((bus * $u64 256) + (slot * $u64 8) + func) * PAGE_SIZE + ent->base_address;
+
+                    // if not mapped, identity map this page
+                    pagetable_t pt = pt_get_current();
+                    pt_map_page_if_not_mapped(pt, $void* addr, $void* addr, PTE_WRITEABLE);
+
+                    u32 vendor_device = ($u32* addr)[0];
+                    if((vendor_device & $u32 0xFFFF) == $u32 0xFFFF) continue;  //no device here
+
+                    u16 vendor_id = $u16 (vendor_device & $u32 0xFFFF);
+                    u16 device_id = $u16 ((vendor_device & $u32 0xFFFF0000) >> $u32 16);
+
+                    u8 class    = ($u8* addr)[0x0B];
+                    u8 subclass = ($u8* addr)[0x0A];
+                    u8 progif   = ($u8* addr)[0x09];
+
+                    if (vendor_id == INTEL_VEND) {
+                        if(device_id == E1000_DEV) {
+                            // found intel e1000 nic
+                            e1000_init(addr);
+                        }
+                    }
+
+                    if(vendor_id == REALTEK_VEND) {
+                        if(device_id == RTL8168_DEV) {
+                            // found realtek ethernet
+                            rtl8111_init(addr);
+                        }
+                    }
+
+                    if(class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
+                        if(progif == $u8 0x30) {
+                            // found xHCI controller
+                            init_xhci(addr);
+                        }
+                        else if(progif == $u8 0x20) {
+                            panic("found EHCI controller");
+                        }
+                        else if(progif == $u8 0x10) {
+                            panic("found OHCI controller");
+                        }
+                        else if(progif == $u8 0x00) {
+                            panic("found UHCI controller");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println("done init mcfg");
+}
+
+//returns the address of the PCI capability on success
+//returns 0 on failure
+u64 pci_find_capability_addr(PCIHeader0* pci_hdr, u8 tgt_id) {
+    //check for existence of PCI capabilities
+    if((pci_hdr->status & ($u16 1 << $u16 4)) == $u16 0) {
+        //no capabilities
+        return 0x0;
+    }
+
+    u64 addr = $u64 pci_hdr;
+    u64 ptr = $u64 pci_hdr->capabilities_ptr;
+    while(ptr) {
+        u8 cap_id = ($u8* (addr + ptr))[0];
+        u8 next_ptr = ($u8* (addr + ptr))[1];
+        if(cap_id == tgt_id) {
+            //found it
+            return $u64 addr + ptr;
+        }
+        ptr = $u64 next_ptr;
+    }
+    return 0x0;
+}
+
+//returns 0 on success, 1 on failure
+// TODO multiple messages. Instead of only firing on the input vector, you can fire on vectors in range [int_vec, int_vec + 32)
+// TODO masking. It allows you to suppress interrupts for some input vectors
+i32 pci_enable_msi(PCIHeader0* pci_hdr, u8 int_vec) {
+    u64 MSI_addr = pci_find_capability_addr(pci_hdr, $u8 0x05);
+    if(MSI_addr == 0x0) return 1;
+
+    u16 msg_ctrl = ($u16* (MSI_addr + 0x2))[0];
+    i32 is_64bit = 0;
+    i32 masking_enabled = 0;
+    if(msg_ctrl & $u16 (0x1 << 0x7)) {
+        is_64bit = 1;
+    }
+    if(msg_ctrl & $u16 (0x1 << 0x8)) {
+        masking_enabled = 1;
+    }
+
+    //disable multiple messaging
+    msg_ctrl &= $u16 ~(0b0000000001110000);
+
+    //write message address + message data
+    u8 dest_apic_id = $u8 0;        //identifier for CPU, TODO read LAPIC ID
+    u64 LAPIC_base = 0xFEE00000;    //TODO read IA32_APIC_BASE_MSR
+    u64 msg_addr = LAPIC_base + ($u64 dest_apic_id << $u64 12);
+    if(is_64bit) {
+        ($u32* (MSI_addr + 0x4))[0] = $u32 msg_addr;
+        ($u32* (MSI_addr + 0x8))[0] = $u32 (msg_addr >> $u64 32);
+        ($u16* (MSI_addr + 0xC))[0] = $u16 int_vec;
+
+        if(masking_enabled) {
+            //unmask everything
+            ($u32* (MSI_addr + 0x10))[0] = $u32 0;
+        }
+    }
+    else {
+        ($u32* (MSI_addr + 0x4))[0] = $u32 msg_addr;
+        ($u16* (MSI_addr + 0x8))[0] = $u16 int_vec;
+        assert($u32 msg_addr == ($u32* (MSI_addr + 0x4))[0], "pci_enable_msi() : msg_addr should match");
+        assert(!masking_enabled, "pci_enable_msi() : masking should only be enabled with 64-bit addressing also enabled");
+    }
+
+    //enable MSI
+    msg_ctrl |= $u16 (1 << 0);
+    ($u16* (MSI_addr + 0x2))[0] = msg_ctrl;
+
+    return 0;
+}
+
+//returns 0 on success, 1 on failure
+i32 pci_enable_msix(PCIHeader0* pci_hdr, u8 int_vec) {
+    u64 MSIX_addr = pci_find_capability_addr(pci_hdr, $u8 0x11);
+    if(MSIX_addr == 0x0) return 1;
+
+    //explicitly disable MSI-X for now
+    u16 msg_ctrl = ($u16* (MSIX_addr + 0x2))[0];
+    msg_ctrl &= $u16 ~(0x8000);
+    ($u16* (MSIX_addr + 0x2))[0] = msg_ctrl;
+
+    return 1;
+}
