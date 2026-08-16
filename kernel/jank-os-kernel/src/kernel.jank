@@ -247,19 +247,6 @@ i32 main() {
     init_acpi();
     init_ps2();
 
-    init_file();
-    init_serial();
-    init_tty();
-    init_pipe();
-    init_socket();
-
-    init_blockdev();
-    init_ahci();
-    init_usb();
-
-    init_vfs();
-    init_ext2();
-
     // go through PCI devices
     for(u64 i = 0x0; i < PCI_DEVICES.size(); i++) {
         PCIDevice& dev = PCI_DEVICES[i];
@@ -294,6 +281,19 @@ i32 main() {
             }
         }
     }
+
+    init_file();
+    init_serial();
+    init_tty();
+    init_pipe();
+    init_socket();
+
+    init_blockdev();
+    init_ahci();
+    init_usb();
+
+    init_vfs();
+    init_ext2();
 
     blockdev_mount_ext2();
 

@@ -1,5 +1,4 @@
 #include <iostream>;
-#include <assert>;
 #include <intx>;
 #include <string>;
 #include <math>;
@@ -13,6 +12,9 @@
 #include <crypto/X25519>;
 #include <networking/inet>;
 #include <random>;
+#include <syscall>;
+#include <vector>;
+#include <jstring>;
 
 //standard SSH payload types
 // https://www.iana.org/assignments/ssh-parameters/ssh-parameters.xhtml
@@ -310,6 +312,14 @@ packet_builder& operator<<(packet_builder& p, u32 x) {
 }
 
 packet_builder& operator<<(packet_builder& p, string x) {
+    p << $u32 x.size();
+    for(u64 i = 0x0; i < x.size(); i++) {
+        p << x[i];
+    }
+    return p;
+}
+
+packet_builder& operator<<(packet_builder& p, string& x) {
     p << $u32 x.size();
     for(u64 i = 0x0; i < x.size(); i++) {
         p << x[i];

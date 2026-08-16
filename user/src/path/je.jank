@@ -1,10 +1,12 @@
 #include <iostream>;
-#include <assert>;
 #include <wait>;
 #include <dirent>;
 #include <time>;    
 #include <pair>;
 #include <termios>;
+#include <string>;
+#include <syscall>;
+#include <vector>;
 
 //jankedit - simple commandline text editor
 
@@ -16,14 +18,14 @@
 void print_file_type(u32 mode) {
     cout << "type       : ";
     u32 ft = mode & S_IFMT;
-    if(ft == S_IFREG)      cout << "regular file\n";
-    else if(ft == S_IFDIR) cout << "directory\n";
-    else if(ft == S_IFLNK) cout << "symlink\n";
-    else if(ft == S_IFCHR) cout << "char device\n";
-    else if(ft == S_IFBLK) cout << "block device\n";
-    else if(ft == S_IFIFO) cout << "fifo/pipe\n";
-    else if(ft == S_IFSOCK)cout << "socket\n";
-    else                   cout << "unknown\n";
+    if(ft == S_IFREG)       cout << "regular file\n";
+    else if(ft == S_IFDIR)  cout << "directory\n";
+    else if(ft == S_IFLNK)  cout << "symlink\n";
+    else if(ft == S_IFCHR)  cout << "char device\n";
+    else if(ft == S_IFBLK)  cout << "block device\n";
+    else if(ft == S_IFIFO)  cout << "fifo/pipe\n";
+    else if(ft == S_IFSOCK) cout << "socket\n";
+    else                    cout << "unknown\n";
 }
 
 void print_rwx_triple(u32 mode, u32 r, u32 w, u32 x) {

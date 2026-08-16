@@ -263,6 +263,8 @@ void init_usb() {
     assert(XHCI_DID_INIT, "init_usb() : need to have XHCI");
     println("start init usb");
 
+    init_scsi_blockdev_ops();
+
     assert(sizeof(USB_device_descriptor) == $u64 18, "init_usb() : sizeof(device_descriptor) should be 18");
     assert(sizeof(USB_configuration_descriptor) == $u64 9, "init_usb() : sizeof(configuration_descriptor) should be 9");
     assert(sizeof(USB_interface_descriptor) == $u64 9, "init_usb() : sizeof(interface_descriptor) should be 9");
@@ -314,10 +316,6 @@ void init_usb() {
 
     println("USB Device Tree : ");
     usb_print_devtree();
-
-    // panic("stop here for now");
-
-    init_scsi_blockdev_ops();
 
     println("done init usb");
 }

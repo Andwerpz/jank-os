@@ -1,7 +1,8 @@
 #include <iostream>;
-#include <assert>;
+#include <string>;
 #include <wait>;
 #include <dirent>;
+#include <syscall>;
 
 i32 main(u64 argc, u8** argv) {
     if(argc == 0x1) {

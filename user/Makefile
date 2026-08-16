@@ -19,7 +19,7 @@ list:
 # Compile each .jank source to an executable with no extension.
 $(BIN_DIR)/%: $(SRC_DIR)/%.jank
 	@mkdir -p $(dir $@)
-	jjc $< -o $@
+	jjc --follow-includes $< -o $@
 	@chmod +x $@
 
 # ---- Cleanup ----

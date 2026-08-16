@@ -1,9 +1,10 @@
 #include <iostream>;
-#include <assert>;
+#include <string>;
 #include <wait>;
 #include <exec>;
 #include <termios>;
 #include <time>;
+#include <syscall>;
 
 u8 ESC = $u8 0x1B;
 u8 DEL = $u8 0x7F;

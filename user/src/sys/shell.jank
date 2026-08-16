@@ -3,9 +3,10 @@
 #include <iostream>;
 #include <time>;
 #include <wait>;
-#include <assert>;
 #include <exec>;
 #include <termios>;
+#include <vector>;
+#include <syscall>;
 
 [__GLOBAL_FIRST__] u64 CWD_MAXLEN = $u64 4096;
 string getcwd() {

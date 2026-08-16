@@ -1,7 +1,8 @@
 #include <iostream>;
-#include <assert>;
+#include <string>;
 #include <intx>;
 #include <crypto/ed25519>;
+#include <random>;
 
 string to_hashstring(void* buf, u64 len) {
     string res;
@@ -24,9 +25,16 @@ i32 main(u64 argc, u8** argv) {
 
     string algname = new string(argv[1]);
     if(algname == "ed25519") {
+        u8[32] seed;
+        {
+            u8* buf = $u8* malloc(sizeof(u8) * $u64 32);
+            rand_bytes($void* buf, $u64 32);
+            memcpy($void* @seed, $void* buf, $u64 32);
+            free($void* buf, $u64 32);
+        }
         void* private = malloc($u64 32);
         void* public = malloc($u64 32);
-        ed25519_generate_keypair(private, public);
+        ed25519_generate_keypair(seed, private, public);
         cout << "PRIVATE : " << to_hashstring(private, $u64 32) << "\n";
         cout << "PUBLIC  : " << to_hashstring(public, $u64 32) << "\n";
         free(private, $u64 32);

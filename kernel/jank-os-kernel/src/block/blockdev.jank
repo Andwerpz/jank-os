@@ -353,9 +353,10 @@ i32 blockdev_bflush(blockdev* dev, u64 lba) {
 
 [__GLOBAL_FIRST__] u64 BLOCKDEV_BUF_CNT = $u64 0;
 [__GLOBAL_FIRST__] u64 BLOCKDEV_BUF_MAX = $u64 32;
-[__GLOBAL_FIRST__] blockdev* BLOCKDEV_BUF;
+[__GLOBAL_FIRST__] blockdev* BLOCKDEV_BUF = $blockdev* 0x0;
 
 void blockdev_add_dev(blockdev* dev) {
+    assert(BLOCKDEV_BUF != nullptr, "blockdev_add_dev() : should blockdev_init() before adding any devices");
     if(BLOCKDEV_BUF_CNT >= BLOCKDEV_BUF_MAX) {
         panic("blockdev_add_dev() : too many block devices!!");
     }
@@ -367,6 +368,7 @@ void blockdev_add_dev(blockdev* dev) {
 
 // creates a block device and adds it to the block device buffer
 void blockdev_create(u64 type, u64 block_size, void* resource_ptr, blockdev_ops* ops) {
+    assert(ops != nullptr, "blockdev_create() : ops should not be null");
     blockdev* dev = $blockdev* malloc(sizeof(blockdev));
     new (dev) blockdev();
 

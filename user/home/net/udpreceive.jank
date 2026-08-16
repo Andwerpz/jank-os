@@ -1,9 +1,8 @@
 #include <iostream>;
-#include <assert>;
 #include <string>;
 #include <vector>;
 #include <networking/inet>;
-
+#include <syscall>;
 
 i32 main(u64 argc, u8** argv) {
     cout << "UDP test" << "\n";

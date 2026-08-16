@@ -1,7 +1,8 @@
 #include <iostream>;
-#include <assert>;
+#include <string>;
 #include <wait>;
 #include <exec>;
+#include <syscall>;
 
 void exec_proc(u8* path, u8* child_home) {
     pid_t pid = sys_fork();

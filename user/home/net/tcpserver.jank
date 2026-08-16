@@ -1,8 +1,9 @@
 #include <iostream>;
-#include <assert>;
 #include <string>;
 #include <vector>;
 #include <networking/inet>;
+#include <syscall>;
+#include <jstring>;
 
 i32 main(u64 argc, u8** argv) {
     cout << "TCP Server test" << "\n";
@@ -43,7 +44,7 @@ i32 main(u64 argc, u8** argv) {
 
             if(n > $i64 0) {
                 cout << "Received request: ";
-                cout.write_to_fd(buf, $u64 n);
+                cout.write(buf, $u64 n);
                 cout << "\n";
                 cout.flush();
             }
