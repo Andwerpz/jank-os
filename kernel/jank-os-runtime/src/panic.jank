@@ -1,6 +1,5 @@
-#include <kernel::vga>;
-#include <kernel::serial>;
-#include <kernel::utils>;
+#include <kernel::dev/vga>;
+#include <kernel::utils/print>;
 
 intrinsic("panic")
 void intrinsic_panic(u8* msg) {

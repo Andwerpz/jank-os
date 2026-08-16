@@ -1,0 +1,1 @@
+This folder is for anything that allows the kernel to make use of hardware resources.

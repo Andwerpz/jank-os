@@ -1,0 +1,1310 @@
+#include <containers::pair>;
+#include <containers::vector>;
+#include <containers::string>;
+
+#include "utils/print.jank";
+#include "fs/file.jank";
+#include "globals.jank";
+
+// Virtual File System
+//in-memory filesystem that mounts other filesystems onto itself. 
+
+//assumptions about mounted filesystems:
+// - must be able to answer the question "given this node, find this child"
+// - directories are mappings from string -> inode number
+// - should be able to implement all other utility functions in vfs_ops
+
+//vfs_inode acts as an interface for filesystem ops
+//vfs_dentry is persistent and forms the in-memory filesystem
+
+//mounts should be handled by the VFS
+//if we mount a filesystem, a vfs_inode is allocated for the mountpoint and persists until it's unmounted.
+
+//I treat chains of mounts as 'one node'
+//if a node is a mountpoint, then its mount_root should have the same name as it. 
+
+//inode operation interface
+struct vfs_ops {
+    //mount ops
+    fn<i32(vfs_inode*, void*, vfs_inode*&)> get_mount_root; //find root of filesystem given mountpoint
+
+    //directory ops
+    fn<i32(vfs_inode*, string, vfs_inode*&)> lookup;        //given inode and child name, find child. Should pass in malloc'd buffer
+    fn<i32(vfs_inode*, vector<string>&)> get_children;      //find names of all children
+    fn<i32(vfs_inode*, i32&)> dir_empty;                    //tells you if the directory is empty
+    fn<i32(vfs_inode*, string)> mkdir;                      //create a new child directory
+    fn<i32(vfs_inode*, string)> rmdir;                      //remove a child directory. Child directory must be empty
+    fn<i32(vfs_inode*, string)> create;                     //creates regular file of size 0
+    fn<i32(vfs_inode*, string)> unlink;                     //removes link from directory to regular file
+
+    //file ops
+    fn<i32(vfs_inode*, u64&)> get_size;                     //get the size of the file in bytes
+    fn<i32(vfs_inode*, u8*, u64, u64, u64&)> read_file;     //read some amount of bytes from a file with offset
+    fn<i32(vfs_inode*, u8*, u64, u64, u64&)> write_file;    //write some amount of bytes to a file with offset
+    fn<i32(vfs_inode*, u64)> truncate;                      //sets the size of the file to equal nsz. 
+
+    //general ops
+    fn<i32(vfs_inode*, stat*)> fstat;                       //fill stat struct
+}
+
+// -- VFS INODE --
+//wrapper class for all nodes
+//these get alloc'd when doing vfs_walk, and only dealloc'd when their subt_refcnt hits 0
+struct vfs_inode {
+    u64 dev;
+    u64 ino;
+
+    vfs_inode* parent;                                  //should always not be nullptr if not root
+    vector<pair<string, vfs_inode*>> children;          //only stores children currently in memory
+    string name;
+    u64 type;               // a type defined in defs.jank
+    u64 refcnt;
+    u64 subt_refcnt;
+
+    //when mounting, refcount of mount_root will be incremented. 
+    //getting rid of mountpoints should be handled specially, so don't have to worry about storing 
+    // mount_root in children. 
+    i32 is_mountpoint;      //if this is true, this node is in 'hosting' fs
+    void* mount_super;      //global context
+    vfs_inode* mount_root;  //root of mounted fs
+
+    //fs specific
+    i32 is_virtual; //currently only true for vfs_dentry 
+    i32 is_root;    //if this is on, then this node is either root of mounted fs or root of entire fs
+    u64 node_sz;
+    u64 node_num;   //fs internal inode number
+    void* node;     //if is not virtual, needs to be dealloced
+    void* super;    //global context
+    vfs_ops* ops;
+
+    vfs_inode(u64 _dev, u64 _ino, string _name, u64 _type, void* _node, vfs_ops* _ops) {
+        this.dev = _dev;
+        this.ino = _ino;
+
+        this.parent = $vfs_inode* nullptr;
+        this.name = _name;
+        this.type = _type;
+        this.refcnt = 0x0;
+        this.subt_refcnt = 0x0;
+
+        this.is_mountpoint = 0;
+        this.mount_super = nullptr;
+        this.mount_root = $vfs_inode* nullptr;
+
+        this.is_virtual = 1;
+        this.is_root = 0;
+        this.node_sz = 0x0;
+        this.node_num = 0x0;
+        this.node = _node;
+        this.super = nullptr;
+        this.ops = _ops;
+    }
+
+    vfs_inode(u64 _dev, u64 _ino, string _name, u64 _type, u64 _node_sz, u64 _node_num, void* _node, void* _super, vfs_ops* _ops) {
+        this.dev = _dev;
+        this.ino = _ino;
+        
+        this.parent = $vfs_inode* nullptr;
+        this.name = _name;
+        this.type = _type;
+        this.refcnt = 0x0;
+        this.subt_refcnt = 0x0;
+
+        this.is_mountpoint = 0;
+        this.mount_super = nullptr;
+        this.mount_root = $vfs_inode* nullptr;
+
+        this.is_virtual = 0;
+        this.is_root = 0;
+        this.node_sz = _node_sz;
+        this.node_num = _node_num;
+        this.node = _node;
+        this.super = _super;
+        this.ops = _ops;        
+    }
+
+    vfs_inode* get_child(string name) {
+        for(u64 i = 0x0; i < this.children.size(); i++) {
+            if(this.children[i].first == name) return this.children[i].second;
+        }
+        return $vfs_inode* nullptr;
+    }
+
+    void add_child(string name, vfs_inode* child) {
+        assert($void* this.get_child(name) == nullptr, "vfs_inode::add_child() : child already exists");
+        assert($void* child->parent == nullptr, "vfs_inode::add_child() : child already has parent");
+        this.children.push_back(new pair<string, vfs_inode*>(name, child));
+        child->parent = @this;
+    }
+
+    ~vfs_inode() {
+        assert(@this != VFS_ROOT, "vfs_inode::~() : should never dealloc root");
+        assert(this.subt_refcnt == 0x0, "vfs_inode::~() : should only dealloc non-referenced inodes");
+        assert($void* this.parent != nullptr, "vfs_inode::~() : should always have parent");
+        assert(this.children.size() == 0x0, "vfs_inode::~() : should not dealloc nodes with children");
+
+        //if this is not virtual, need to dealloc underlying fs node
+        if(!this.is_virtual) {
+            assert(this.node != nullptr, "vfs_inode::~() : non-virtual nodes should have valid node pointer");
+            assert(this.node_sz != 0x0, "vfs_inode::~() : node_sz should be non-zero on non-virtual nodes");
+            free(this.node, this.node_sz);
+            this.node = nullptr;
+        }
+
+        //remove reference of this node from parent
+        {
+            u64 ind = this.parent->children.size();
+            for(u64 i = 0x0; i < this.parent->children.size(); i++) {
+                if(this.parent->children[i].second == @this) {
+                    assert(ind == this.parent->children.size(), "vfs_inode::~() : should only contain child once");
+                    ind = i;
+                }
+            }
+            assert(ind != this.parent->children.size(), "vfs_inode::~() : should find child");
+            this.parent->children.erase(ind);
+        }
+    }
+
+    i32 is_directory() {
+        return this.type == DT_DIR;
+    }
+
+    i32 is_file() {
+        return this.type == DT_REG;
+    }
+}
+
+// root of the entire VFS tree
+vfs_inode* VFS_ROOT = $vfs_inode* nullptr;
+
+void vfs_inc_refcnt(vfs_inode* node) {
+    node->refcnt ++;
+    node->subt_refcnt ++;
+    while($void* node->parent != nullptr) {
+        node = node->parent;
+        node->subt_refcnt ++;
+    }
+}
+
+//if the subt_refcnt goes to 0, the nodes get dealloced. 
+void vfs_dec_refcnt(vfs_inode* node) {
+    assert(node->refcnt > 0x0, "vfs_dec_refcnt() : double ref decrement");
+
+    //dec refcnt
+    node->refcnt --;
+    node->subt_refcnt --;
+    vfs_inode* ptr = node;
+    while($void* ptr->parent != nullptr) {
+        ptr = ptr->parent;
+        ptr->subt_refcnt --;
+    }
+
+    //dealloc nodes with 0 subt references 
+    ptr = node;
+    while(ptr->subt_refcnt == 0x0) {
+        vfs_inode* par = ptr->parent;
+        ptr->~();
+        free($void* ptr, sizeof(vfs_inode));
+        ptr = par;
+    }
+}
+
+[__GLOBAL_FIRST__] i32 VFS_WALK_FOUND       = 0;
+[__GLOBAL_FIRST__] i32 VFS_WALK_ERR         = 1;
+[__GLOBAL_FIRST__] i32 VFS_WALK_MISSING     = 2;
+
+//given an inode, finds a child
+//if create flag is set, will create virtual directory nodes if they do not exist
+//currently, virtual nodes can only be created as children of other virtual nodes
+//this should only be used within vfs_walk, use vfs_walk if you want to do lookups. 
+//returns VFS_WALK_FOUND if child exists
+//returns VFS_WALK_MISSING if child does not exist and no other error occurs
+//returns VFS_WALK_ERR otherwise
+i32 vfs_lookup(vfs_inode* node, string child, i32 create, vfs_inode*& res) {
+    //special cases
+    if(child == "..") {
+        //walk up until we hit a non-mountpoint, or we can't anymore. 
+        //if we are currently at the root, this should just return the input node
+        vfs_inode* ptr = node;
+        if($void* ptr->parent != nullptr) ptr = ptr->parent;
+        while(ptr->is_mountpoint) {
+            if($void* ptr->parent == nullptr) {
+                free($void* res, sizeof(vfs_inode));
+                res = node;
+                return VFS_WALK_FOUND;
+            }
+            ptr = ptr->parent;
+        }
+        res = ptr;
+        return VFS_WALK_FOUND;
+    }
+    else if(child == ".") {
+        //do nothing
+        res = node;
+        return VFS_WALK_FOUND;
+    }
+
+    //after this point, must ensure that the current node is a directory
+    if(!node->is_directory()) {
+        return VFS_WALK_ERR;
+    }
+
+    //see if child already exists
+    while(1) {
+        vfs_inode* child_node = node->get_child(child);
+        if($void* child_node == nullptr) {
+            break;
+        }
+
+        //walk child until it's not mountpoint
+        while(child_node->is_mountpoint) {
+            assert($void* child_node->mount_root != nullptr, "vfs_lookup() : mountpoint should always have valid mount_root");
+            child_node = child_node->mount_root;
+        }
+
+        //free caller associated buffer
+        free($void* res, sizeof(vfs_inode));
+        res = child_node;
+        return VFS_WALK_FOUND;
+    }
+
+    //use fs lookup op to create new instance of child
+    i32 lookup_status = node->ops->lookup#(node, child, res);
+    if(lookup_status) {
+        if(lookup_status == VFS_WALK_MISSING && create && node->is_virtual) {
+            //create new child here
+            vfs_dentry* dentry = $vfs_dentry* node->node;
+            assert(!dentry->check_magic(), "vfs_lookup() : vfs_dentry magic mismatch");
+
+            vfs_dentry* dentry_child = $vfs_dentry* malloc(sizeof(vfs_dentry));
+            new (dentry_child) vfs_dentry();
+            dentry->add_child(child, dentry_child);
+
+            new (res) vfs_inode(FILE_VFS_DENTRY_DEV, dentry_child->ino, child, DT_DIR, $void* dentry_child, VFS_DENTRY_OPS);
+            res->is_virtual = 1;
+        }
+        else {
+            //lookup failed
+            return lookup_status;
+        }
+    }
+
+    //register as child 
+    node->add_child(child, res);
+
+    return VFS_WALK_FOUND;
+}
+
+i32 vfs_lookup(vfs_inode* node, string child, vfs_inode*& res) {
+    return vfs_lookup(node, child, 0, res);
+}
+
+//should walk the filesystem using the relative path starting from 'root' 
+//if create flag is set, will create virtual nodes if nodes do not exist via vfs_lookup
+//at the end, increments refcount of resulting inode. 
+//res should not be preallocated by caller. 
+//returns VFS_WALK_FOUND on success
+//returns VFS_WALK_MISSING if every component of the path until the last component was found
+//returns VFS_WALK_ERR on other failure
+i32 vfs_walk(vfs_inode* root, string path, i32 create, vfs_inode*& res) {
+    assert(root->subt_refcnt != 0x0, "vfs_walk() : root should be referenced");
+    vector<string> parts = path.split('/');
+
+    //walk root until it's not a mountpoint
+    while(root->is_mountpoint) {
+        assert($void* root->mount_root != nullptr, "vfs_walk() : mountpoint should always have valid mount_root");
+        root = root->mount_root;
+    }
+
+    //do walk
+    vfs_inode* cur = root;
+    for(u64 i = 0x0; i < parts.size(); i++) {
+        vfs_inode* next = $vfs_inode* malloc(sizeof(vfs_inode));
+        i32 lookup_status = vfs_lookup(cur, parts[i], create, next);
+        if(lookup_status) {
+            //lookup failed, dealloc any temp nodes
+            while(cur->subt_refcnt == 0x0) {
+                assert($void* cur->parent != nullptr, "vfs_walk() : temp node should always have parent");
+                vfs_inode* par = cur->parent;
+                cur->~();
+                free($void* cur, sizeof(vfs_inode));
+                cur = par;
+            }
+
+            assert(lookup_status != VFS_WALK_FOUND, "vfs_walk() : status should be some error at this point");
+            if(lookup_status == VFS_WALK_MISSING) {
+                if(i + 0x1 == parts.size()) return VFS_WALK_MISSING;    //every other component except for last was found
+                else return VFS_WALK_ERR;
+            }
+            else return VFS_WALK_ERR;
+        }
+
+        //if cur has no references and our move was '..', dealloc cur
+        if(parts[i] == ".." && cur->subt_refcnt == 0x0) {
+            cur->~();
+            free($void* cur, sizeof(vfs_inode));
+        }
+
+        cur = next;
+    }
+
+    //set res
+    res = cur;
+    assert(!res->is_mountpoint, "vfs_walk() : res should never be mountpoint");
+
+    //increment res refcnt
+    vfs_inc_refcnt(res);
+
+    return VFS_WALK_FOUND;
+}
+
+i32 vfs_walk(vfs_inode* root, string path, vfs_inode*& res) {
+    return vfs_walk(root, path, 0, res);
+}
+
+i32 vfs_walk(string path, i32 create, vfs_inode*& res) {
+    return vfs_walk(VFS_ROOT, path, create, res);
+}
+
+i32 vfs_walk(string path, vfs_inode*& res) {
+    return vfs_walk(VFS_ROOT, path, 0, res);
+}
+
+i32 vfs_walk(vfs_inode* root, string path) {
+    vfs_inode* tmp = $vfs_inode* nullptr;
+    i32 status = vfs_walk(root, path, 0, tmp);
+    if(status == VFS_WALK_FOUND) vfs_dec_refcnt(tmp);
+    return status;
+}
+
+//can only mount on directories
+//0 on success, 1 on failure
+i32 vfs_mount(string path, void* super, vfs_ops* ops) {
+    vfs_inode* walk_res;
+    if(vfs_walk(path, 1, walk_res)) {
+        //failed to walk path
+        cout << "Mount failed to walk path\n";
+        return 1;
+    }
+    assert(!walk_res->is_mountpoint, "vfs_mount() : result from walk should never be mountpoint");
+
+    //check if underlying fs node is a directory
+    if(!walk_res->is_directory()) {
+        vfs_dec_refcnt(walk_res);
+        cout << "Can only mount to directories\n";
+        return 1;
+    }
+
+    //try to create root of mounted filesystem
+    vfs_inode* mount_root = $vfs_inode* malloc(sizeof(vfs_inode));
+    if(ops->get_mount_root#(walk_res, super, mount_root)) {
+        //failed to create mount root
+        vfs_dec_refcnt(walk_res);
+        free($void* mount_root, sizeof(vfs_inode));
+        cout << "Failed to create mount root\n";
+        return 1;
+    }
+
+    //ok, go ahead and mount
+    walk_res->is_mountpoint = 1;
+    walk_res->mount_super = super;
+    walk_res->mount_root = mount_root;
+    mount_root->is_root = 1;
+
+    vfs_inc_refcnt(mount_root);    
+    vfs_dec_refcnt(walk_res);
+
+    return 0;
+}
+//TODO vfs_unmount()
+
+i32 vfs_get_children(vfs_inode* node, vector<string>& res) {
+    if(!node->is_directory()) return 1;
+    return node->ops->get_children#(node, res);
+}
+
+i32 vfs_get_children(string path, vector<string>& res) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 ret = vfs_get_children(root, res);
+    vfs_dec_refcnt(root);
+    return ret;
+}
+
+i32 vfs_dir_empty(vfs_inode* node, i32& res) {
+    if(!node->is_directory()) return 1;
+    return node->ops->dir_empty#(node, res);
+}
+
+i32 vfs_mkdir(vfs_inode* node, string path) {
+    if(path.size() == 0x0) {
+        //can't have empty path
+        cout << "mkdir can\'t have empty path\n";
+        return 1;
+    }
+
+    //find last occurrence of '/'
+    string parent_path = new string("");
+    string child = path;
+    for(u64 i = path.size() - 0x1; ; i--) {
+        if(path[i] == '/') {
+            parent_path = path.substr(0x0, i + 0x1);
+            child = path.substr(i + 0x1);
+            break;
+        }
+        if(i == 0x0) break;
+    }
+    if(child.size() == 0x0) {
+        cout << "mkdir child must be non-empty\n";
+        return 1;
+    }
+    assert(child.size() != 0x0, "vfs_mkdir() : child should be non-empty");
+
+    //walk to parent
+    vfs_inode* parent;
+    if(vfs_walk(node, parent_path, parent)) return 1;
+
+    //make sure that parent is a directory
+    if(!parent->is_directory()) {
+        cout << "mkdir parent must be directory\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    //make sure that parent is missing child
+    if(!vfs_walk(parent, child) == VFS_WALK_MISSING) {
+        cout << "mkdir child is present in parent\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    //mkdir at parent
+    if(node->ops->mkdir#(parent, child)) {
+        cout << "mkdir# failed\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    vfs_dec_refcnt(parent);
+    return 0;
+}
+
+i32 vfs_mkdir(string path) {
+    return vfs_mkdir(VFS_ROOT, path);
+}
+
+i32 vfs_rmdir(vfs_inode* node, string path) {
+    //walk to child
+    vfs_inode* child;
+    if(vfs_walk(node, path, child)) {
+        //walk failed
+        cout << "RMDIR WALK FAILED\n";
+        return 1;
+    }
+
+    //make sure child isn't root of a fs
+    if(child->is_root) {
+        //can't rm roots
+        cout << "RMDIR CANT RM ROOTS\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //make sure child is a directory
+    if(!child->is_directory()) {
+        //this is not a directory
+        cout << "RMDIR NOT A DIRECTORY\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //make sure there's nothing else referencing child
+    if(child->subt_refcnt > 0x1) {
+        //there's something else, can't rm
+        cout << "RMDIR CANT REMOVE REFERENCED DIR\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //make sure child is empty
+    i32 is_empty;
+    if(vfs_dir_empty(child, is_empty)) {
+        //dir empty check failed
+        cout << "RMDIR EMPTY CHECK FAILED\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+    if(!is_empty) {
+        //must be empty to rm
+        cout << "RMDIR NOT EMPTY\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //get parent
+    assert(child->parent != nullptr, "vfs_rmdir() : at this point, child should always have a parent");
+    vfs_inode* parent = child->parent;
+
+    //do rm
+    vfs_inc_refcnt(parent);
+    string child_name = child->name;
+    vfs_dec_refcnt(child);
+    if(parent->ops->rmdir#(parent, child_name)) {
+        //rm failed
+        cout << "RMDIR RM FAILED\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+    assert(parent->get_child(child_name) == nullptr, "vfs_rmdir() : child should be removed from vfs tree");
+
+    vfs_dec_refcnt(parent);
+    return 0;
+}
+
+i32 vfs_rmdir(string path) {
+    return vfs_rmdir(VFS_ROOT, path);
+}
+
+i32 vfs_create(vfs_inode* node, string path) {
+    if(path.size() == 0x0) {
+        //can't have empty path
+        cout << "create can\'t have empty path\n";
+        return 1;
+    }
+
+    //find last occurrence of '/'
+    string parent_path = new string("");
+    string child = path;
+    for(u64 i = path.size() - 0x1; ; i--) {
+        if(path[i] == '/') {
+            parent_path = path.substr(0x0, i + 0x1);
+            child = path.substr(i + 0x1);
+            break;
+        }
+        if(i == 0x0) break;
+    }
+    if(child.size() == 0x0) {
+        cout << "create child must be non-empty\n";
+        return 1;
+    }
+    assert(child.size() != 0x0, "vfs_create() : child should be non-empty");
+
+    //walk to parent
+    vfs_inode* parent;
+    if(vfs_walk(node, parent_path, parent)) return 1;
+
+    //make sure that parent is a directory
+    if(!parent->is_directory()) {
+        cout << "create parent must be directory\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    //make sure that parent is missing child
+    if(!vfs_walk(parent, child) == VFS_WALK_MISSING) {
+        cout << "create child is present in parent\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    //create at parent
+    if(node->ops->create#(parent, child)) {
+        cout << "create# failed\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+
+    vfs_dec_refcnt(parent);
+    return 0;
+}
+
+i32 vfs_create(string path) {
+    return vfs_create(VFS_ROOT, path);
+}
+
+i32 vfs_unlink(vfs_inode* node, string path) {
+    //walk to child
+    vfs_inode* child;
+    if(vfs_walk(node, path, child)) {
+        //walk failed
+        cout << "UNLINK WALK FAILED\n";
+        return 1;
+    }
+
+    //make sure child is a regular file
+    if(!child->is_file()) {
+        //this is not a file
+        cout << "UNLINK NOT A FILE\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+    assert(!child->is_root, "vfs_unlink() : non-directory cannot be root");
+
+    //make sure there's nothing else referencing child
+    if(child->subt_refcnt > 0x1) {
+        //there's something else, can't rm
+        cout << "UNLINK CANT REMOVE REFERENCED FILE\n";
+        vfs_dec_refcnt(child);
+        return 1;
+    }
+
+    //get parent
+    assert(child->parent != nullptr, "vfs_unlink() : at this point, child should always have a parent");
+    vfs_inode* parent = child->parent;
+
+    //do rm
+    vfs_inc_refcnt(parent);
+    string child_name = child->name;
+    vfs_dec_refcnt(child);
+    if(parent->ops->unlink#(parent, child_name)) {
+        //rm failed
+        cout << "UNLINK FS UNLINK FAILED\n";
+        vfs_dec_refcnt(parent);
+        return 1;
+    }
+    assert(parent->get_child(child_name) == nullptr, "vfs_unlink() : child should be removed from vfs tree");
+
+    vfs_dec_refcnt(parent);
+    return 0;
+}   
+
+i32 vfs_unlink(string path) {
+    return vfs_unlink(VFS_ROOT, path);
+}
+
+i32 vfs_get_size(vfs_inode* node, u64& res) {
+    if(!node->is_file()) return 1;
+    return node->ops->get_size#(node, res);
+}
+
+i32 vfs_get_size(string path, u64& res) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 status = vfs_get_size(root, res);
+    vfs_dec_refcnt(root);
+    return status;
+}
+
+i32 vfs_read_file(vfs_inode* node, u8* buf, u64 amt, u64 off, u64& res) {
+    if(!node->is_file()) return 1;
+    return node->ops->read_file#(node, buf, amt, off, res);
+}
+
+i32 vfs_read_file(string path, u8* buf, u64 amt, u64 off, u64& res) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 status = vfs_read_file(root, buf, amt, off, res);
+    vfs_dec_refcnt(root);
+    return status;
+}
+
+i32 vfs_write_file(vfs_inode* node, u8* buf, u64 amt, u64 off, u64& res) {
+    if(!node->is_file()) return 1;
+    return node->ops->write_file#(node, buf, amt, off, res);
+}
+
+i32 vfs_write_file(string path, u8* buf, u64 amt, u64 off, u64& res) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 status = vfs_write_file(root, buf, amt, off, res);
+    vfs_dec_refcnt(root);
+    return status;
+}
+
+i32 vfs_truncate(vfs_inode* node, u64 nsz) {
+    if(!node->is_file()) return 1;
+    return node->ops->truncate#(node, nsz);
+}
+
+i32 vfs_truncate(string path, u64 nsz) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 status = vfs_truncate(root, nsz);
+    vfs_dec_refcnt(root);
+    return status;
+}
+
+i32 vfs_fstat(vfs_inode* node, stat* stat) {
+    return node->ops->fstat#(node, stat);
+}
+
+i32 vfs_fstat(string path, stat* stat) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 ret = vfs_fstat(root, stat);
+    vfs_dec_refcnt(root);
+    return ret;
+}
+
+i32 vfs_is_file(vfs_inode* node, i32& res) {
+    res = node->is_file();
+    return 0;
+}
+
+i32 vfs_is_file(string path, i32& res) {
+    vfs_inode* node;
+    if(vfs_walk(path, 0, node)) return 1;
+    res = node->is_file();
+    vfs_dec_refcnt(node);
+    return 0;
+}
+
+i32 vfs_is_directory(vfs_inode* node, i32& res) {
+    res = node->is_directory();
+    return 0;
+}
+
+i32 vfs_is_directory(string path, i32& res) {
+    vfs_inode* node;
+    if(vfs_walk(path, 0, node)) return 1;
+    res = node->is_directory();
+    vfs_dec_refcnt(node);
+    return 0;
+}
+
+i32 _vfs_print_tree(vfs_inode* root, u64 depth) {
+    //gather all children of root
+    vector<string> children;
+    if(vfs_get_children(root, children)) {
+        return 1;
+    }
+
+    for(u64 i = 0x0; i < children.size(); i++) {
+        if(children[i] == "." || children[i] == "..") continue;
+
+        //get child
+        vfs_inode* child;
+        if(vfs_walk(root, children[i], child)) {
+            return 1;
+        }
+        for(u64 j = 0x0; j < depth; j++) cout << "    ";
+        cout << children[i] << "\n";
+
+        //if child is not directory, skip 
+        if(!child->is_directory()) {
+            vfs_dec_refcnt(child);
+            continue;
+        }
+
+        //print child
+        if(_vfs_print_tree(child, depth + 0x1)) {
+            vfs_dec_refcnt(child);
+            return 1;
+        }
+
+        vfs_dec_refcnt(child);
+    }
+    return 0;
+}
+
+i32 vfs_print_tree(string path) {
+    vfs_inode* root;
+    if(vfs_walk(path, 0, root)) return 1;
+    i32 status = _vfs_print_tree(root, 0x0);
+    vfs_dec_refcnt(root);
+    return status;
+}
+
+//returns the absolute pathname of node in res
+i32 vfs_get_pathname(vfs_inode* node, string& res) {
+    vector<string> parts;
+    parts.push_back(node->name);
+    while(1) {
+        vfs_inode* par;
+        if(vfs_walk(node, new string(".."), par)) {
+            //somehow walk failed
+            return 1;
+        }
+        
+        //if we're at the root, walk should return the same node
+        if(par == node) {
+            break;
+        }
+
+        parts.push_back(par->name);
+        vfs_dec_refcnt(par);
+        node = par;
+    }
+    assert(parts.size() >= 0x1, "vfs_get_pathname() : should have at least one part");
+    assert(parts[parts.size() - 0x1] == "", "vfs_get_pathname() : root part should be empty string");
+    
+    if(parts.size() == 0x1) {
+        //special case for root
+        res = new string("/");
+    }
+    else {
+        res = new string("");
+        for(i32 i = $i32 parts.size() - 2; i >= 0; i--) {
+            res = res + "/" + parts[i];
+        }
+    }
+    return 0;
+}
+
+//returns parent and bumps its refcnt
+i32 vfs_get_parent(vfs_inode* node, vfs_inode*& res) {
+    if(vfs_walk(node, new string(".."), res)) return 1;
+    return 0;
+}
+
+// -- VFS DENTRY --
+//virtual directory node
+[__GLOBAL_FIRST__] u64 VFS_DENTRY_NEXT_INO = 0x1;
+struct vfs_dentry {
+    u8[4] magic;  // "DENT"
+    u64 ino;
+    vfs_dentry* parent;
+    vector<pair<string, vfs_dentry*>> children;
+
+
+    vfs_dentry() {
+        this.init_magic();
+        this.ino = VFS_DENTRY_NEXT_INO ++;
+        this.parent = $vfs_dentry* nullptr;
+        this.children.push_back(new pair<string, vfs_dentry*>(new string("."), @this));
+    }
+
+    vfs_dentry(vfs_dentry* parent) {
+        this.init_magic();
+        this.ino = VFS_DENTRY_NEXT_INO ++;
+        this.parent = parent;
+        this.children.push_back(new pair<string, vfs_dentry*>(new string("."), @this));
+        this.children.push_back(new pair<string, vfs_dentry*>(new string(".."), this.parent));
+    }
+
+    ~vfs_dentry() {
+        assert(this.parent == nullptr, "~vfs_dentry() : parent should be nullptr");
+        assert(this.children.size() == 0x0, "~vfs_dentry() : should have no children");
+        assert(!this.check_magic(), "~vfs_dentry() : magic should be good");
+    }
+
+    void init_magic() {
+        this.magic[0] = 'D';
+        this.magic[1] = 'E';
+        this.magic[2] = 'N';
+        this.magic[3] = 'T';
+    }
+
+    i32 check_magic() {
+        return this.magic[0] != 'D' || this.magic[1] != 'E' || this.magic[2] != 'N' || this.magic[3] != 'T';
+    }
+
+    void add_child(string name, vfs_dentry* child) {
+        assert($void* child->parent == nullptr, "vfs_dentry::add_child() : child must have no parent");
+        this.children.push_back(new pair<string, vfs_dentry*>(name, child));
+        child->parent = @this;
+        child->children.push_back(new pair<string, vfs_dentry*>(new string(".."), @this));
+    }
+
+    void remove_child(string name) {
+        for(u64 i = 0x0; i < this.children.size(); i++) {
+            if(this.children[i].first == name) {
+                vfs_dentry* child = this.children[i].second;
+                assert(child->children.size() == 0x0, "vfs_dentry::remove_child() : child should be empty");
+
+                child->parent = $vfs_dentry* nullptr;
+                child->~();
+                this.children.erase(i);
+
+                return;
+            }
+        }
+        panic("vfs_dentry::remove_child() : child should always exist");
+    }
+
+    i32 has_child(string name) {
+        for(u64 i = 0x0; i < this.children.size(); i++) {
+            if(this.children[i].first == name) return 1;
+        }
+        return 0;
+    }
+}
+
+vfs_ops* VFS_DENTRY_OPS;
+void init_vfs_dentry() {
+    VFS_DENTRY_OPS = $vfs_ops* malloc(sizeof(vfs_ops));
+
+    VFS_DENTRY_OPS->get_mount_root = #<vfs_dentry_get_mount_root(vfs_inode*, void*, vfs_inode*&)>;
+
+    VFS_DENTRY_OPS->lookup = #<vfs_dentry_lookup(vfs_inode*, string, vfs_inode*&)>;
+    VFS_DENTRY_OPS->get_children = #<vfs_dentry_get_children(vfs_inode*, vector<string>&)>;
+    VFS_DENTRY_OPS->dir_empty = #<vfs_dentry_dir_empty(vfs_inode*, i32&)>;
+    VFS_DENTRY_OPS->mkdir = #<vfs_dentry_mkdir(vfs_inode*, string)>;
+    VFS_DENTRY_OPS->rmdir = #<vfs_dentry_rmdir(vfs_inode*, string)>;
+    VFS_DENTRY_OPS->create = #<vfs_dentry_create(vfs_inode*, string)>;
+    VFS_DENTRY_OPS->unlink = #<vfs_dentry_unlink(vfs_inode*, string)>;
+
+    VFS_DENTRY_OPS->get_size = #<vfs_dentry_get_size(vfs_inode*, u64&)>;
+    VFS_DENTRY_OPS->read_file = #<vfs_dentry_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
+    VFS_DENTRY_OPS->write_file = #<vfs_dentry_write_file(vfs_inode*, u8*, u64, u64, u64&)>;
+    VFS_DENTRY_OPS->truncate = #<vfs_dentry_truncate(vfs_inode*, u64)>;
+
+    VFS_DENTRY_OPS->fstat = #<vfs_dentry_fstat(vfs_inode*, stat*)>;
+}
+
+i32 vfs_dentry_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_get_mount_root() : node magic not good");
+    return 1;   //should never be mounting vfs onto something else
+}
+
+i32 vfs_dentry_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_lookup() : node magic not good");
+
+    for(u64 i = 0x0; i < node->children.size(); i++) { 
+        if(node->children[i].first == child) {
+            vfs_dentry* child_node = node->children[i].second;
+            new (res) vfs_inode(FILE_VFS_DENTRY_DEV, child_node->ino, child, DT_DIR, $void* child_node, VFS_DENTRY_OPS);
+            res->is_virtual = 1;
+            res->node_sz = sizeof(vfs_dentry);
+            return VFS_WALK_FOUND;
+        }
+    }
+
+    //failed to find child
+    return VFS_WALK_MISSING;
+}
+
+i32 vfs_dentry_get_children(vfs_inode* _node, vector<string>& ret) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_get_children() : node magic not good");
+
+    for(u64 i = 0x0; i < node->children.size(); i++) {
+        ret.push_back(node->children[i].first);
+    }
+    return 0;
+}
+
+i32 vfs_dentry_dir_empty(vfs_inode* _node, i32& ret) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_dir_empty() : node magic not good");
+
+    ret = node->children.size() == 0x0;
+    return 0;
+}
+
+i32 vfs_dentry_mkdir(vfs_inode* _node, string name) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_mkdir() : node magic not good");
+
+    if(node->has_child(name)) {
+        return 1;   //directory already has child with same name
+    }
+
+    //add child
+    vfs_dentry* child = $vfs_dentry* malloc(sizeof(vfs_dentry));
+    new (child) vfs_dentry();
+    node->add_child(name, child);
+
+    return 0;
+}
+
+i32 vfs_dentry_rmdir(vfs_inode* _node, string name) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_rmdir() : node magic not good");
+
+    for(u64 i = 0x0; i < node->children.size(); i++) {
+        if(node->children[i].first == name) {
+            i32 is_empty;
+            if(vfs_dentry_dir_empty(_node, is_empty)) {
+                panic("vfs_dentry_rmdir() : this should not fail");
+            }
+            if(!is_empty) {
+                //can't rm empty dir
+                return 1;
+            }
+
+            //remove the child
+            node->remove_child(name);
+
+            return 0;
+        }
+    }
+
+    //could not find child
+    return 1;
+}
+
+i32 vfs_dentry_create(vfs_inode* _node, string name) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_create() : node magic not good");
+    return 1;   //can't create files under vfs_dentry
+}
+
+i32 vfs_dentry_unlink(vfs_inode* _node, string name) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_unlink() : node magic not good");
+    return 1;   //vfs_dentry can't contain files
+}
+
+i32 vfs_dentry_get_size(vfs_inode* _node, u64& res) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_get_size() : node magic not good");
+    return 1;   //dentries aren't files
+}
+
+i32 vfs_dentry_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_read_file() : node magic not good");
+    return 1;   //can't read from dentries 
+}
+
+i32 vfs_dentry_write_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_write_file() : node magic not good");
+    return 1;   //can't write to dentries
+}
+
+i32 vfs_dentry_truncate(vfs_inode* _node, u64 nsz) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_truncate() : node magic not good");
+    return 1;   //can't truncate dentries
+}
+
+i32 vfs_dentry_fstat(vfs_inode* _node, stat* stat) {
+    vfs_dentry* node = $vfs_dentry* _node->node;
+    assert(!node->check_magic(), "vfs_dentry_fstat() : node magic not good");
+
+    //clear stat
+    memset($void* stat, 0, sizeof(stat));
+
+    //fill stat
+    stat->st_dev = _node->dev;
+    stat->st_ino = _node->ino;
+    stat->st_nlink = node->children.size() + 0x1;   // children + '.'
+    if($void* _node->parent != nullptr) stat->st_nlink ++; 
+
+    stat->st_mode = S_IFDIR;
+
+    stat->st_rdev = $u64 0;
+    stat->st_size = $i64 0;
+    stat->st_blksize = $i64 PAGE_SIZE;
+    stat->st_blocks = $i64 0;
+
+    return 0;
+}
+
+// -- FD OPS --
+[__GLOBAL_FIRST__] file_ops* FILE_OPS_VFS;
+void init_vfs_file_ops() {
+    FILE_OPS_VFS = $file_ops* malloc(sizeof(file_ops));
+    new (FILE_OPS_VFS) file_ops();
+    FILE_OPS_VFS->op_read = #<vfs_read(file*, u8*, u64)>;
+    FILE_OPS_VFS->op_write = #<vfs_write(file*, u8*, u64)>;
+    FILE_OPS_VFS->op_lseek = #<vfs_lseek(file*, i64, i32)>;
+    FILE_OPS_VFS->op_getdents = #<vfs_getdents(file*, u8*, u64)>;
+    FILE_OPS_VFS->op_close = #<vfs_close(file*)>;
+    FILE_OPS_VFS->op_truncate = #<vfs_truncate(file*, u64)>;
+    FILE_OPS_VFS->op_fstat = #<vfs_fstat(file*, stat*)>;
+    FILE_OPS_VFS->op_poll = #<vfs_poll(file*)>;
+}
+
+//increments refcount of inode
+file* vfs_create_file(u64 flags, vfs_inode* inode) {
+    file* fd = file_create(FILE_TYPE_VFS, $void* inode, flags, FILE_OPS_VFS);
+    vfs_inc_refcnt(inode);
+    return fd;
+}
+
+i64 vfs_read(file* fd, u8* buf, u64 amt) {
+    vfs_inode* node = $vfs_inode* fd->resource_ptr;
+
+    if(!node->is_file()) {
+        //can only read from file
+        return $i64 -1;
+    }
+
+    u64 read_amt;
+    i32 read_status = vfs_read_file(node, buf, amt, fd->position, read_amt);
+    if(read_status) {
+        //read failed
+        return $i64 -1;
+    }
+    
+    //read success
+    fd->position += read_amt;
+
+    return $i64 read_amt;
+}
+
+i64 vfs_write(file* fd, u8* buf, u64 amt) {
+    vfs_inode* node = $vfs_inode* fd->resource_ptr;
+
+    if(!node->is_file()) {
+        //can only write to file
+        return $i64 -1;
+    }
+
+    //if O_APPEND is set, should set fd->position to the end of the file
+    if($i32 fd->flags & O_APPEND) {
+        if(vfs_get_size(node, fd->position)) {
+            //get size failed
+            return $i64 -1;
+        }
+    }
+
+    //do write
+    u64 write_amt;
+    i32 write_status = vfs_write_file(node, buf, amt, fd->position, write_amt);
+    if(write_status) {
+        //write failed
+        return $i64 -1;
+    }
+
+    //write success
+    fd->position += write_amt;
+
+    return $i64 write_amt;
+}
+
+i64 vfs_lseek(file* fd, i64 off, i32 whence) {
+    vfs_inode* node = $vfs_inode* fd->resource_ptr;
+
+    if(whence == SEEK_SET) {
+        if(off < $i64 0) {
+            //file position can't be negative
+            return $i64 -ERR_UNKNOWN;
+        }
+        fd->position = $u64 off;
+    }
+    else if(whence == SEEK_CUR) {
+        if(off < $i64 0 && $u64 (-off) > fd->position) {
+            //resulting file position can't be negative
+            return $i64 -ERR_UNKNOWN;
+        }
+        fd->position += $u64 off;
+    }
+    else if(whence == SEEK_END) {
+        u64 file_size;
+        if(vfs_get_size(node, file_size)) {
+            //get size failed
+            return $i64 -1;
+        }
+        if(off < $i64 0 && $u64 (-off) > file_size) {
+            //resulting file position can't be negative
+            return $i64 -ERR_UNKNOWN;
+        }
+        fd->position = file_size + $u64 off;
+    }
+    else panic("vfs_lseek() : unknown whence value");
+
+    return $i64 fd->position;
+}
+
+i64 vfs_getdents(file* fd, u8* buf, u64 amt) {
+    vfs_inode* node = $vfs_inode* fd->resource_ptr;
+    u64 buf_ptr = 0x0;
+    u64 pos = fd->position;
+
+    //get children
+    vector<string> children;
+    if(vfs_get_children(node, children)) {
+        return $i64 -1;
+    }
+    
+    //write dirents to buffer
+    while(pos < children.size()) {
+        //compute size of next dirent
+        u64 nsz = sizeof(dirent) + children[pos].size();
+
+        //if next dirent can't fit, stop writing
+        if(buf_ptr + nsz > amt) break;
+
+        //get child node
+        vfs_inode* child_node;
+        if(vfs_walk(node, children[pos], child_node)) {
+            panic("vfs_getdents() : this lookup should not fail");
+        }
+
+        //write next dirent to buffer
+        dirent* ndirent = $dirent* @(buf[buf_ptr]);
+        ndirent->d_ino = $u64 0;
+        ndirent->d_off = $i64 (pos + 0x1);
+        ndirent->d_reclen = $u16 nsz;
+        ndirent->d_type = $u8 child_node->type;
+        memcpy($void* @(ndirent->d_name), $void* children[pos].jstr(), children[pos].size() + 0x1);
+
+        //increment pointers, cleanup mem
+        vfs_dec_refcnt(child_node);
+        buf_ptr += nsz;
+        pos ++;
+    }
+
+    //check if buffer is too small to fit next dirent
+    if(buf_ptr == 0x0 && pos != children.size()) {
+        return $i64 -ERR_INVAL;
+    }
+
+    fd->position = pos;
+    return $i64 buf_ptr;
+}
+
+i32 vfs_close(file* fd) {
+    vfs_inode* node = $vfs_inode* fd->resource_ptr;
+
+    //dec node refcount
+    vfs_dec_refcnt(node);
+
+    return 0;
+}
+
+i32 vfs_truncate(file* fd, u64 nsz) {
+    vfs_inode* node = $vfs_inode* fd->resource_ptr;
+
+    if(!node->is_file()) {
+        //can only truncate files
+        return -1;
+    }
+
+    i32 trunc_status = vfs_truncate(node, nsz);
+    if(trunc_status) {
+        //truncate failed
+        return -1;
+    }
+
+    return 0;
+}
+
+i32 vfs_fstat(file* file, stat* stat) {
+    vfs_inode* node = $vfs_inode* file->resource_ptr;
+    i32 status = vfs_fstat(node, stat);
+    return status;
+}
+
+u16 vfs_poll(file* file) {
+    vfs_inode* node = $vfs_inode* file->resource_ptr;
+
+    u16 ret = $u16 0;
+    if(node->is_file()) {
+        ret |= POLLIN;
+        ret |= POLLOUT;
+    }
+    else if(node->is_directory()) {
+        // nothing
+    }
+    else {
+        panic("vfs_poll() : unsupported file type");
+    }
+    return ret;
+}
+
+void init_vfs() {
+    cout << "start init vfs\n";
+
+    init_vfs_file_ops();
+    init_vfs_dentry();
+
+    //create vfs root node
+    {
+        vfs_dentry* root_dentry = $vfs_dentry* malloc(sizeof(vfs_dentry));
+        new (root_dentry) vfs_dentry();
+
+        VFS_ROOT = $vfs_inode* malloc(sizeof(vfs_inode));
+        new (VFS_ROOT) vfs_inode(FILE_VFS_DENTRY_DEV, root_dentry->ino, new string(""), DT_DIR, $void* root_dentry, VFS_DENTRY_OPS);
+        vfs_inc_refcnt(VFS_ROOT);
+        VFS_ROOT->is_root = 1;
+    }
+
+    cout << "done init vfs\n";
+}

@@ -1,59 +1,22 @@
-above all, WRITE MORE TESTS!!!
+(main quest)
+Reduce number of circular dependencies in interfaces
+- back when we didn't have incremental compilation, a bad habit formed when defining interfaces. 
+  - we would define some interface, for example blockdev
+  - there would be some hardware drivers that implement that interface, for example USB and AHCI
+  - the problem was that it was convenient to let the interface know about its implementors
+  - this results in there being a dependency from the interface to all of its implementors, 
+    meaning that if we edit one implementor, then all implementors get recompiled. 
+- ideally, interfaces should not know about their consumers or their implementors.
+  - it's dumb to have to recompile the networking drivers when you made edits to USB for example. 
+  - we are already doing a good job not letting interfaces know about consumers, we just have
+    to clean up interfaces that know about their implementors. 
+- interfaces to clean up:
+  - blockdev
+    - circular dependency between interface and implementors due to interface having dedicated 
+      methods to create each implementor. 
+  - vfs
+    - was due to vfs init function also initializing ext2
+  - idt
+  - file 
+  - tty
 
-okok, taking a break as of february 2026, some things you have to look into when getting back:
- - there seems to be a bug with networking, try to `ls` a large directory thru ssh and we always run into OOM
- - USB drivers do not work with some USB storage devices, specifically ChipsBanks SCSI BOT
-   - apparently these USBs specifically don't adhere to the spec very well, so may have to have some special behaviour for them
- - currently, we're shoving everything that needs to be executed periodically into the timer interrupt. Look into kernel threading to solve this issue.
-
-- TODO
-  - ACPI power off
-  - route serial io through interrupts
-  - je optimizations
-    - reduce alloc in print
-  - shell improvements
-    - keep track of previous commands, up/down arrow to browse previous commands
-    - tab autocomplete current token in current dir
-    - color??
-    - shell pipes + redirects
-  - more userspace utils
-    - echo
-    - grep
-  - get mutex and other locks to work
-    - specifically enable interrupts within system calls
-  - get jjc to run on jankos
-    - rewrite compiler + assembler in jank
-  - networking, able to make http requests to the outside world
-  - USB drivers
-    - support PSIC custom speed mappings
-    - error handling
-    - USB hubs
-      - pretty must just ability to handle complex USB device topology
-      - USB core should maintain the USB device tree, xHCI controller just here to manage slots
-    - HID keyboard
-    - hotplug support
-      - need to handle both unexpected connection and disconnection
-      - connection is relatively simple, just have something always polling events and do device indexing logic when we see a port connection event
-      - disconnection is tricky. USB core will keep track of the connection state and refcount for each device.
-        when a port disconnect event happens, we immediately update the connection state to disconnected, clean up the device xHCI side,
-        and any subsequent action on this device should return with ENODEV status without touching xHCI.
-        when all the references to the USB device are gone, then it's safe to completely dealloc the device. 
-      - hopefully a disconnect doesn't happen while we're indexing the device. However, I suppose we can introduce another
-        device status like, INITIALIZING or something, and if a disconnect event happens while initializing, then
-        we can just immediately dealloc the device. 
-
-- done
-  - finish rudimentary read/write filesystem
-    - creating / removing / reading directories
-    - creating / removing / reading / writing files
-  - commandline text editor, something like nano or vim
-    - seems like this is much more involved than I thought
-    - need to create TTY fd for io modification
-    - also need to enable raw mode on linux side 
-  - replace bootboot with custom bootloader
-  - graphic interface
-    - implement vga terminal
-    - ability to get input directly from the keyboard
-    - seems like my laptop has PS/2 keyboard, we can go ahead and implement drivers for that
-  - USB drivers
-    - SCSI BOT mass storage devices

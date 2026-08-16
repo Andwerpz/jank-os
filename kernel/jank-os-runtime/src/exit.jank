@@ -1,6 +1,5 @@
-#include <kernel::vga>;
-#include <kernel::serial>;
-#include <kernel::utils>;
+#include <kernel::dev/vga>;
+#include <kernel::utils/print>;
 
 intrinsic("exit")
 void intrinsic_exit(i32 status) {

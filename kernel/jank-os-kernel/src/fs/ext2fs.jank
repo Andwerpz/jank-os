@@ -1,0 +1,2519 @@
+#include <containers::vector>;
+#include <containers::string>;
+#include <math::math>;
+
+#include "block/blockdev.jank";
+#include "utils/print.jank";
+#include "utils/bitmap.jank";
+#include "memory/pma.jank";
+#include "globals.jank";
+#include "arch/acpi.jank";
+#include "fs/vfs.jank";
+#include "fs/file.jank";
+
+// https://wiki.osdev.org/Ext2
+
+// A 'block group', is a logical partition of memory by ext2. 
+// block groups will be tightly packed on the disk, and they will not overlap. 
+// *all* data in ext2 (including metadata such as superblocks, gdt) is contained in some block group
+
+// Block groups cover blocks starting at sb->first_data_block.
+// For a global block number B, the owning group and in-group index are:
+//   g = (B - sb->first_data_block) / blocks_per_group
+//   i = (B - sb->first_data_block) % blocks_per_group
+// Block 0 may be reserved and not belong to any group (for 1 KiB blocks).
+// however in this case, sb->blocks_count will still count Block 0
+
+// all stored block indices are relative to the start of the disk partition. 
+// all blocks are aligned relative to the start of the disk partition. 
+
+// each block group keeps track of what blocks inside of it are already taken via the block_bitmap. 
+// any untaken block can be allocated in the future as a data block
+// you should not assume the position of any metadata within a block group, always reference the bitmap 
+// to see which blocks are not allocated. 
+
+// the 'superblock' gives some important metadata about the filesystem. 
+// by convention, it's usually located at an offset of 1024 bytes from the start of the disk partition
+// since blocks are aligned relative to the partition, the superblock may not start at the start of a block 
+// even if the actual block size is larger than a superblock, the superblock still takes up an entire block. 
+// the field sb->first_data_block gives the starting block of the first block group. 
+
+// after the superblock comes the 'gdt' (group descriptor table). This is a tightly packed table of 
+// group descriptor structs that tell you some metadata about each block group. 
+// to figure out how many block groups there are in total, you can do ceil(sb->blocks_count / sb->blocks_per_group)
+
+// note that there may be backup copies of the superblock and gdt floating around in other block groups. 
+// for now, I'll just update the primary copies. 
+
+struct ext2_fs {
+    blockdev*           dev;
+    ext2_super_block*   sb;
+    u32                 block_size; // ext2 filesystem block size, same as 2^(10 + sb->block_size)
+    u32                 sb_block;   // number of block that contains superblock struct
+    u32                 sb_offset;  // offset of superblock struct within sb_block
+}
+
+struct ext2_super_block {
+    // Base Superblock Fields
+    u32 inodes_count;               // Total number of inodes in file system 
+    u32 blocks_count;               // Total number of blocks in file system
+    u32 reserved_blocks_count;      // Number of blocks reserved for superuser (see offset 80)
+    u32 free_blocks_count;          // Total number of unallocated blocks
+    u32 free_inodes_count;          // Total number of unallocated inodes
+    u32 first_data_block;           // Block number of the block containing the superblock (also the starting block number, NOT always zero.) 
+    u32 log_block_size;             // log2 (block size) - 10. (In other words, the number to shift 1,024 to the left by to obtain the block size)
+    u32 log_frag_size;              // log2 (fragment size) - 10. (In other words, the number to shift 1,024 to the left by to obtain the fragment size) 
+    u32 blocks_per_group;           // Number of blocks in each block group
+    u32 frags_per_group;            // Number of fragments in each block group
+    u32 inodes_per_group;           // Number of inodes in each block group
+    u32 mtime;                      // Last mount time (in POSIX time)
+    u32 wtime;                      // Last written time (in POSIX time)
+    u16 mnt_count;                  // Number of times the volume has been mounted since its last consistency check (fsck)
+    u16 max_mnt_count;              // Number of mounts allowed before a consistency check (fsck) must be done
+    u16 magic;                      // Ext2 signature (0xef53), used to help confirm the presence of Ext2 on a volume
+    u16 state;                      // File system state (see below)
+    u16 errors;                     // What to do when an error is detected (see below)
+    u16 minor_rev_level;            // Minor portion of version (combine with Major portion below to construct full version field) 
+    u32 last_checked;               // POSIX time of last consistency check (fsck)
+    u32 check_interval;             // Interval (in POSIX time) between forced consistency checks (fsck)
+    u32 creator_os;                 // Operating system ID from which the filesystem on this volume was created (see below)
+    u32 major_rev_level;            // Major portion of version (combine with Minor portion above to construct full version field)
+    u16 res_uid;                    // User ID that can use reserved blocks
+    u16 res_gid;                    // Group ID that can use reserved blocks
+
+    // Extended Superblock Fields
+    u32     first_inode;                // First non-reserved inode in file system. (In versions < 1.0, this is fixed as 11)
+    u16     inode_size;                 // Size of each inode structure in bytes. (In versions < 1.0, this is fixed as 128)
+    u16     block_group;                // Block group that this superblock is part of (if backup copy) 
+    u32     feature_optional;           // Optional features present (features that are not required to read or write, but usually result in a performance increase. see below)
+    u32     feature_required;           // Required features present (features that are required to be supported to read or write. see below)
+    u32     feature_unsupported;        // Features that if not supported, the volume must be mounted read-only see below)
+    u8[16]  fs_id;                      // File system ID (what is output by blkid)
+    u8[16]  volume_name;                // Volume name (C-style string: characters terminated by a 0 byte)
+    u8[64]  last_mounted;               // Path volume was last mounted to (C-style string: characters terminated by a 0 byte)
+    u32     compression_algos;          // Compression algorithms used (see Required features above)
+    u8      prealloc_file;              // Number of blocks to preallocate for files
+    u8      prealloc_dir;               // Number of blocks to preallocate for files
+    u8[2]   unused;                     // (Unused)
+    u8[16]  journal_id;                 // Journal ID (same style as the File system ID above)
+    u32     journal_inode;              // Journal inode
+    u32     journal_device;             // Journal device
+    u32     orphan_inode_head;          // Head of orphan inode list
+    u8[788] padding;                    // (Unused)
+}
+
+[__GLOBAL_FIRST__] u32 EXT2_SECTOR_SIZE     = $u32 512;
+[__GLOBAL_FIRST__] u16 EXT2_SB_MAGIC        = $u16 0xef53;
+
+[__GLOBAL_FIRST__] u16 FS_STATE_CLEAN       = $u16 1; // File system is clean
+[__GLOBAL_FIRST__] u16 FS_STATE_ERROR       = $u16 2; // File system has errors
+
+[__GLOBAL_FIRST__] u16 FS_ERROR_IGNORE      = $u16 1; // Ignore the error (continue on)
+[__GLOBAL_FIRST__] u16 FS_ERROR_RO          = $u16 2; // Remount file system as read-only
+[__GLOBAL_FIRST__] u16 FS_ERROR_PANIC       = $u16 3; // Kernel panic
+
+[__GLOBAL_FIRST__] u32 OS_ID_LINUX          = $u32 0; // Linux
+[__GLOBAL_FIRST__] u32 OS_ID_GNU_HURD       = $u32 1; // GNU HURD
+[__GLOBAL_FIRST__] u32 OS_ID_MASIX          = $u32 2; // MASIX (an operating system developed by Remy Card, one of the developers of ext2)
+[__GLOBAL_FIRST__] u32 OS_ID_FREEBSD        = $u32 3; // FreeBSD
+[__GLOBAL_FIRST__] u32 OS_ID_OTHER          = $u32 4; // Other "Lites" (BSD4.4-Lite derivatives such as NetBSD, OpenBSD, XNU/Darwin, etc.)
+
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_PREALLOC               = $u32 0x0001; // Preallocate some number of (contiguous?) blocks (see byte 205 in the superblock) to a directory when creating a new one (to reduce fragmentation?)
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_AFS                    = $u32 0x0002; // AFS server inodes exist
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_JOURNAL                = $u32 0x0004; // File system has a journal (Ext3)
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_EXTENDED_ATT           = $u32 0x0008; // Inodes have extended attributes
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_RESIZE                 = $u32 0x0010; // File system can resize itself for larger partitions
+[__GLOBAL_FIRST__] u32 OPT_FEAT_FLAG_HASH_IDX               = $u32 0x0020; // Directories use hash index 
+
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_COMPRESSION            = $u32 0x0001; // Compression is used
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_DIR_TYPE_FIELD         = $u32 0x0002; // Directory entries contain a type field
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_REPLAY_JOURNAL         = $u32 0x0004; // File system needs to replay its journal
+[__GLOBAL_FIRST__] u32 REQ_FEAT_FLAG_JOURNAL_DEV            = $u32 0x0008; // File system uses a journal device 
+
+[__GLOBAL_FIRST__] u32 RO_FEAT_FLAG_SPARSE                  = $u32 0x0001; // Sparse superblocks and group descriptor tables
+[__GLOBAL_FIRST__] u32 RO_FEAT_FLAG_64_FILE_SIZE            = $u32 0x0002; // File system uses a 64-bit file size
+[__GLOBAL_FIRST__] u32 RO_FEAT_FLAG_BIN_TREE                = $u32 0x0004; // Directory contents are stored in the form of a Binary Tree
+
+//each block group has
+// - block bitmap (1 block)
+// - inode bitmap (1 block)
+// - inode table (contiguous run of blocks holding all inodes)
+//the remaining blocks are considered free blocks
+//note that you should not assume that metadata is placed in a specific order or in a specific location
+struct ext2_group_descriptor {
+    u32         block_bitmap;               // Block address of block usage bitmap
+    u32         inode_bitmap;               // Block address of inode usage bitmap
+    u32         inode_table;                // Starting block address of inode table
+    u16         free_blocks_count;          // Number of unallocated blocks in group
+    u16         free_inodes_count;          // Number of unallocated inodes in group
+    u16         used_dirs_count;            // Number of directories in group
+    u8[14]      padding;                    // (Unused)
+}
+
+struct ext2_inode {
+    u16         mode;                   // Type and Permissions (see below)
+    u16         uid;                    // User ID
+    u32         size;                   // Lower 32 bits of size in bytes
+    u32         atime;                  // Last Access Time (in POSIX time)
+    u32         ctime;                  // Creation Time (in POSIX time)
+    u32         mtime;                  // Last Modification time (in POSIX time) 
+    u32         dtime;                  // Deletion time (in POSIX time)
+    u16         gid;                    // Group ID 
+    u16         links_count;            // Count of hard links (directory entries) to this inode. When this reaches 0, the data blocks are marked as unallocated.
+    u32         sectors;                // Count of disk sectors (not Ext2 blocks) in use by this inode, not counting the actual inode structure nor directory entries linking to the inode. 
+                                        // this includes indirect mapping blocks 
+                                        // note that the size of the 'disk sectors' in question is fixed at 512 bytes, regardless of the actual size of sector in the underlying disk
+    u32         flags;                  // Flags (see below)
+    u32         ossv1;                  // Operating System Specific value #1
+    u32[12]     direct_block_ptr;       // Direct Block Pointer 0-11
+    u32         singly_ind_block_ptr;   // Singly Indirect Block Pointer (Points to a block that is a list of block pointers to data)
+    u32         doubly_ind_block_ptr;   // Doubly Indirect Block Pointer (Points to a block that is a list of block pointers to Singly Indirect Blocks)
+    u32         triply_ind_block_ptr;   // Triply Indirect Block Pointer (Points to a block that is a list of block pointers to Doubly Indirect Blocks)
+    u32         generation;             // Generation number (Primarily used for NFS)
+    u32         file_acl;               // In Ext2 version 0, this field is reserved. In version >= 1, Extended attribute block (File ACL).
+    u32         dir_acl;                // In Ext2 version 0, this field is reserved. In version >= 1, Upper 32 bits of file size (if feature bit set) if it's a file, Directory ACL if it's a directory
+    u32         fragment_block_addr;    // Block address of fragment
+    u8[12]      ossv2;                  // Operating System Specific Value #2
+
+    i32 is_directory() {
+        return (this.mode & $u16 0xf000) == INODE_TYPE_DIR;
+    }
+
+    i32 is_file() {
+        return (this.mode & $u16 0xf000) == INODE_TYPE_FILE;
+    }
+}
+
+[__GLOBAL_FIRST__] u16 INODE_TYPE_FIFO          = $u16 0x1000; // FIFO
+[__GLOBAL_FIRST__] u16 INODE_TYPE_CHAR_DEV      = $u16 0x2000; // Character device
+[__GLOBAL_FIRST__] u16 INODE_TYPE_DIR           = $u16 0x4000; // Directory
+[__GLOBAL_FIRST__] u16 INODE_TYPE_BLOCK_DEV     = $u16 0x6000; // Block device
+[__GLOBAL_FIRST__] u16 INODE_TYPE_FILE          = $u16 0x8000; // Regular file
+[__GLOBAL_FIRST__] u16 INODE_TYPE_SYM_LINK      = $u16 0xA000; // Symbolic link
+[__GLOBAL_FIRST__] u16 INODE_TYPE_UNIX_SOCK     = $u16 0xC000; // Unix socket
+
+[__GLOBAL_FIRST__] u16 INODE_PERM_O_X           = $u16 0x001; // Other-execute permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_O_W           = $u16 0x002; // Other-write permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_O_R           = $u16 0x004; // Other-read permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_G_X           = $u16 0x008; // Group-execute permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_G_W           = $u16 0x010; // Group-write permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_G_R           = $u16 0x020; // Group-read permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_U_X           = $u16 0x040; // User-execute permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_U_W           = $u16 0x080; // User-write permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_U_R           = $u16 0x100; // User-read permission
+[__GLOBAL_FIRST__] u16 INODE_PERM_STICKY        = $u16 0x200; // Sticky Bit
+[__GLOBAL_FIRST__] u16 INODE_PERM_SET_GID       = $u16 0x400; // Set group ID
+[__GLOBAL_FIRST__] u16 INODE_PERM_SET_UID       = $u16 0x800; // Set user ID 
+
+struct ext2_dir_entry {
+    u32     inode;          // Inode
+    u16     size;           // Total size of this entry (Including all subfields)
+    u8      name_len;       // Name Length least-significant 8 bits
+    u8      file_type;      // Type indicator (only if the feature bit for "directory entries have file type byte" is set, else this is the most-significant 8 bits of the Name Length) 
+    u8[24]  name;           // Name characters
+}
+
+void ext2_print_super_block(ext2_super_block* sb) {
+    cout << "=== SUPER BLOCK ===\n";
+    cout << "Inodes Count: "                << sb->inodes_count << "\n";
+    cout << "Blocks Count: "                << sb->blocks_count << "\n";
+    cout << "Reserved Blocks Count: "       << sb->reserved_blocks_count << "\n";
+    cout << "Free Blocks Count: "           << sb->free_blocks_count << "\n";
+    cout << "Free Inodes Count: "           << sb->free_inodes_count << "\n";
+    cout << "First Data Block: "            << sb->first_data_block << "\n";
+    cout << "Log Block Size: "              << sb->log_block_size << "\n";
+    cout << "Log Frag Size: "               << sb->log_frag_size << "\n";
+    cout << "Blocks Per Group: "            << sb->blocks_per_group << "\n";
+    cout << "Frags Per Group: "             << sb->frags_per_group << "\n";
+    cout << "Inodes Per Group: "            << sb->inodes_per_group << "\n";
+    cout << "Last Mount Time: "             << sb->mtime << "\n";
+    cout << "Last Written Time: "           << sb->wtime << "\n";
+    cout << "Mount Count: "                 << sb->mnt_count << "\n";
+    cout << "Max Mounts Before Check: "     << sb->max_mnt_count << "\n";
+    cout << "Magic: "                       << $void* $u64 sb->magic << "\n";
+    cout << "File System State: "           << sb->state << "\n";
+    cout << "Error Handling Method: "       << sb->errors << "\n";
+    cout << "Minor Rev Level: "             << sb->minor_rev_level << "\n";
+    cout << "Last Checked: "                << sb->last_checked << "\n";
+    cout << "Check Interval: "              << sb->check_interval << "\n";
+    cout << "Creator OS: "                  << sb->creator_os << "\n";
+    cout << "Major Rev Level: "             << sb->major_rev_level << "\n";
+    cout << "First Inode: "                 << sb->first_inode << "\n";
+    cout << "Inode Size: "                  << sb->inode_size << "\n";
+    cout << "Block Group: "                 << sb->block_group << "\n";
+    cout << "Feature Optional: "            << $void* $u64 sb->feature_optional << "\n";
+    cout << "Feature Required: "            << $void* $u64 sb->feature_required << "\n";
+    cout << "Feature Unsupported: "         << $void* $u64 sb->feature_unsupported << "\n";
+    cout << "File System ID: "              << $u8* @sb->fs_id << "\n";
+    cout << "Volume Name: "                 << $u8* @sb->volume_name << "\n";
+    cout << "Last Mounted: "                << $u8* @sb->last_mounted << "\n";
+    cout << "Compression Algorithms: "      << $void* $u64 sb->compression_algos << "\n";
+    cout << "Prealloc File: "               << sb->prealloc_file << "\n";
+    cout << "Prealloc Dir: "                << sb->prealloc_dir << "\n";
+    cout << "Journal ID: "                  << $u8* @sb->journal_id << "\n";
+    cout << "Joutnal Inode: "               << sb->journal_inode << "\n";
+    cout << "Journal Device: "              << sb->journal_device << "\n";
+    cout << "Orphan Inode Head: "           << sb->orphan_inode_head << "\n";
+    cout << "========================\n\n";
+}
+
+void ext2_print_group_descriptor(ext2_group_descriptor* gd) {
+    cout << "=== GROUP DESCRIPTOR ===\n";
+    cout << "Block Bitmap: "                << gd->block_bitmap << "\n";
+    cout << "Inode Bitmap: "                << gd->inode_bitmap << "\n";
+    cout << "Inode Table: "                 << gd->inode_table << "\n";
+    cout << "Free Blocks Count: "           << gd->free_blocks_count << "\n";
+    cout << "Free Inodes Count: "           << gd->free_inodes_count << "\n";
+    cout << "Used Dirs Count: "             << gd->used_dirs_count << "\n";
+    cout << "========================\n\n";
+}
+
+void ext2_print_inode(ext2_inode* inode) {
+    cout << "=== INODE ===\n";
+    cout << "Mode: "                        << $void* $u64 inode->mode << "\n";
+    cout << "UID: "                         << inode->uid << "\n";
+    cout << "Size: "                        << inode->size << "\n";
+    cout << "Access Time: "                 << inode->atime << "\n";
+    cout << "Create Time: "                 << inode->ctime << "\n";
+    cout << "Modify Time: "                 << inode->mtime << "\n";
+    cout << "Deletion Time: "               << inode->dtime << "\n";
+    cout << "GID: "                         << inode->gid << "\n";
+    cout << "Links Count: "                 << inode->links_count << "\n";
+    cout << "Sectors: "                     << inode->sectors << "\n";
+    cout << "Flags: "                       << $void* $u64 inode->flags << "\n";
+    cout << "OS Specific 1: "               << $void* $u64 inode->ossv1 << "\n";
+    cout << "Blocks (Direct Pointers): ";
+    for (i32 i = 0; i < 12; i++) {
+        cout << inode->direct_block_ptr[i] << " ";
+    }
+    cout << "\n";
+    cout << "Singly Indirect: "             << inode->singly_ind_block_ptr << "\n";
+    cout << "Doubly Indirect: "             << inode->doubly_ind_block_ptr << "\n";
+    cout << "Triply Indirect: "             << inode->triply_ind_block_ptr << "\n";
+    cout << "Generation: "                  << inode->generation << "\n";
+    cout << "File ACL: "                    << inode->file_acl << "\n";
+    cout << "Dir ACL: "                     << inode->dir_acl << "\n";
+    cout << "Fragment Block Addr: "         << inode->fragment_block_addr << "\n";
+    cout << "========================\n\n";
+}
+
+void ext2_print_dir_entry(ext2_dir_entry* dir) {
+    cout << "=== DIRECTORY ENTRY ===\n";
+    cout << "Inode: "                       << dir->inode << "\n";
+    cout << "Size: "                        << dir->size << "\n";
+    cout << "Name Length: "                 << $i64 dir->name_len << "\n";
+    cout << "File Type: "                   << $i64 dir->file_type << "\n";
+    cout << "Name: "                        << new string($u8* @dir->name, $u64 dir->name_len) << "\n";
+    cout << "========================\n\n";
+}
+
+i32 ext2_read_blocks(ext2_fs* fs, u32 start_block, u32 block_count, void* buf) {
+    // println("ext2_read_blocks() : read : ", start_block, " ", block_count);
+    assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_blocks() : only support dev block size dividing ext2 block size");
+    u64 lba_start = ($u64 start_block * $u64 fs->block_size) / fs->dev->block_size;
+    u64 count = ($u64 fs->block_size / fs->dev->block_size) * $u64 block_count;
+
+    void* bbuf;
+    i32 status;
+    for(u64 i = 0x0; i < count; i++) {
+        status = blockdev_bget(fs->dev, lba_start + i, bbuf);
+        if(status) return status;
+        memcpy($void* ($u64 buf + i * fs->dev->block_size), bbuf, fs->dev->block_size);
+        status = blockdev_bput(fs->dev, lba_start + i);
+        if(status) return status;
+    }
+    return 0;
+}
+
+//read a single ext2 block from the underlying block device
+i32 ext2_read_block(ext2_fs* fs, u32 block_number, void* buf) {
+    // println("ext2_read_block() : read : ", block_number);   
+    assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
+    u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
+    u64 count = $u64 fs->block_size / fs->dev->block_size;
+
+    void* bbuf;
+    i32 status;
+    for(u64 i = 0x0; i < count; i++) {
+        status = blockdev_bget(fs->dev, lba_start + i, bbuf);
+        if(status) return status;
+        memcpy($void* ($u64 buf + i * fs->dev->block_size), bbuf, fs->dev->block_size);
+        status = blockdev_bput(fs->dev, lba_start + i);
+        if(status) return status;
+    }
+    return 0;
+}
+
+//write a single ext2 block to the underlying block device
+i32 ext2_write_block(ext2_fs* fs, u32 block_number, void* buf) {
+    // println("ext2_write_block() : write : ", block_number);
+    assert($u64 fs->block_size % fs->dev->block_size == 0x0, "ext2_read_block() : only support dev block size dividing ext2 block size");
+    u64 lba_start = ($u64 block_number * $u64 fs->block_size) / fs->dev->block_size;
+    u64 count = $u64 fs->block_size / fs->dev->block_size;
+
+    void* bbuf;
+    i32 status;
+    for(u64 i = 0x0; i < count; i++) {
+        status = blockdev_bget(fs->dev, lba_start + i, bbuf);
+        if(status) return status;
+        memcpy(bbuf, $void* ($u64 buf + i * fs->dev->block_size), fs->dev->block_size);
+        blockdev_bdirty(fs->dev, lba_start + i);
+        status = blockdev_bput(fs->dev, lba_start + i);
+        if(status) return status;
+    }
+    return 0;
+}
+
+//scans a block device to see if there is a ext2 filesystem on it
+//on success, populates fs and returns 0
+//on failure, returns 1
+i32 ext2_probe(blockdev* dev, ext2_fs* fs) {
+    // read super block
+    void* buf = palloc();
+    memset(buf, 0, PAGE_SIZE);
+
+    if(blockdev_read(dev, 0x0, PAGE_SIZE / dev->block_size, buf)) {
+        cout << "ext2 probe block read failed" << "\n";
+        pfree(buf);
+        return 1;
+    }
+
+    //usually superblock is at offset 1024 from start
+    ext2_super_block* sb = $ext2_super_block* malloc(sizeof(ext2_super_block));
+    memcpy($void* sb, $void* ($u64 buf + $u64 1024), sizeof(ext2_super_block));
+    pfree(buf);
+
+    if(sb->magic != EXT2_SB_MAGIC) {
+        cout << "Invalid Ext2 Magic, exiting mount\n";
+        free($void* sb, sizeof(ext2_super_block));
+        return 1;
+    }
+
+    if($u32 1024 << sb->log_block_size != $u32 1024) {
+        cout << "Unsupported block size, exiting mount (currently only supporting 1024)\n";
+        free($void* sb, sizeof(ext2_super_block));
+        return 1;
+    }
+
+    if(sb->major_rev_level != $u32 0) {
+        cout << "Unsupported version, exiting mount (currently only supporting rev 0)\n";
+        free($void* sb, sizeof(ext2_super_block));
+        return 1;
+    }
+
+    ext2_print_super_block(sb);
+
+    fs->dev = dev;
+    fs->sb = sb;
+    fs->block_size = $u32 1024 << sb->log_block_size;
+    fs->sb_block = $u32 1024 / fs->block_size;
+    fs->sb_offset = $u32 1024 - fs->sb_block * fs->block_size;
+    
+    return 0;
+}
+
+//reloads fs->sb from the drive
+i32 ext2_refresh_sb(ext2_fs* fs) {
+    // read sb
+    void* buf = palloc();
+    memset(buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, fs->sb_block, buf)) {
+        cout << "Block read failed\n";
+        pfree(buf);
+        return 1;
+    }
+
+    // retrieve sb struct
+    ext2_super_block* nsb = $ext2_super_block* malloc(sizeof(ext2_super_block));
+    memcpy($void* nsb, $void* ($u64 buf + $u64 fs->sb_offset), sizeof(ext2_super_block));
+    pfree(buf);
+
+    if(nsb->magic != EXT2_SB_MAGIC) {
+        cout << "Invalid Ext2 Magic\n";
+        free($void* nsb, sizeof(ext2_super_block));
+        return 1;
+    }
+
+    free($void* fs->sb, sizeof(ext2_super_block));
+    fs->sb = nsb;
+    
+    return 0;
+}
+
+//finds a free inode within a group, allocs it on the disk, returns its index
+i32 ext2_alloc_inode_in_group(ext2_fs* fs, u32 group, u32& res) {
+    void* sb_buf = palloc();
+    void* gdt_buf = palloc();
+    void* bitmap_buf = palloc();
+    void* inode_buf = palloc();
+
+    //read block that contains superblock
+    memset(sb_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, fs->sb_block, sb_buf)) {
+        cout << "Failed to read superblock\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(inode_buf);
+        return 1;
+    }
+
+    //get superblock
+    ext2_super_block* sb = $ext2_super_block* ($u64 sb_buf + $u64 fs->sb_offset);
+    assert(sb->magic == EXT2_SB_MAGIC, "ext2_alloc_inode_in_group() : sb magic should line up");
+
+    //is there a free inode?
+    if(sb->free_inodes_count == $u32 0) {
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(inode_buf);
+        return 1;
+    }
+
+    //read gdt block that contains the group's descriptor struct
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+    memset(gdt_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, gdt_buf)) {
+        cout << "Failed to read gdt\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(inode_buf);
+        return 1;
+    }
+
+    //get gd from gdt
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 gdt_buf + $u64 (group_offset % fs->block_size));
+
+    //is there a free inode?
+    if($u32 gd->free_inodes_count == $u32 0) {
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(inode_buf);
+        return 1;
+    }
+
+    //read inode bitmap from gd
+    memset(bitmap_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, gd->inode_bitmap, bitmap_buf)) {
+        cout << "Failed to read inode bitmap\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(inode_buf);
+        return 1;
+    }
+
+    //find index of free inode
+    //TODO account for last group maybe not always having exactly inodes_per_group inodes
+    i32 found = 0;
+    u32 index = $u32 -1;
+    for(u32 i = $u32 0x0; i < fs->sb->inodes_per_group; i++) {
+        if(bitmap_get_bit(bitmap_buf, $u64 i)) {
+            continue;
+        }
+        found = 1;
+        index = i;  
+        break;
+    }
+    assert(found, "ext2_alloc_inode_in_group() : should always find free inode here");
+
+    //read inode table block that contains free inode
+    u32 inode_offset = index * $u32 fs->sb->inode_size;
+    u32 inode_block = gd->inode_table + (inode_offset / fs->block_size);
+    memset(inode_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, inode_block, inode_buf)) {
+        cout << "Failed to read inode buf\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(inode_buf);
+        return 1;
+    }
+
+    //get inode from inode table
+    ext2_inode* inode = $ext2_inode* ($u64 inode_buf + $u64 (inode_offset % fs->block_size));
+
+    //do changes on local buffers
+    new (inode) ext2_inode();                                               //zero out inode
+    bitmap_set_bit(bitmap_buf, $u64 index);                                 //set reserved bit
+    gd->free_inodes_count --;                                               //decrement gd free inodes count
+    sb->free_inodes_count --;                                               //decrement sb free inodes count
+    //TODO update other sb metadata
+
+    //write changes back to disk
+    if(ext2_write_block(fs, inode_block, inode_buf)) {
+        panic("ext2_alloc_inode_in_group() : failed to write inode buf while alloccing");
+    }
+    if(ext2_write_block(fs, gd->inode_bitmap, bitmap_buf)) {
+        panic("ext2_alloc_inode_in_group() : failed to write bitmap buf while alloccing");
+    }
+    if(ext2_write_block(fs, group_block, gdt_buf)) {
+        panic("ext2_alloc_inode_in_group() : failed to write gdt buf while alloccing");
+    }
+    if(ext2_write_block(fs, fs->sb_block, sb_buf)) {
+        panic("ext2_alloc_inode_in_group() : failed to write sb buf while alloccing");
+    }
+
+    //refresh sb
+    if(ext2_refresh_sb(fs)) {
+        panic("ext2_alloc_inode_in_group() : failed to refresh sb");
+    }
+
+    //free and done
+    pfree(sb_buf);
+    pfree(gdt_buf);
+    pfree(bitmap_buf);
+    pfree(inode_buf);
+    res = group * fs->sb->inodes_per_group + index + $u32 1;        //inodes are 1-indexed
+    return 0;
+}
+
+//finds a free inode, allocs it on the disk, and returns its index
+//on failure, returns 1
+i32 ext2_alloc_inode(ext2_fs* fs, u32& res) {
+    if(fs->sb->free_inodes_count == $u32 0) {
+        cout << "Out of inodes\n";
+        return 1;
+    }
+
+    //go through all groups and try to alloc  
+    u32 nr_groups = (fs->sb->inodes_count + fs->sb->inodes_per_group - $u32 1) / fs->sb->inodes_per_group;
+    for(u32 i = $u32 0; i < nr_groups; i++) {
+        if(!ext2_alloc_inode_in_group(fs, i, res)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+//finds a free data block within a group, allocs it on the disk, and returns it
+i32 ext2_alloc_block_in_group(ext2_fs* fs, u32 group, u32& res) {
+    void* sb_buf = palloc();
+    void* gdt_buf = palloc();
+    void* bitmap_buf = palloc();
+    void* block_buf = palloc();
+
+    //read block that contains superblock
+    memset(sb_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, fs->sb_block, sb_buf)) {
+        cout << "Failed to read superblock\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(block_buf);
+        return 1;
+    }
+
+    //get superblock
+    ext2_super_block* sb = $ext2_super_block* ($u64 sb_buf + $u64 fs->sb_offset);
+    assert(sb->magic == EXT2_SB_MAGIC, "ext2_alloc_block_in_group() : sb magic should line up");
+
+    //is there a free data block?
+    if(sb->free_blocks_count == $u32 0) {
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(block_buf);
+        return 1;
+    }
+
+    //read gdt block that contains the group's descriptor struct
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+    memset(gdt_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, gdt_buf)) {
+        cout << "Failed to read gdt\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(block_buf);
+        return 1;
+    }
+
+    //get gd from gdt
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 gdt_buf + $u64 (group_offset % fs->block_size));
+
+    //is there a free data block?
+    if($u32 gd->free_blocks_count == $u32 0) {
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(block_buf);
+        return 1;
+    }
+
+    //read block bitmap from gd
+    memset(bitmap_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, gd->block_bitmap, bitmap_buf)) {
+        cout << "Failed to read block bitmap\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(block_buf);
+        return 1;
+    }
+
+    //find index of free block
+    i32 found = 0;
+    u32 index = $u32 -1;
+    for(u32 i = $u32 0x0; i < fs->sb->blocks_per_group; i++) {
+        if(bitmap_get_bit(bitmap_buf, $u64 i)) {
+            continue;
+        }
+        found = 1;
+        index = i;
+        break;
+    }
+    assert(found, "ext2_alloc_block_in_group() : should always find free block here");
+    u32 global_block_ind = fs->sb->first_data_block + fs->sb->blocks_per_group * group + index;
+
+    //read free block
+    memset(block_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, global_block_ind, block_buf)) {
+        cout << "Failed to read block buf\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        pfree(block_buf);
+        return 1;
+    }
+
+    //do changes on local buffers
+    memset(block_buf, 0, PAGE_SIZE);                                        //zero out block
+    bitmap_set_bit(bitmap_buf, $u64 index);                                 //set reserved bit
+    gd->free_blocks_count --;                                               //decrement gd free inodes count
+    sb->free_blocks_count --;                                               //decrement sb free inodes count
+    //TODO update other sb metadata
+
+    //write changes back to disk
+    if(ext2_write_block(fs, global_block_ind, block_buf)) {
+        panic("ext2_alloc_block_in_group() : failed to write block buf while alloccing");
+    }
+    if(ext2_write_block(fs, gd->block_bitmap, bitmap_buf)) {
+        panic("ext2_alloc_block_in_group() : failed to write bitmap buf while alloccing");
+    }
+    if(ext2_write_block(fs, group_block, gdt_buf)) {
+        panic("ext2_alloc_block_in_group() : failed to write gdt buf while alloccing");
+    }
+    if(ext2_write_block(fs, fs->sb_block, sb_buf)) {
+        panic("ext2_alloc_block_in_group() : failed to write sb buf while alloccing");
+    }
+
+    //refresh sb
+    if(ext2_refresh_sb(fs)) {
+        panic("ext2_alloc_block_in_group() : failed to refresh sb");
+    }
+
+    //free and done
+    pfree(sb_buf);
+    pfree(gdt_buf);
+    pfree(bitmap_buf);
+    pfree(block_buf);
+    res = global_block_ind;
+    return 0;
+}
+
+//finds a free data block, allocs it on the disk, and returns its index
+//on failure, returns 1
+i32 ext2_alloc_block(ext2_fs* fs, u32& res) {
+    if(fs->sb->free_blocks_count == $u32 0) {
+        cout << "Out of blocks\n";
+        return 1;
+    }
+
+    //go through all groups and try to alloc  
+    u32 nr_groups = (fs->sb->inodes_count + fs->sb->inodes_per_group - $u32 1) / fs->sb->inodes_per_group;
+    for(u32 i = $u32 0; i < nr_groups; i++) {
+        if(!ext2_alloc_block_in_group(fs, i, res)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+//only deallocs the inode itself, not any attached blocks
+//should probably call ext2_dealloc_inode_blocks() before calling this one
+i32 ext2_dealloc_inode(ext2_fs* fs, u32 inode_num) {
+    assert(inode_num > $u32 0 && inode_num <= fs->sb->inodes_count, "ext2_dealloc_inode() : trying to dealloc inode out of range");
+
+    void* sb_buf = palloc();
+    void* gdt_buf = palloc();
+    void* bitmap_buf = palloc();
+
+    // inodes 1 indexed
+    u32 group = (inode_num - $u32 1) / fs->sb->inodes_per_group;
+    u32 index = (inode_num - $u32 1) % fs->sb->inodes_per_group;
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+
+    // read block that contains superblock
+    memset(sb_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, fs->sb_block, sb_buf)) {
+        cout << "Failed to read superblock\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get superblock
+    ext2_super_block* sb = $ext2_super_block* ($u64 sb_buf + $u64 fs->sb_offset);
+    assert(sb->magic == EXT2_SB_MAGIC, "ext2_dealloc_inode() : sb magic should line up");
+
+    // read gdt block that contains the group's descriptor struct
+    memset(gdt_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, gdt_buf)) {
+        cout << "Failed to read gdt\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get gd from gdt
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 gdt_buf + $u64 (group_offset % fs->block_size));
+
+    // read inode bitmap from gd
+    memset(bitmap_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, gd->inode_bitmap, bitmap_buf)) {
+        cout << "Failed to read inode bitmap\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // ensure inode is marked as allocated 
+    assert(bitmap_get_bit(bitmap_buf, $u64 index), "ext2_dealloc_inode() : inode should be marked as allocated");
+
+    // do changes on local buffers
+    bitmap_unset_bit(bitmap_buf, $u64 index);                               //unset reserved bit
+    gd->free_inodes_count ++;                                               //increment gd free inodes count
+    sb->free_inodes_count ++;                                               //increment sb free inodes count
+    //TODO change other sb metadata
+
+    //write changes back to disk
+    if(ext2_write_block(fs, gd->inode_bitmap, bitmap_buf)) {
+        panic("ext2_dealloc_inode() : failed to write bitmap buf while alloccing");
+    }
+    if(ext2_write_block(fs, group_block, gdt_buf)) {
+        panic("ext2_dealloc_inode() : failed to write gdt buf while alloccing");
+    }
+    if(ext2_write_block(fs, fs->sb_block, sb_buf)) {
+        panic("ext2_dealloc_inode() : failed to write sb buf while alloccing");
+    }
+
+    //refresh sb
+    if(ext2_refresh_sb(fs)) {
+        panic("ext2_dealloc_inode() : failed to refresh sb");
+    }
+
+    //free and done
+    pfree(sb_buf);
+    pfree(gdt_buf);
+    pfree(bitmap_buf);
+    return 0;
+}
+
+//only deallocs the block, doesn't do anything with the contents inside of the block
+i32 ext2_dealloc_block(ext2_fs* fs, u32 block) {
+    assert(block >= fs->sb->first_data_block && block < fs->sb->blocks_count, "ext2_dealloc_block() : trying to dealloc out of range block");
+
+    void* sb_buf = palloc();
+    void* gdt_buf = palloc();
+    void* bitmap_buf = palloc();
+
+    // blocks are indexed in groups starting from the first data block
+    u32 group = (block - fs->sb->first_data_block) / fs->sb->blocks_per_group;
+    u32 index = (block - fs->sb->first_data_block) % fs->sb->blocks_per_group;
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+
+    // read block that contains superblock
+    memset(sb_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, fs->sb_block, sb_buf)) {
+        cout << "Failed to read superblock\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get superblock
+    ext2_super_block* sb = $ext2_super_block* ($u64 sb_buf + $u64 fs->sb_offset);
+    assert(sb->magic == EXT2_SB_MAGIC, "ext2_dealloc_block() : sb magic should line up");
+
+    // read gdt block that contains the group's descriptor struct
+    memset(gdt_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, gdt_buf)) {
+        cout << "Failed to read gdt\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // get gd from gdt
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 gdt_buf + $u64 (group_offset % fs->block_size));
+
+    // read inode bitmap from gd
+    memset(bitmap_buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, gd->block_bitmap, bitmap_buf)) {
+        cout << "Failed to read inode bitmap\n";
+        pfree(sb_buf);
+        pfree(gdt_buf);
+        pfree(bitmap_buf);
+        return 1;
+    }
+
+    // ensure block is marked as allocated 
+    assert(bitmap_get_bit(bitmap_buf, $u64 index), "ext2_dealloc_block() : block should be marked as allocated");
+
+    // do changes on local buffers
+    bitmap_unset_bit(bitmap_buf, $u64 index);                               //unset reserved bit
+    gd->free_blocks_count ++;                                               //increment gd free blocks count
+    sb->free_blocks_count ++;                                               //increment sb free blocks count
+    //TODO change other sb metadata
+
+    //write changes back to disk
+    if(ext2_write_block(fs, gd->block_bitmap, bitmap_buf)) {
+        panic("ext2_dealloc_block() : failed to write bitmap buf while alloccing");
+    }
+    if(ext2_write_block(fs, group_block, gdt_buf)) {
+        panic("ext2_dealloc_block() : failed to write gdt buf while alloccing");
+    }
+    if(ext2_write_block(fs, fs->sb_block, sb_buf)) {
+        panic("ext2_dealloc_block() : failed to write sb buf while alloccing");
+    }
+
+    //refresh sb
+    if(ext2_refresh_sb(fs)) {
+        panic("ext2_dealloc_block() : failed to refresh sb");
+    }
+
+    //free and done
+    pfree(sb_buf);
+    pfree(gdt_buf);
+    pfree(bitmap_buf);
+    return 0;
+}
+
+//only deallocs the blocks attached to the inode, doesn't dealloc the inode itself
+//when this finishes, the inode should be in a valid state and have no attached blocks
+i32 ext2_dealloc_inode_blocks(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
+    // entries per indirect block
+    u32 B = fs->block_size / $u32 4; 
+
+    // direct
+    for(u64 i = 0x0; i < $u64 12; i++) {
+        if(inode->direct_block_ptr[i] != $u32 0) {
+            if(ext2_dealloc_block(fs, inode->direct_block_ptr[i])) {
+                panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+            }
+            inode->direct_block_ptr[i] = $u32 0;
+        }
+    }
+
+    // singly
+    if(inode->singly_ind_block_ptr != $u32 0) {
+        void* singly_ind_block = palloc();
+        if(ext2_read_block(fs, inode->singly_ind_block_ptr, singly_ind_block)) {
+            panic("ext2_dealloc_inode_blocks() : failed to read singly ind block");
+        }
+        for(u32 i = $u32 0; i < B; i++) {
+            u32 block_ptr = ($u32* singly_ind_block)[i];
+            if(block_ptr == $u32 0) continue;
+            if(ext2_dealloc_block(fs, block_ptr)) {
+                panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+            }
+        }
+        if(ext2_dealloc_block(fs, inode->singly_ind_block_ptr)) {
+            panic("ext2_dealloc_inode_blocks() : failed to dealloc singly ind block");
+        }
+        inode->singly_ind_block_ptr = $u32 0;
+        pfree(singly_ind_block);
+    }   
+
+    // doubly
+    if(inode->doubly_ind_block_ptr != $u32 0) {
+        void* doubly_ind_block = palloc();
+        void* singly_ind_block = palloc();
+        if(ext2_read_block(fs, inode->doubly_ind_block_ptr, doubly_ind_block)) {
+            panic("ext2_dealloc_inode_blocks() : failed to read doubly ind block");
+        }
+        for(u32 j = $u32 0; j < B; j++) {
+            u32 singly_ind_block_ptr = ($u32* doubly_ind_block)[j];
+            if(singly_ind_block_ptr != $u32 0) {
+                if(ext2_read_block(fs, singly_ind_block_ptr, singly_ind_block)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to read singly ind block");
+                }
+                for(u32 i = $u32 0; i < B; i++) {
+                    u32 block_ptr = ($u32* singly_ind_block)[i];
+                    if(block_ptr == $u32 0) continue;
+                    if(ext2_dealloc_block(fs, block_ptr)) {
+                        panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+                    }
+                }
+                if(ext2_dealloc_block(fs, singly_ind_block_ptr)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to dealloc singly ind block");
+                }
+            }
+        }
+        if(ext2_dealloc_block(fs, inode->doubly_ind_block_ptr)) {
+            panic("ext2_dealloc_inode_blocks() : failed to dealloc doubly ind block");
+        }
+        inode->doubly_ind_block_ptr = $u32 0;
+        pfree(singly_ind_block);
+        pfree(doubly_ind_block);
+    }
+
+    // triply
+    if(inode->triply_ind_block_ptr != $u32 0) {
+        void* triply_ind_block = palloc();
+        void* doubly_ind_block = palloc();
+        void* singly_ind_block = palloc();
+        if(ext2_read_block(fs, inode->triply_ind_block_ptr, triply_ind_block)) {
+            panic("ext2_dealloc_inode_blocks() : failed to read triply ind block");
+        }
+        for(u32 k = $u32 0; k < B; k++) {
+            u32 doubly_ind_block_ptr = ($u32* triply_ind_block)[k];
+            if(doubly_ind_block_ptr != $u32 0) {
+                if(ext2_read_block(fs, doubly_ind_block_ptr, doubly_ind_block)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to read doubly ind block");
+                }
+                for(u32 j = $u32 0; j < B; j++) {
+                    u32 singly_ind_block_ptr = ($u32* doubly_ind_block)[j];
+                    if(singly_ind_block_ptr != $u32 0) {
+                        if(ext2_read_block(fs, singly_ind_block_ptr, singly_ind_block)) {
+                            panic("ext2_dealloc_inode_blocks() : failed to read singly ind block");
+                        }
+                        for(u32 i = $u32 0; i < B; i++) {
+                            u32 block_ptr = ($u32* singly_ind_block)[i];
+                            if(block_ptr == $u32 0) continue;
+                            if(ext2_dealloc_block(fs, block_ptr)) {
+                                panic("ext2_dealloc_inode_blocks() : failed to dealloc direct block");
+                            }
+                        }
+                        if(ext2_dealloc_block(fs, singly_ind_block_ptr)) {
+                            panic("ext2_dealloc_inode_blocks() : failed to dealloc singly ind block");
+                        }
+                    }
+                }
+                if(ext2_dealloc_block(fs, doubly_ind_block_ptr)) {
+                    panic("ext2_dealloc_inode_blocks() : failed to dealloc doubly ind block");
+                }
+            }
+        }
+        if(ext2_dealloc_block(fs, inode->triply_ind_block_ptr)) {
+            panic("ext2_dealloc_inode_blocks() : failed to dealloc triply ind block");
+        }
+        inode->triply_ind_block_ptr = $u32 0;
+        pfree(singly_ind_block);
+        pfree(doubly_ind_block);
+        pfree(triply_ind_block);
+    }
+
+    // update inode
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+    inode->size = $u32 0;
+    inode->sectors = $u32 0;
+    inode->atime = time_now;
+    inode->mtime = time_now;
+    if(ext2_write_inode(fs, inode, inode_num)) {
+        panic("ext2_dealloc_inode_blocks() : failed to write inode");
+    }
+
+    return 0;
+}
+
+//loads an inode from disk into memory
+i32 ext2_read_inode(ext2_fs* fs, u32 inode_num, ext2_inode* res) {
+    if(inode_num == $u32 0 || inode_num > fs->sb->inodes_count) {
+        cout << "ext2_read_inode() : Invalid inode number : " << inode_num << "\n";
+        return 1;
+    }
+
+    // inodes 1 indexed
+    u32 group = (inode_num - $u32 1) / fs->sb->inodes_per_group;
+    u32 index = (inode_num - $u32 1) % fs->sb->inodes_per_group;
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+
+    // read correct gdt block
+    assert($u64 fs->block_size <= PAGE_SIZE, "ext2_read_inode() : currently, can only read upto PAGE_SIZE");
+    void* buf = palloc();
+    memset(buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, buf)) {  
+        cout << "ext2_read_inode() : Reading group descriptor table failed, returning\n";
+        pfree(buf);
+        return 1;
+    }
+
+    // index into correct gd entry in gdt block
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 buf + $u64 (group_offset % fs->block_size));
+    u32 inode_offset = index * $u32 fs->sb->inode_size;
+    u32 inode_block = gd->inode_table + (inode_offset / fs->block_size);
+
+    // read correct inode block
+    memset(buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, inode_block, buf)) {
+        cout << "ext2_read_inode() : Inode table read failed @ block " << inode_block << "\n";
+        pfree(buf);
+        return 1;
+    }
+
+    // copy inode to res
+    memcpy($void* res, $void* ($u64 buf + $u64 (inode_offset % fs->block_size)), sizeof(ext2_inode));
+    pfree(buf);
+
+    return 0;
+}
+
+//writes an inode from memory onto disk
+i32 ext2_write_inode(ext2_fs* fs, ext2_inode* inode, u32 inode_num) {
+    if(inode_num == $u32 0 || inode_num > fs->sb->inodes_count) {
+        cout << "ext2_write_inode() : Invalid inode number : " << inode_num << "\n";
+        return 1;
+    }
+
+    // inodes 1 indexed
+    u32 group = (inode_num - $u32 1) / fs->sb->inodes_per_group;
+    u32 index = (inode_num - $u32 1) % fs->sb->inodes_per_group;
+    u32 group_offset = group * $u32 sizeof(ext2_group_descriptor);
+    u32 group_block = (fs->sb->first_data_block + $u32 1) + (group_offset / fs->block_size);
+
+    // read correct gdt block
+    assert($u64 fs->block_size <= PAGE_SIZE, "ext2_write_inode() : currently, can only read upto PAGE_SIZE");
+    void* buf = palloc();
+    memset(buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, group_block, buf)) {  
+        cout << "ext2_write_inode() : Reading group descriptor table failed, returning\n";
+        pfree(buf);
+        return 1;
+    }
+
+    // index into correct gd entry in gdt block
+    ext2_group_descriptor* gd = $ext2_group_descriptor* ($u64 buf + $u64 (group_offset % fs->block_size));
+    u32 inode_offset = index * $u32 fs->sb->inode_size;
+    u32 inode_block = gd->inode_table + (inode_offset / fs->block_size);
+
+    // read correct inode block
+    memset(buf, 0, PAGE_SIZE);
+    if(ext2_read_block(fs, inode_block, buf)) {
+        cout << "ext2_write_inode() : Inode table read failed @ block " << inode_block << "\n";
+        pfree(buf);
+        return 1;
+    }
+
+    // copy inode into buffer
+    memcpy($void* ($u64 buf + $u64 (inode_offset % fs->block_size)), $void* inode, sizeof(ext2_inode));
+    
+    // write buffer back to inode block
+    if(ext2_write_block(fs, inode_block, buf)) {
+        cout << "ext2_write_inode() : Inode table write failed @ block " << inode_block << "\n";
+        pfree(buf);
+        return 1;
+    }
+
+    pfree(buf);
+    return 0;
+}
+
+//attaches the given block to the inode
+//pblock gives the physical block index
+//lblock gives the block index within the file 
+//expects lblock to not be mapped, and pblock to already be allocated
+i32 ext2_map_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 lblock, u32 pblock) {
+    // entries per indirect block
+    u32 B = fs->block_size / $u32 4;
+
+    // direct
+    if(lblock < $u32 12) {
+        //is it already occupied?
+        if(inode->direct_block_ptr[lblock] != $u32 0) {
+            return 1;
+        }
+
+        //update and write back
+        inode->direct_block_ptr[lblock] = pblock;
+        inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
+        if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
+
+        return 0;
+    }
+    lblock -= $u32 12;
+
+    // singly
+    if(lblock < B) {
+        //do we need to allocate singly indirect block
+        if(inode->singly_ind_block_ptr == $u32 0) {
+            //alloc singly indirect block
+            if(ext2_alloc_block(fs, inode->singly_ind_block_ptr)) panic("ext2_map_block() : failed to alloc singly indirect block");
+            
+            //update inode
+            inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
+            if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
+        }
+
+        //read singly indirect block
+        void* buf = palloc();
+        memset(buf, 0, PAGE_SIZE);
+        if(ext2_read_block(fs, inode->singly_ind_block_ptr, buf)) panic("ext2_map_block() : failed to read singly indirect block");
+
+        //is it already occupied?
+        if(($u32* buf)[lblock] != $u32 0) {
+            pfree(buf);
+            return 1;
+        }
+
+        //update and write back 
+        ($u32* buf)[lblock] = pblock;   
+        inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
+        if(ext2_write_block(fs, inode->singly_ind_block_ptr, buf)) panic("ext2_map_block() : failed to write singly indirect block");
+
+        cout << "SINGLY INDIRECT MAPPED\n";
+
+        pfree(buf);
+        return 0;
+    }
+    lblock -= B;
+
+    // doubly
+    if(lblock < B * B) {
+        //do we need to map doubly indirect block
+        if(inode->doubly_ind_block_ptr == $u32 0) {
+            //alloc doubly indirect block
+            if(ext2_alloc_block(fs, inode->doubly_ind_block_ptr)) panic("ext2_map_block() : failed to alloc doubly indirect block");
+
+            //update node
+            inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
+            if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
+        }
+
+        //read doubly indirect block
+        u32 doubly_ind_block = inode->doubly_ind_block_ptr;
+        void* buf = palloc();
+        memset(buf, 0, PAGE_SIZE);
+        if(ext2_read_block(fs, doubly_ind_block, buf)) panic("ext2_map_block() : failed to read doubly indirect block");
+
+        //do we need to map singly indirect block
+        if(($u32* buf)[lblock / B] == $u32 0) {
+            //alloc singly indirect block
+            if(ext2_alloc_block(fs, ($u32* buf)[lblock / B])) panic("ext2_map_block() : failed to alloc singly indirect block");
+
+            //update block
+            inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
+            if(ext2_write_block(fs, doubly_ind_block, buf)) panic("ext2_map_block() : failed to write doubly indirect block");
+        }
+        
+        //read singly indirect block
+        u32 singly_ind_block = ($u32* buf)[lblock / B];
+        memset(buf, 0, PAGE_SIZE);
+        if(ext2_read_block(fs, singly_ind_block, buf)) panic("ext2_map_block() : failed to read singly indirect block");
+        lblock %= B;
+
+        //is it already occupied?
+        if(($u32* buf)[lblock] != $u32 0) {
+            pfree(buf);
+            return 1;
+        }
+
+        //update and write back
+        ($u32* buf)[lblock] = pblock;
+        inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
+        if(ext2_write_block(fs, singly_ind_block, buf)) panic("ext2_map_block() : failed to write singly indirect block");
+
+        cout << "DOUBLY INDIRECT MAPPED\n";
+
+        pfree(buf);
+        return 0;
+    }
+    lblock -= B * B;
+
+    // triply
+    if(lblock < B * B * B) {
+        panic("ext2_map_block() : triply not implemented");
+        return 1;
+    }
+    lblock -= B * B * B;
+
+    panic("ext2_map_block() : lblock exceeds size limit");
+    return 1;
+}
+
+//removes the given block from the inode
+//does not deallocate the underlying physical block
+//expects lblock to be mapped
+i32 ext2_unmap_block(ext2_fs* fs, ext2_inode* inode, u32 inode_num, u32 lblock) {
+    cout << "ext2_unmap_block : " << inode_num << " " << lblock << "\n";
+
+    // entries per indirect block
+    u32 B = fs->block_size / $u32 4;
+
+    // direct
+    if(lblock < $u32 12) {
+        //make sure block is mapped
+        if(inode->direct_block_ptr[lblock] == $u32 0) {
+            panic("ext2_unmap_block() : lblock is not mapped");
+        }
+
+        //update and write back
+        inode->direct_block_ptr[lblock] = $u32 0;
+        inode->sectors -= fs->block_size / EXT2_SECTOR_SIZE;
+        if(ext2_write_inode(fs, inode, inode_num)) panic("ext2_map_block() : failed to write inode");
+
+        return 0;
+    }
+    lblock -= $u32 12;
+
+    // singly
+    if(lblock < B) {
+        panic("ext2_unmap_block() : singly not implemented");
+        return 1;
+    }
+    lblock -= B;
+
+    // doubly
+    if(lblock < B * B) {
+        panic("ext2_unmap_block() : doubly not implemented");
+        return 1;
+    }
+    lblock -= B * B;
+
+    // triply
+    if(lblock < B * B * B) {
+        panic("ext2_unmap_block() : triply not implemented");
+        return 1;
+    }
+    lblock -= B * B * B;
+    
+    panic("ext2_unmap_block() : lblock exceeds size limit");
+    return 1;
+}
+
+//gets block number within file
+//if block is not mapped, return block 0
+u32 ext2_traverse_block_map(ext2_fs* fs, ext2_inode* inode, u32 file_block_index) {
+    // entries per indirect block
+    u32 B = fs->block_size / $u32 4; 
+
+    // direct
+    if(file_block_index < $u32 12) {
+        return inode->direct_block_ptr[file_block_index];
+    }
+    file_block_index -= $u32 12;
+    
+    // singly
+    if(file_block_index < B) {
+        if(inode->singly_ind_block_ptr == $u32 0) return $u32 0;
+        void* buf = palloc();
+        if(ext2_read_block(fs, inode->singly_ind_block_ptr, buf)) panic("ext2_traverse_block_map() : read failed");
+        u32* blocks = $u32* buf;
+
+        u32 block = blocks[file_block_index];
+        pfree(buf);
+        return block; 
+    }
+    file_block_index -= B;
+
+    // doubly
+    if(file_block_index < (B * B)) {    
+        u32 l0_index = file_block_index / B;
+        u32 l1_index = file_block_index % B;
+
+        if(inode->doubly_ind_block_ptr == $u32 0) return $u32 0;
+        void* buf_l0 = palloc();
+        if(ext2_read_block(fs, inode->doubly_ind_block_ptr, buf_l0)) panic("ext2_traverse_block_map() : read failed");
+        u32* l0 = $u32* buf_l0;
+        
+        if(l0[l0_index] == $u32 0) return $u32 0;
+        void* buf_l1 = palloc();
+        if(ext2_read_block(fs, l0[l0_index], buf_l1)) panic("ext2_traverse_block_map() : read failed");
+        u32* l1 = $u32* buf_l1;
+
+        u32 block = l1[l1_index];
+        pfree($void* buf_l1);
+        pfree($void* buf_l0);
+        return block;
+    }
+    file_block_index -= (B * B);
+
+    // triply
+    if(file_block_index < (B * B * B)) {
+        u32 l0_index = file_block_index / (B * B);
+        u32 rem = file_block_index % (B * B);
+        u32 l1_index = rem / B;
+        u32 l2_index = rem % B;
+
+        if(inode->triply_ind_block_ptr == $u32 0) return $u32 0;
+        void* buf_l0 = palloc();
+        if(ext2_read_block(fs, inode->triply_ind_block_ptr, buf_l0)) panic("ext2_traverse_block_map() : read failed");
+        u32* l0 = $u32* buf_l0;
+        
+        if(l0[l0_index] == $u32 0) return $u32 0;
+        void* buf_l1 = palloc();
+        if(ext2_read_block(fs, l0[l0_index], buf_l1)) panic("ext2_traverse_block_map() : read failed");
+        u32* l1= $u32* buf_l1;
+
+        if(l1[l1_index] == $u32 0) return $u32 0;
+        void* buf_l2 = palloc();
+        if(ext2_read_block(fs, l1[l1_index], buf_l2)) panic("ext2_traverse_block_map() : read failed");
+        u32* l2 = $u32* buf_l2;
+
+        u32 block = l2[l2_index];
+        pfree($void* buf_l2);
+        pfree($void* buf_l1);
+        pfree($void* buf_l0);
+        return block;
+    }
+
+    // this out of bound, file exceeds the limit (right now its is B*B*B*BLOCK_SIZE ~ 16GiB)
+    panic("ext2_traverse_block_map() : file_block_index exceeds size limit");
+    return $u32 0;
+}
+
+//gets all block numbers within file block range [start_block_index, start_block_index + block_count)
+//returns all the block numbers in out_buf, expects out_buf to be properly allocated
+//if block is not mapped, returns 0 for that block
+void ext2_traverse_block_map_range(ext2_fs* fs, ext2_inode* inode, u32 start_block_index, u32 block_count, u32* out_buf) {
+    assert(out_buf != nullptr, "ext2_traverse_block_map_range() : null out_buf");
+    memset($void* out_buf, 0, sizeof(u32) * $u64 block_count);
+    u64 buf_ptr = 0x0;
+    void* buf1 = palloc();
+    void* buf2 = palloc();
+    void* buf3 = palloc();
+
+    // entries per indirect block
+    u32 B = fs->block_size / $u32 4; 
+
+    // direct
+    if(start_block_index < $u32 12) {
+        for(u64 i = 0x0; i < $u64 12; i++) {
+            if(buf_ptr == $u64 block_count) break;
+            if(start_block_index == $u32 0) {
+                out_buf[buf_ptr ++] = inode->direct_block_ptr[i];
+            }
+            else start_block_index --;
+        }
+    }
+    else start_block_index -= $u32 12;
+    
+    // singly
+    if(start_block_index < B) {
+        if(inode->singly_ind_block_ptr == $u32 0) {
+            //nothing mapped here
+            for(u64 j = 0x0; j < $u64 B; j++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = $u32 0;
+                }
+                else start_block_index --;
+            }
+        }
+        else {
+            if(ext2_read_block(fs, inode->singly_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
+            for(u64 i = 0x0; i < $u64 B; i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = ($u32* buf1)[i];
+                }
+                else start_block_index --;
+            }
+        }
+    }
+    else start_block_index -= B;
+
+    // doubly
+    if(start_block_index < (B * B)) {    
+        if(inode->doubly_ind_block_ptr == $u32 0) {
+            //nothing mapped here
+            for(u64 i = 0x0; i < $u64 (B * B); i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = $u32 0;
+                }
+                else start_block_index --;
+            }
+        }
+        else {
+            if(ext2_read_block(fs, inode->doubly_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
+            for(u64 i = 0x0; i < $u64 B; i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index < B) {
+                    if(($u32* buf1)[i] == $u32 0) {
+                        //nothing mapped here
+                        for(u64 j = 0x0; j < $u64 B; j++) {
+                            if(buf_ptr == $u64 block_count) break;
+                            if(start_block_index == $u32 0) {
+                                out_buf[buf_ptr ++] = $u32 0;
+                            }
+                            else start_block_index --;
+                        }
+                    }
+                    else {
+                        if(ext2_read_block(fs, ($u32* buf1)[i], buf2)) panic("ext2_traverse_block_map_range() : read block failed");
+                        for(u64 j = 0x0; j < $u64 B; j++) {
+                            if(buf_ptr == $u64 block_count) break;
+                            if(start_block_index == $u32 0) {
+                                out_buf[buf_ptr ++] = ($u32* buf2)[j];
+                            }   
+                            else start_block_index --;
+                        }
+                    }
+                }
+                else start_block_index -= B;
+            }
+        }
+    }
+    else start_block_index -= (B * B);
+
+    // triply
+    if(start_block_index < (B * B * B)) {   
+        if(inode->triply_ind_block_ptr == $u32 0) {
+            //nothing mapped here
+            for(u64 i = 0x0; i < $u64 (B * B * B); i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index == $u32 0) {
+                    out_buf[buf_ptr ++] = $u32 0;
+                }
+                else start_block_index --;
+            }
+        }
+        else {
+            if(ext2_read_block(fs, inode->triply_ind_block_ptr, buf1)) panic("ext2_traverse_block_map_range() : read block failed");
+            for(u64 i = 0x0; i < $u64 B; i++) {
+                if(buf_ptr == $u64 block_count) break;
+                if(start_block_index < B * B) {
+                    if(($u32* buf1)[i] == $u32 0) {
+                        //nothing mapped here
+                        for(u64 j = 0x0; j < $u64 (B * B); j++) {
+                            if(buf_ptr == $u64 block_count) break;
+                            if(start_block_index == $u32 0) {
+                                out_buf[buf_ptr ++] = $u32 0;
+                            }
+                            else start_block_index --;
+                        }
+                    }
+                    else {
+                        if(ext2_read_block(fs, ($u32* buf1)[i], buf2)) panic("ext2_traverse_block_map_range() : read block failed");
+                        for(u64 j = 0x0; j < $u64 B; j++) {
+                            if(buf_ptr == $u64 block_count) break;
+                            if(start_block_index < B) {
+                                if(($u32* buf2)[j] == $u32 0) {
+                                    //nothing mapped here
+                                    for(u64 k = 0x0; k < $u64 B; k++) {
+                                        if(buf_ptr == $u64 block_count) break;
+                                        if(start_block_index == $u32 0) {
+                                            out_buf[buf_ptr ++] = $u32 0;
+                                        }
+                                        else start_block_index --;
+                                    }
+                                }
+                                else {
+                                    if(ext2_read_block(fs, ($u32* buf2)[j], buf3)) panic("ext2_traverse_block_map_range() : read block failed");
+                                    for(u64 k = 0x0; k < $u64 B; k++) {
+                                        if(buf_ptr == $u64 block_count) break;
+                                        if(start_block_index == $u32 0) {
+                                            out_buf[buf_ptr ++] = ($u32* buf3)[k];
+                                        }
+                                        else start_block_index --;
+                                    }
+                                }
+                            }
+                            else start_block_index -= B;
+                        }
+                    }
+                }
+                else start_block_index -= B * B;
+            }
+        }
+    }
+    else start_block_index -= (B * B * B);
+
+    pfree(buf1);
+    pfree(buf2);
+    pfree(buf3);
+    assert(start_block_index == $u32 0, "ext2_traverse_block_map_range() : range too high");
+    assert(buf_ptr == $u64 block_count, "ext2_traverse_block_map_range() : range too large");
+}
+
+//takes in a directory and a child, and adds the child inode to the directory
+//this only adds a directory entry to the parent, 
+//the child still needs to add an entry pointing to the parent
+i32 ext2_add_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, ext2_inode* child_inode, u32 child_inode_num, string child_name) {
+    //parent has to be a directory
+    assert(parent_inode->is_directory(), "ext2_add_directory_entry() : parent inode must be directory");
+
+    //add directory entry to parent
+    {
+        //see if there is existing space where we can place it
+        void* buf = palloc();
+        i32 found = 0;
+        u32 child_entry_size = (($u32 8 + $u32 child_name.size() + $u32 3) / $u32 4) * $u32 4;
+        u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
+
+        for(u32 i = $u32 0; i < block_count; i++) {
+            u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
+            if(block_num == $u32 0) break;
+            if(ext2_read_block(fs, block_num, buf)) {
+                panic("ext2_add_directory_entry() : failed to read parent directory block");
+            }
+            
+            u32 offset = $u32 0;
+            while(offset < fs->block_size) {
+                ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+                if(dir->size == $u16 0) {
+                    //this is an error
+                    panic("ext2_add_directory_entry() : found error, dir->size should be non-zero");
+                }
+                if(dir->inode != $u32 0) {
+                    //see if there's enough space here
+                    u32 cur_ideal_size = (($u32 8 + $u32 dir->name_len + $u32 3) / $u32 4) * $u32 4;
+                    if($u32 dir->size - cur_ideal_size >= child_entry_size) {
+                        cout << "FOUND ENTRY WITH ENOUGH SPACE : " << dir->size << " " << cur_ideal_size << " " << child_entry_size << " " << new string($u8* @dir->name, $u64 dir->name_len) << " " << block_num << "\n";
+
+                        //yes, place it here. create new entry
+                        ext2_dir_entry* ndir = $ext2_dir_entry* ($u64 dir + $u64 cur_ideal_size);
+                        ndir->inode = child_inode_num;
+                        ndir->size = dir->size - $u16 cur_ideal_size;
+                        ndir->name_len = $u8 child_name.size();
+                        ndir->file_type = $u8 0;
+                        memcpy($void* @ndir->name, $void* child_name.jstr(), child_name.size());
+
+                        //set previous entry's size
+                        dir->size = $u16 cur_ideal_size;
+                        
+                        found = 1;
+                        break;
+                    }
+                }
+                else if($u32 dir->size >= child_entry_size) {
+                    assert(dir->inode == $u32 0, "ext2_add_directory_entry() : we should be replacing a free directory entry");
+
+                    //replace free entry
+                    dir->inode = child_inode_num;
+                    //dir->size should remain the same
+                    dir->name_len = $u8 child_name.size();
+                    dir->file_type = $u8 0;
+                    memcpy($void* @dir->name, $void* child_name.jstr(), child_name.size());
+
+                    cout << "FOUND FREE ENTRY\n";
+                    found = 1;
+                    break;
+                }
+                offset += $u32 dir->size;
+            }
+
+            if(found) {
+                //update block and break
+                if(ext2_write_block(fs, block_num, buf)) {
+                    panic("ext2_add_directory_entry() : failed to write parent directory block");
+                }
+                break;
+            }
+        }
+
+        if(!found) {
+            //we need to alloc new directory block
+            u32 new_block;
+            if(ext2_alloc_block(fs, new_block)) {
+                panic("ext2_add_directory_entry() : failed to alloc new directory block");
+            }
+
+            //create directory entry in new block
+            memset(buf, 0, PAGE_SIZE);
+            ext2_dir_entry* ndir = $ext2_dir_entry* buf;
+            ndir->inode = child_inode_num;
+            ndir->size = $u16 fs->block_size;
+            ndir->name_len = $u8 child_name.size();
+            ndir->file_type = $u8 0;
+            memcpy($void* @ndir->name, $void* child_name.jstr(), child_name.size());
+
+            if(ext2_write_block(fs, new_block, buf)) {
+                panic("ext2_add_directory_entry() : failed to write new directory block");
+            }
+
+            //map block to parent
+            if(ext2_map_block(fs, parent_inode, parent_inode_num, block_count, new_block)) {
+                panic("ext2_add_directory_entry() : failed to map new directory block to parent");
+            }
+
+            //update parent metadata
+            parent_inode->size += fs->block_size;
+            parent_inode->sectors += fs->block_size / EXT2_SECTOR_SIZE;
+
+            cout << "ALLOC\'D NEW BLOCK : " << new_block << "\n";
+        }
+
+        pfree(buf);
+    }
+
+    //update parent inode
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+    parent_inode->atime = time_now;
+    parent_inode->mtime = time_now;
+    if(ext2_write_inode(fs, parent_inode, parent_inode_num)) {
+        panic("ext2_add_directory_entry() : failed write parent inode");
+    }
+
+    //update child inode
+    child_inode->links_count ++;
+    if(ext2_write_inode(fs, child_inode, child_inode_num)) {
+        panic("ext2_add_directory_entry() : failed write child inode");
+    }
+
+    return 0;
+}
+
+//removes the directory entry pointing from the parent to the child
+//this does not touch the child, if the child is being reparented it still needs to modify its '..' entry itself
+i32 ext2_remove_directory_entry(ext2_fs* fs, ext2_inode* parent_inode, u32 parent_inode_num, ext2_inode* child_inode, u32 child_inode_num) {
+    //parent has to be directory
+    assert(parent_inode->is_directory(), "ext2_remove_directory_entry() : parent inode must be directory");
+
+    //remove entry from parent
+    {
+        void* buf = palloc();
+        i32 found = 0;
+        u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
+
+        for(u32 i = $u32 0; i < block_count; i++) {
+            u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
+            if(block_num == $u32 0) break;
+            if(ext2_read_block(fs, block_num, buf)) {
+                panic("ext2_remove_directory_entry() : failed to read parent directory block");
+            }
+            
+            u32 offset = $u32 0;
+            ext2_dir_entry* prev = $ext2_dir_entry* nullptr;
+            while(offset < fs->block_size) {
+                ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+                if(dir->size == $u16 0) {
+                    //this is an error
+                    panic("ext2_remove_directory_entry() : found error, dir->size should be non-zero");
+                }
+                if(dir->inode != $u32 0 && dir->inode == child_inode_num) {
+                    //we've found it, mark entry as unused
+                    dir->inode = $u32 0;
+                    if(offset != $u32 0) {
+                        //merge with previous dir entry
+                        assert(prev != nullptr, "ext2_remove_directory_entry() : should\'ve already populated prev by now");
+                        prev->size += dir->size;
+                        cout << "MERGING WITH PREV ENTRY : " << prev->size << " " << dir->size << "\n";
+                    }
+                    
+                    found = 1;
+                    break;
+                }
+                offset += $u32 dir->size;
+                prev = dir;
+            }
+            if(!found) assert(offset == fs->block_size, "ext2_remove_directory_entry() : entries take up the entire block");
+
+            if(found) {
+                //update block and break
+                if(ext2_write_block(fs, block_num, buf)) {
+                    panic("ext2_remove_directory_entry() : failed to write parent directory block");
+                }
+                break;
+            }
+        }
+
+        assert(found, "ext2_remove_directory_entry() : we must be able to find the directory entry");
+        pfree(buf);
+    }
+
+    //update parent inode
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+    parent_inode->atime = time_now;
+    parent_inode->mtime = time_now;
+    if(ext2_write_inode(fs, parent_inode, parent_inode_num)) {
+        panic("ext2_remove_directory_entry() : failed write parent inode");
+    }
+
+    //update child inode
+    assert(child_inode->links_count != $u16 0, "ext2_remove_directory_entry() : child should have non-zero links count");
+    child_inode->links_count --;
+    if(ext2_write_inode(fs, child_inode, child_inode_num)) {
+        panic("ext2_remove_directory_entry() : failed write child inode");
+    }
+
+    return 0;
+}
+
+//looks up a child within a parent directory, returns it and its inode number
+//expects ret to be preallocated
+//if the lookup fails in any way (read error, child doesn't exist), returns 1
+i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_inode* ret_node, u32& ret_node_num) {
+    assert(parent_inode->is_directory(), "ext2_lookup() : parent node must be directory");
+    
+    void* buf = palloc();
+    u32 block_count = (parent_inode->size + fs->block_size - $u32 1) / fs->block_size;
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, parent_inode, i);
+        if(block_num == $u32 0) break;
+        if(ext2_read_block(fs, block_num, buf)) panic("ext2_lookup() : read block failed");
+        
+        u32 offset = $u32 0;
+        while(offset < fs->block_size) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            if(dir->size == $u16 0) {
+                //this is an error
+                panic("ext2_lookup() : size of directory entry should be non-zero");
+            }
+            if(dir->inode != $u32 0 && child_name == new string($u8* @dir->name, $u64 dir->name_len)) {
+                //found child, read inode into memory
+                if(ext2_read_inode(fs, dir->inode, ret_node)) {
+                    //failed to read
+                    pfree(buf);
+                    return VFS_WALK_ERR;
+                }
+
+                //set return inode num
+                ret_node_num = dir->inode;
+
+                pfree(buf);
+                return VFS_WALK_FOUND;
+            }
+            offset += $u32 dir->size;
+        }
+        assert(offset == fs->block_size, "ext2_lookup() : entries take up the entire block");
+    }
+
+    return VFS_WALK_MISSING;
+}
+
+//same as lookup, but only returns the ext2_inode struct
+i32 ext2_lookup(ext2_fs* fs, ext2_inode* parent_inode, string child_name, ext2_inode* ret_node) {
+    u32 tmp;
+    return ext2_lookup(fs, parent_inode, child_name, ret_node, tmp);
+}
+
+//scan directory entries, stop on first entry that is not '.' or '..'
+i32 ext2_dir_empty(ext2_fs* fs, ext2_inode* node, i32& ret) {
+    assert(node->is_directory(), "ext2_dir_empty() : node must be a directory");
+
+    void* buf = palloc();
+    u32 block_count = (node->size + fs->block_size - $u32 1) / fs->block_size;
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, node, i);
+        if(block_num == $u32 0) break;
+        ext2_read_block(fs, block_num, buf);
+        
+        u32 offset = $u32 0;
+        while(offset < fs->block_size) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            if(dir->size == $u16 0) {
+                //this is an error
+                panic("ext2_dir_empty() : found error, dir->size should be non-zero");
+            }
+            if(dir->inode != $u32 0) {
+                //found an entry, make sure it isn't '.' or '..'
+                if(
+                    !(dir->name_len == $u8 1 && dir->name[0] == '.') &&
+                    !(dir->name_len == $u8 2 && dir->name[0] == '.' && dir->name[1] == '.')
+                ) {
+                    ret = 0;
+                    return 0;
+                } 
+            }
+            offset += $u32 dir->size;
+        }
+        assert(offset == fs->block_size, "ext2_dir_empty() : entries take up the entire block");
+    }
+
+    //didn't find anything, this is empty
+    ret = 1;
+    return 0;
+}
+
+vfs_ops* VFS_EXT2_OPS;
+void init_ext2() {
+    VFS_EXT2_OPS = $vfs_ops* malloc(sizeof(vfs_ops));
+
+    VFS_EXT2_OPS->get_mount_root = #<ext2_get_mount_root(vfs_inode*, void*, vfs_inode*&)>;
+
+    VFS_EXT2_OPS->lookup = #<ext2_lookup(vfs_inode*, string, vfs_inode*&)>;
+    VFS_EXT2_OPS->get_children = #<ext2_get_children(vfs_inode*, vector<string>&)>;
+    VFS_EXT2_OPS->dir_empty = #<ext2_dir_empty(vfs_inode*, i32&)>;
+    VFS_EXT2_OPS->mkdir = #<ext2_mkdir(vfs_inode*, string)>;
+    VFS_EXT2_OPS->rmdir = #<ext2_rmdir(vfs_inode*, string)>;
+    VFS_EXT2_OPS->create = #<ext2_create(vfs_inode*, string)>;
+    VFS_EXT2_OPS->unlink = #<ext2_unlink(vfs_inode*, string)>;
+
+    VFS_EXT2_OPS->get_size = #<ext2_get_size(vfs_inode*, u64&)>;
+    VFS_EXT2_OPS->read_file = #<ext2_read_file(vfs_inode*, u8*, u64, u64, u64&)>;
+    VFS_EXT2_OPS->write_file = #<ext2_write_file(vfs_inode*, u8*, u64, u64, u64&)>;
+    VFS_EXT2_OPS->truncate = #<ext2_truncate(vfs_inode*, u64)>;
+
+    VFS_EXT2_OPS->fstat = #<ext2_fstat(vfs_inode*, stat*)>;
+}
+
+//expects vfs_inode to be preallocated
+//constructs a new instance of vfs_inode in the provided buffer
+void ext2_construct_vfs_inode(u64 dev, string name, u32 inode_num, ext2_fs* super, ext2_inode* ext2_inode, vfs_inode* vfs_inode) {
+    u64 type = DT_UNKNOWN;
+    if      ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_FIFO)       type = DT_FIFO;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_CHAR_DEV)   type = DT_CHR;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_DIR)        type = DT_DIR;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_BLOCK_DEV)  type = DT_BLK;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_FILE)       type = DT_REG;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_SYM_LINK)   type = DT_LNK;
+    else if ((ext2_inode->mode & $u16 0xf000) == INODE_TYPE_UNIX_SOCK)  type = DT_SOCK;
+
+    new (vfs_inode) vfs_inode(dev, $u64 inode_num, name, type, sizeof(ext2_inode), $u64 inode_num, $void* ext2_inode, $void* super, VFS_EXT2_OPS);
+}
+
+//vfs operation to produce root inode for this ext2 filesystem
+i32 ext2_get_mount_root(vfs_inode* _node, void* super, vfs_inode*& res) {
+    // println("ext2_get_mount_root() : start");
+    ext2_fs* fs = $ext2_fs* super;
+
+    //retrieve root inode
+    ext2_inode* node = $ext2_inode* malloc(sizeof(ext2_inode));
+    if(ext2_read_inode(fs, $u32 2, $ext2_inode* node)) {
+        free($void* node, sizeof(ext2_inode));
+        return 1;
+    }
+
+    ext2_construct_vfs_inode(file_next_dev(), _node->name, $u32 2, fs, node, res);
+    // println("ext2_get_mount_root() : done");
+    return 0;
+}
+
+//vfs operation to get child of ext2 node
+i32 ext2_lookup(vfs_inode* _node, string child, vfs_inode*& res) {
+    // println("ext2_lookup() : start");
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_directory(), "ext2_lookup() : only valid on directories");
+    assert(node->is_directory(), "ext2_lookup() : only valid on directories");
+
+    //try to find child
+    ext2_inode* child_node = $ext2_inode* malloc(sizeof(ext2_inode));
+    u32 child_node_num;
+    i32 lookup_status = ext2_lookup(fs, node, child, child_node, child_node_num);
+    if(lookup_status) {
+        free($void* child_node, sizeof(ext2_inode));
+        return lookup_status;
+    }
+
+    //construct output and return
+    ext2_construct_vfs_inode(_node->dev, child, child_node_num, fs, child_node, res);
+    return VFS_WALK_FOUND;
+}
+
+i32 ext2_get_children(vfs_inode* _node, vector<string>& res) {
+    // println("ext2_get_children() : start");
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_directory(), "ext2_get_children() : only valid on directories");
+    assert(node->is_directory(), "ext2_get_children() : only valid on directories");
+
+    void* buf = palloc();
+    u32 block_count = (node->size + fs->block_size - $u32 1) / fs->block_size;
+    for(u32 i = $u32 0; i < block_count; i++) {
+        u32 block_num = ext2_traverse_block_map(fs, node, i);
+        if(block_num == $u32 0) break;
+        if(ext2_read_block(fs, block_num, buf)) {
+            panic("ext2_get_children() : failed to read block");
+        }
+        
+        u32 offset = $u32 0;
+        while(offset < fs->block_size) {
+            ext2_dir_entry* dir = $ext2_dir_entry* ($u64 buf + $u64 offset);
+            if(dir->size == $u16 0) {
+                //this is an error
+                panic("ext2_get_children() : found error, dir->size should be non-zero");
+            }
+            if(dir->inode != $u32 0) {
+                res.push_back(new string($u8* @dir->name, $u64 dir->name_len));
+            }
+            offset += $u32 dir->size;
+        }
+        assert(offset == fs->block_size, "ext2_get_children() : offset must end exactly at block end");
+    }
+
+    // println("ext2_get_children() : done");
+
+    pfree(buf);
+    return 0;
+}
+
+i32 ext2_dir_empty(vfs_inode* _node, i32& ret) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_directory(), "ext2_dir_empty() : only valid on directories");
+    assert(node->is_directory(), "ext2_dir_empty() : only valid on directories");
+
+    if(ext2_dir_empty(fs, node, ret)) {
+        return 1;
+    }
+    return 0;
+}
+
+i32 ext2_mkdir(vfs_inode* _node, string name) {
+    // println("ext2_mkdir() : start");
+    ext2_inode* parent_inode = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_directory(), "ext2_mkdir() : only valid on directories");
+    assert(parent_inode->is_directory(), "ext2_mkdir() : only valid on directories");
+
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+
+    //see if parent already has a child with this name
+    {
+        vector<string> children;
+        if(ext2_get_children(_node, children)) {
+            panic("ext2_mkdir() : failed getting children");
+        }
+        for(u64 i = 0x0; i < children.size(); i++) {
+            if(children[i] == name) {
+                cout << "Child " << name << " already exists in directory " << _node->name << "\n";
+                return 1;
+            }
+        }
+    }
+
+    //alloc inode for child dir
+    u32 inode_ind;
+    if(ext2_alloc_inode(fs, inode_ind)) {
+        panic("ext2_mkdir() : failed alloc inode");
+    }
+
+    //write directory inode
+    ext2_inode* dir_inode = $ext2_inode* malloc(sizeof(ext2_inode));
+    new (dir_inode) ext2_inode();
+    dir_inode->mode = INODE_TYPE_DIR | $u16 0o755;
+    dir_inode->size = $u32 0;
+    dir_inode->sectors = $u32 0;  
+    dir_inode->links_count = $u16 0;                            
+    dir_inode->atime = time_now;
+    dir_inode->ctime = time_now;
+    dir_inode->mtime = time_now;
+    dir_inode->uid = $u16 0;                                    //root user
+    dir_inode->gid = $u16 0;                                    //root user
+    if(ext2_write_inode(fs, dir_inode, inode_ind)) {
+        panic("ext2_mkdir() : failed write inode");
+    }
+
+    //write directory entries
+    if(ext2_add_directory_entry(fs, parent_inode, $u32 _node->node_num, dir_inode, inode_ind, name)) {              //parent -> child
+        panic("ext2_mkdir() : failed to add child to parent");
+    }
+    if(ext2_add_directory_entry(fs, dir_inode, inode_ind, dir_inode, inode_ind, new string("."))) {                 //child -> child
+        panic("ext2_mkdir() : failed to add \".\" entry to new dir");
+    }
+    if(ext2_add_directory_entry(fs, dir_inode, inode_ind, parent_inode, $u32 _node->node_num, new string(".."))) {  //child -> parent
+        panic("ext2_mkdir() : failed to add \"..\" entry to new dir");
+    }
+
+    // println("ext2_mkdir() : done");
+
+    free($void* dir_inode, sizeof(ext2_inode));
+    return 0;
+}
+
+i32 ext2_rmdir(vfs_inode* _node, string name) {
+    ext2_inode* parent_inode = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_directory(), "ext2_rmdir() : only valid on directories");
+    assert(parent_inode->is_directory(), "ext2_rmdir() : only valid on directories");
+
+    //retrieve child node
+    ext2_inode* child_inode = $ext2_inode* malloc(sizeof(ext2_inode));
+    u32 child_inode_num;
+    if(ext2_lookup(fs, parent_inode, name, child_inode, child_inode_num)) {
+        //failed to lookup child
+        cout << "EXT2 RM FAILED TO LOOKUP CHILD : " << name << "\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //ensure child is a directory
+    if(!child_inode->is_directory()) {
+        cout << "EXT2 RM CHILD IS NOT DIR\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //ensure child is empty
+    i32 is_empty;
+    if(ext2_dir_empty(fs, child_inode, is_empty)) {
+        cout << "EXT2 RM EMPTY CHECK FAILED\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+    if(!is_empty) {
+        cout << "EXT2 RM CHILD NOT EMPTY\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+    assert(child_inode->links_count == $u16 2, "ext2_rmdir() : empty directory should have exactly 2 links");
+
+    //remove '.' and '..' links, as well as parent -> child link
+    if(ext2_remove_directory_entry(fs, parent_inode, $u32 _node->node_num, child_inode, child_inode_num)) {
+        panic("ext2_rmdir() : failed remove child from parent");
+    }
+    if(ext2_remove_directory_entry(fs, child_inode, child_inode_num, child_inode, child_inode_num)) {
+        panic("ext2_rmdir() : failed remove \".\" entry from child");
+    }
+    if(ext2_remove_directory_entry(fs, child_inode, child_inode_num, parent_inode, $u32 _node->node_num)) {
+        panic("ext2_rmdir() : failed remove \"..\" entry from child");
+    }
+    assert(child_inode->links_count == $u16 0, "ext2_rmdir() : empty directory should now have exactly 0 links");
+
+    //dealloc child
+    if(ext2_dealloc_inode_blocks(fs, child_inode, child_inode_num)) {
+        panic("ext2_rmdir() : failed dealloc child blocks");
+    }
+    if(ext2_dealloc_inode(fs, child_inode_num)) {
+        panic("ext2_rmdir() : failed dealloc child node");
+    }
+
+    free($void* child_inode, sizeof(ext2_inode));
+    return 0;
+}
+
+i32 ext2_create(vfs_inode* _node, string name) {
+    ext2_inode* parent_inode = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_directory(), "ext2_create() : only valid on directories");
+    assert(parent_inode->is_directory(), "ext2_create() : only valid on directories");
+
+    u32 time_now = $u32 cmos_get_epoch_time_sec();
+
+    //see if parent already has a child with this name
+    {
+        vector<string> children;
+        if(ext2_get_children(_node, children)) {
+            panic("ext2_create() : failed getting children");
+        }
+        for(u64 i = 0x0; i < children.size(); i++) {
+            if(children[i] == name) {
+                cout << "Child " << name << " already exists in directory " << _node->name << "\n";
+                return 1;
+            }
+        }
+    }
+
+    //alloc inode for child dir
+    u32 inode_ind;
+    if(ext2_alloc_inode(fs, inode_ind)) {
+        panic("ext2_create() : failed alloc inode");
+    }
+
+    //write file inode
+    ext2_inode* file_inode = $ext2_inode* malloc(sizeof(ext2_inode));
+    new (file_inode) ext2_inode();
+    file_inode->mode = INODE_TYPE_FILE | $u16 0o755;
+    file_inode->size = $u32 0;
+    file_inode->sectors = $u32 0;  
+    file_inode->links_count = $u16 0;                            
+    file_inode->atime = time_now;
+    file_inode->ctime = time_now;
+    file_inode->mtime = time_now;
+    file_inode->uid = $u16 0;                                    //root user
+    file_inode->gid = $u16 0;                                    //root user
+    if(ext2_write_inode(fs, file_inode, inode_ind)) {
+        panic("ext2_create() : failed write inode");
+    }
+
+    //write directory entry from parent to file
+    if(ext2_add_directory_entry(fs, parent_inode, $u32 _node->node_num, file_inode, inode_ind, name)) {        
+        panic("ext2_create() : failed to add child to parent");
+    }
+
+    free($void* file_inode, sizeof(ext2_inode));
+    return 0;
+}
+
+i32 ext2_unlink(vfs_inode* _node, string name) {
+    ext2_inode* parent_inode = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_directory(), "ext2_unlink() : only valid on directories");
+    assert(parent_inode->is_directory(), "ext2_unlink() : only valid on directories");
+
+    //retrieve child node
+    ext2_inode* child_inode = $ext2_inode* malloc(sizeof(ext2_inode));
+    u32 child_inode_num;
+    if(ext2_lookup(fs, parent_inode, name, child_inode, child_inode_num)) {
+        //failed to lookup child
+        cout << "EXT2 UNLINK FAILED TO LOOKUP CHILD : " << name << "\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //ensure child is a file
+    if(!child_inode->is_file()) {
+        cout << "EXT2 UNLINK CHILD IS NOT FILE\n";
+        free($void* child_inode, sizeof(ext2_inode));
+        return 1;
+    }
+
+    //remove link from parent to child
+    if(ext2_remove_directory_entry(fs, parent_inode, $u32 _node->node_num, child_inode, child_inode_num)) {        
+        panic("ext2_unlink() : failed to add child to parent");
+    }
+
+    //if child hard link count goes to 0, dealloc child entirely
+    if(child_inode->links_count == $u16 0) {
+        if(ext2_dealloc_inode_blocks(fs, child_inode, child_inode_num)) {
+            panic("ext2_unlink() : failed dealloc child blocks");
+        }
+        if(ext2_dealloc_inode(fs, child_inode_num)) {
+            panic("ext2_unlink() : failed dealloc child node");
+        }
+    }
+
+    free($void* child_inode, sizeof(ext2_inode));
+    return 0;
+}
+
+i32 ext2_get_size(vfs_inode* _node, u64& res) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_file(), "ext2_get_size() : only valid on files");
+    assert(node->is_file(), "ext2_get_size() : only valid on files");
+
+    res = $u64 node->size;
+    return 0;
+}
+
+//reads the contents from a regular file
+//it may be the case that some blocks are not mapped. If so, those will be filled with all '\0' on read
+//returns the number of bytes read
+// TODO reduce the amount of calls to ext_read_block()
+//  - right now, every time we traverse the block map we potentially emit a bunch of reads
+//    perhaps instead of traversing the block map for each block individually, we have a function in which we
+//    specify the range of blocks to translate (file block -> LBA), and then we can sort the LBAs to get 
+//    contiguous transfers. Maybe only enable this for large transfers (>= 5 blocks)
+i32 ext2_read_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
+    println("ext2_read_file() : start : ", _node->name);
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_file(), "ext2_read_file() : only valid on files");
+    assert(node->is_file(), "ext2_read_file() : only valid on files");
+    memset($void* buf, 0, amt);
+
+    //early out for null reads
+    if(amt == 0x0) {
+        res = 0x0;
+        return 0;
+    }
+
+    //clamp read to file size
+    u32 size = node->size;
+    if(off + amt > $u64 size) {
+        amt = max(0x0, $u64 size - off);
+    }
+
+    //prefetch all block numbers of data blocks for this read
+    u32 start_fblock = $u32 (off / $u64 fs->block_size);
+    u32 end_fblock = $u32 ((off + amt + $u64 fs->block_size - 0x1) / $u64 fs->block_size);
+    u32* block_nums = $u32* malloc(sizeof(u32) * $u64 (end_fblock - start_fblock));
+    u64 block_nums_ptr = 0x0;
+    ext2_traverse_block_map_range(fs, node, start_fblock, end_fblock - start_fblock, block_nums);
+    
+    res = 0x0;
+    u64 buf_ptr = 0x0;
+
+    //if beginning is not aligned, special case for it
+    if($u32 off % fs->block_size != $u32 0) {
+        //read block
+        void* tmp_buf = malloc($u64 fs->block_size);
+        u32 block_num = block_nums[block_nums_ptr ++];
+        if(block_num == $u32 0) {
+            //unmapped block, fill with '\0'
+            memset(tmp_buf, 0, $u64 fs->block_size);
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
+
+        //copy over to output
+        u64 block_off = off % $u64 fs->block_size;
+        u64 cur_amt = min($u64 fs->block_size - block_off, amt);
+        memcpy($void* buf, $void* ($u64 tmp_buf + block_off), cur_amt);
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+        free(tmp_buf, $u64 fs->block_size);
+    }   
+
+    //read middle blocks
+    while(amt >= $u64 fs->block_size) {
+        //see if block is unmapped
+        if(block_nums[block_nums_ptr] == $u32 0) {
+            block_nums_ptr ++;
+            off += $u64 fs->block_size;
+            buf_ptr += $u64 fs->block_size;
+            res += $u64 fs->block_size;
+            amt -= $u64 fs->block_size;
+            continue;
+        }
+
+        //read largest amount of contiguous chunks possible
+        u32 fblock_start = block_nums[block_nums_ptr ++];
+        u32 block_cnt = $u32 1;
+        while((amt - $u64 fs->block_size * $u64 block_cnt) >= $u64 fs->block_size) {
+            if(block_nums[block_nums_ptr] != block_nums[block_nums_ptr - 0x1] + $u32 1) {
+                // not contiguous
+                break;
+            }
+            block_cnt ++;
+            block_nums_ptr ++;
+        }
+
+        //read blocks
+        u64 cur_amt = $u64 block_cnt * $u64 fs->block_size;
+        if(ext2_read_blocks(fs, fblock_start, block_cnt, $void* ($u64 buf + buf_ptr))) {
+            //read failed
+            return 1;
+        }
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+    }
+
+    //if end is not aligned, special case for it
+    if(amt != 0x0) {
+        assert(amt < $u64 fs->block_size, "ext2_read_file() : remainder should be less than a block");
+
+        //read block
+        void* tmp_buf = malloc($u64 fs->block_size);
+        u32 block_num = block_nums[block_nums_ptr ++];
+        if(block_num == $u32 0) {
+            //unmapped block, fill with '\0'
+            memset(tmp_buf, 0, $u64 fs->block_size);
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
+
+        //copy over to output
+        u64 cur_amt = amt;
+        memcpy($void* ($u64 buf + buf_ptr), tmp_buf, cur_amt);
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+        free(tmp_buf, $u64 fs->block_size);
+    }
+
+    free($void* block_nums, sizeof(u32) * $u64 (end_fblock - start_fblock));
+    assert(amt == 0x0, "ext2_read_file() : should have read whole thing");
+    assert(block_nums_ptr == $u64 (end_fblock - start_fblock), "ext2_read_file() : should have visited every block");
+    println("ext2_read_file() : done");
+    return 0;
+}
+
+//writes over the contents of the file
+//maps new blocks as necessary 
+//returns the number of bytes written
+i32 ext2_write_file(vfs_inode* _node, u8* buf, u64 amt, u64 off, u64& res) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_file(), "ext2_write_file() : only valid on files");
+    assert(node->is_file(), "ext2_write_file() : only valid on files");
+
+    void* tmp_buf = palloc();
+    res = 0x0;
+    u64 buf_ptr = 0x0;
+
+    //if beginning is not aligned, special case for it
+    if($u32 off % fs->block_size != $u32 0) {
+        //read block
+        u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
+        if(block_num == $u32 0) {
+            //unmapped block, go alloc and map it
+            if(ext2_alloc_block(fs, block_num)) {
+                //failed to alloc block
+                return 1;
+            }
+            assert(block_num != $u32 0, "ext2_write_file() : the allocd block should be non-zero");
+            if(ext2_map_block(fs, node, $u32 _node->node_num, $u32 off / fs->block_size, block_num)) {
+                //failed to map block
+                return 1;
+            }
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
+
+        //write to buffer
+        u64 block_off = off - $u64 fs->block_size * (off / $u64 fs->block_size);
+        u64 cur_amt = min($u64 fs->block_size - block_off, amt);
+        memcpy($void* ($u64 tmp_buf + block_off), $void* buf, cur_amt);
+
+        //write block
+        assert(block_num != $u32 0, "ext2_write_file() : block num should be non-zero");
+        if(ext2_write_block(fs, block_num, tmp_buf)) {
+            //write failed
+            return 1;
+        }
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+    }   
+
+    //read rest of blocks
+    while(amt) {
+        //read block
+        u32 block_num = ext2_traverse_block_map(fs, node, $u32 off / fs->block_size);
+        if(block_num == $u32 0) {
+            //unmapped block, go alloc and map it
+            if(ext2_alloc_block(fs, block_num)) {
+                //failed to alloc block
+                return 1;
+            }
+            assert(block_num != $u32 0, "ext2_write_file() : the allocd block should be non-zero");
+            if(ext2_map_block(fs, node, $u32 _node->node_num, $u32 off / fs->block_size, block_num)) {
+                //failed to map block
+                return 1;
+            }
+        }
+        else if(ext2_read_block(fs, block_num, tmp_buf)) {
+            //read failed
+            return 1;
+        }
+
+        //write to buffer
+        u64 cur_amt = min($u64 fs->block_size, amt);
+        memcpy(tmp_buf, $void* ($u64 buf + buf_ptr), cur_amt);
+
+        //write block
+        assert(block_num != $u32 0, "ext2_write_file() : block num should be non-zero");
+        if(ext2_write_block(fs, block_num, tmp_buf)) {
+            //write failed
+            return 1;
+        }
+
+        off += cur_amt;
+        buf_ptr += cur_amt;
+        res += cur_amt;
+        amt -= cur_amt;
+    }
+
+    //update file metadata
+    if($u32 off > node->size) {
+        node->size = $u32 off;
+        if(ext2_write_inode(fs, node, $u32 _node->node_num)) {
+            panic("ext2_write_file() : failed to update node");
+        }
+    }
+
+    pfree(tmp_buf);
+    return 0;
+}
+
+//sets the size of the file to equal nsz
+//if nsz is less than the current size, excess blocks are deallocated
+//if nsz >= current size, can simply update size. It's fine to leave holes. 
+i32 ext2_truncate(vfs_inode* _node, u64 nsz) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+    assert(_node->is_file(), "ext2_truncate() : only valid on files");
+    assert(node->is_file(), "ext2_truncate() : only valid on files");
+    
+    //if the file is getting shorter, need to dealloc excess
+    if(nsz < $u64 node->size) {
+        assert(nsz < $u64 node->size, "ext2_truncate() : now we should be dealing with the shortening case");
+
+        //very naive way, just go through one by one and dealloc pages
+        u32 lb = ($u32 nsz + fs->block_size - $u32 1) / fs->block_size;
+        u32 rb = (node->size + fs->block_size - $u32 1) / fs->block_size;
+        assert(lb <= rb, "ext2_truncate() : lb <= rb");
+        for(u32 i = lb; i < rb; i++) {
+            u32 block_num = ext2_traverse_block_map(fs, node, i);
+            if(block_num != $u32 0) {
+                //unmap 
+                if(ext2_unmap_block(fs, node, $u32 _node->node_num, i)) {
+                    panic("ext2_truncate() : failed to unmap block");
+                }
+
+                //dealloc 
+                if(ext2_dealloc_block(fs, block_num)) {
+                    panic("ext2_truncate() : failed to dealloc block");
+                }
+            }
+        }
+
+        //special case for last page, if it's alloc'd, need to read and zero out excess
+        if(nsz % $u64 fs->block_size != 0x0) {
+            u32 block_num = ext2_traverse_block_map(fs, node, $u32 nsz / fs->block_size);
+            if(block_num != $u32 0) {
+                void* buf = palloc();
+                if(ext2_read_block(fs, block_num, buf)) {
+                    panic("ext2_truncate() : failed read block");
+                }
+
+                u64 start = nsz % $u64 fs->block_size;
+                assert(start < PAGE_SIZE, "ext2_truncate() : should be true as long as PAGE_SIZE >= fs->block_size");
+                memset($void* ($u64 buf + start), 0, PAGE_SIZE - start);
+
+                if(ext2_write_block(fs, block_num, buf)) {
+                    panic("ext2_truncate() : failed write block");
+                }
+                pfree(buf);
+            }
+        }
+    }
+    
+    //update inode metadata
+    node->size = $u32 nsz;
+    if(ext2_write_inode(fs, node, $u32 _node->node_num)) {
+        panic("ext2_truncate() : failed to update node");
+    }
+
+    return 0;
+}
+
+i32 ext2_fstat(vfs_inode* _node, stat* stat) {
+    ext2_inode* node = $ext2_inode* _node->node;
+    ext2_fs* fs = $ext2_fs* _node->super;
+
+    //clear stat
+    memset($void* stat, 0, sizeof(stat));
+
+    //fill stat
+    stat->st_dev = _node->dev;
+    stat->st_ino = _node->ino;
+    stat->st_nlink = $u64 node->links_count;
+
+    stat->st_mode = $u32 0;
+    if      ((node->mode & $u16 0xf000) == INODE_TYPE_FIFO)        stat->st_mode = S_IFIFO;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_CHAR_DEV)    stat->st_mode = S_IFCHR;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_DIR)         stat->st_mode = S_IFDIR;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_BLOCK_DEV)   stat->st_mode = S_IFBLK;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_FILE)        stat->st_mode = S_IFREG;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_SYM_LINK)    stat->st_mode = S_IFLNK;
+    else if ((node->mode & $u16 0xf000) == INODE_TYPE_UNIX_SOCK)   stat->st_mode = S_IFSOCK;
+
+    stat->st_rdev = 0x0;
+    stat->st_size = $i64 node->size;
+    stat->st_blksize = $i64 fs->block_size;
+    stat->st_blocks = $i64 node->sectors;
+
+    stat->st_atime.tv_sec = $i64 node->atime;
+    stat->st_mtime.tv_sec = $i64 node->mtime;
+    stat->st_ctime.tv_sec = $i64 node->ctime;
+
+    return 0;
+}

@@ -1,7 +1,7 @@
-uhh, follow these guidelines or something and your code will be more safe (?)
+uhh, follow these guidelines or something and your code will be more safe and better (?)
  
 when writing in the kernel, try to prefix any functions, globals, structs, with the filename that it 
-comes from if you find that it doesn't make sense to be prefixed, it should probably go in utils.jank
+comes from.
 
 a function should never alloc and return a heap pointer, instead you should pass a preallocated pointer
 into the function. This makes it so that allocs and deallocs of the same memory happen within the same 
@@ -12,3 +12,10 @@ allocator occasionally (function local temporary storage is the main example). M
 always pfree() afterwards.
 
 if you need to return a status code, always return i32 and 0 on success. 
+
+when designing interfaces that need to be implemented by many implementors, the interface should 
+not know about any implementors. This segregates all the implementors making it so that editing one
+implementor does not force recompilation of all other implementors. 
+
+you should probably not have a catch-all utilities file, it makes it hard to know what parts of the 
+utilities file you are using and also hard to determine whether or not you can remove that include. 

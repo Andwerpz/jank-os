@@ -1,4 +1,4 @@
-#include <kernel::kmalloc>;
+#include <kernel::memory/kmalloc>;
 
 intrinsic("malloc")
 void* intrinsic_malloc(u64 sz) {

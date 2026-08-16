@@ -1,7 +1,7 @@
 #include <memory>;
 #include <jstring>;
 
-#include "vga.jank";
+#include "dev/vga.jank";
 #include "panic.jank";
 #include "utils.jank";
 

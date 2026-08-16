@@ -3,39 +3,42 @@
 
 #include "globals.jank";
 
-#include "pagetable.jank";
-#include "serial.jank";
-#include "utils.jank";
-#include "pma.jank";
-#include "kmalloc.jank";
+#include "arch/pagetable.jank";
+#include "dev/serial.jank";
+#include "utils/print.jank";
+#include "memory/pma.jank";
+#include "memory/kmalloc.jank";
 
-#include "vga.jank";
-#include "gdt.jank";
-#include "idt.jank";
-#include "pic.jank";
-#include "apic.jank";
-#include "syscall.jank";
-#include "pit.jank";
-#include "kb.jank";
-#include "acpi.jank";
-#include "ps2.jank";
-#include "file.jank";
-#include "tty.jank";
-#include "vfs.jank";
-#include "blockdev.jank";
-#include "usb/usb.jank";
-#include "networking/net_interface.jank";
-#include "networking/socket.jank";
-#include "networking/protocols/udp.jank";
-#include "networking/protocols/tcp.jank";
-#include "scheduler.jank";
+#include "dev/vga.jank";
+#include "arch/gdt.jank";
+#include "arch/idt.jank";
+#include "arch/pic.jank";
+#include "arch/apic.jank";
+#include "syscall/syscall.jank";
+#include "arch/pit.jank";
+#include "dev/kb.jank";
+#include "arch/acpi.jank";
+#include "dev/ps2.jank";
+#include "fs/file.jank";
+#include "dev/tty.jank";
+#include "fs/vfs.jank";
+#include "fs/ext2fs.jank";
+#include "block/blockdev.jank";
+#include "dev/ahci.jank";
+#include "dev/usb/usb.jank";
+#include "dev/networking/net_interface.jank";
+#include "dev/networking/socket.jank";
+#include "dev/networking/protocols/udp.jank";
+#include "dev/networking/protocols/tcp.jank";
+#include "sched/scheduler.jank";
+#include "fs/pipe.jank";
 
-#include "mbr.jank";
-#include "ext2fs.jank";
+#include "block/mbr.jank";
+#include "arch/portio.jank";
 
-[SERIAL] i32 INIT_SERIAL_STATUS = init_serial();
-[PMA] i32 INIT_PMA_STATUS = init_pma();
-[PAGING] i32 INIT_PAGING_STATUS = init_paging();
+[SERIAL] i32 INIT_SERIAL_STATUS = preinit_serial();
+[PMA] i32 INIT_PMA_STATUS = preinit_pma();
+[PAGING] i32 INIT_PAGING_STATUS = preinit_paging();
 
 void check_paging_enabled() {
     u64 cr0;
@@ -238,12 +241,19 @@ i32 main() {
 
     init_acpi();
     init_ps2();
-    init_file();
-    init_tty();
-    init_vfs();
-    init_blockdev();
 
+    init_file();
+    init_serial();
+    init_tty();
+    init_pipe();
+    init_socket();
+
+    init_blockdev();
+    init_ahci();
     init_usb();
+
+    init_vfs();
+    init_ext2();
 
     blockdev_mount_ext2();
 

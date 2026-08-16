@@ -1,0 +1,200 @@
+#include <containers::string>;
+
+#include "dev/serial.jank";
+#include "dev/vga.jank";
+
+void print(u8 c) {
+    serial_write(c);
+    if(DO_VGA_PRINT) vga_debug_draw_char(c);
+} 
+
+void print(u8* str) {
+    while(*str != $u8 0) {
+        print(*str);
+        str = $u8* ($u64 str + $u64 1);
+    }
+}
+
+void print(string s) {
+    for(u64 i = 0x0; i < s.size(); i++){
+        print(s[i]);
+    }
+}
+
+void print(u64 x) {
+    print(to_string(x));
+}
+
+void print(u32 x){
+    print(to_string(x));
+}
+
+void print(u16 x) {
+    print(to_string(x));
+}
+
+void print(i64 x) {
+    print(to_string(x));
+}
+
+void print(i32 x) {
+    print(to_string(x));
+}
+
+template<T>
+void print(T* ptr) {
+    print("0x");
+    u64 val = $u64 ptr;
+    u64 mask = 0b1111;
+    for(i32 i = 15; i >= 0; i--){
+        u64 dig = (val & (mask << ($u64 i * $u64 4))) >> ($u64 i * $u64 4);
+        u8 c;
+        if(dig < $u64 10) {
+            c = '0' + $u8 dig;
+        }
+        else {
+            c = 'a' + $u8 dig - $u8 10;
+        }
+        print(c);
+    }
+}
+
+void println() {
+    print("\n");
+}
+
+template<T>
+void println(T x) {
+    print(x);
+    print("\n");
+}
+
+template<T, U>
+void print(T a, U b) {
+    print(a);
+    print(b);
+}
+
+template<T, U>
+void println(T a, U b) {
+    print(a, b);
+    print("\n");
+}
+
+template<T, U, V>
+void print(T a, U b, V c) {
+    print(a);
+    print(b);
+    print(c);
+}
+
+template<T, U, V>
+void println(T a, U b, V c) {
+    print(a, b, c);
+    print("\n");
+}
+
+template<T, U, V, W>
+void print(T a, U b, V c, W d) {
+    print(a);
+    print(b);
+    print(c);
+    print(d);
+}
+
+template<T, U, V, W>
+void println(T a, U b, V c, W d) {
+    print(a, b, c, d);
+    print("\n");
+}
+
+void print_hex(u8 x) {
+    u8* hex_digits = "0123456789abcdef";
+    u8 high = (x >> $u8 4) & $u8 0x0F;
+    u8 low = x & $u8 0x0F;
+
+    print(hex_digits[high]);
+    print(hex_digits[low]);
+}
+
+//prints 16 separated bytes on a line
+template<T>
+void hexdump(T* _buf, u64 amt_bytes) {
+    u8* buf = $u8* _buf;
+    for(u64 i = 0x1; i <= amt_bytes; i++){
+        u64 low = ($u64 buf[i - 0x1]) & 0xf;
+        u64 high = ($u64 buf[i - 0x1] >> $u64 4) & 0xf;
+        if(high < $u64 10) print('0' + $u8 high);
+        else print('a' + $u8 high - $u8 10);
+        if(low < $u64 10) print('0' + $u8 low);
+        else print('a' + $u8 low - $u8 10);
+        print(" ");
+        if(i % 0x10 == 0x0) print("\n");
+    }
+    if(amt_bytes % 0x10) print("\n");
+}
+
+template<T>
+void bitdump(T x) {
+    print("0b");
+    for(u64 i = sizeof(T) * 0x8 - 0x1; ; i--) {
+        print($i32 (($u64 x >> i) & 0x1));
+        if(i == 0x0) break;
+    }
+}
+
+
+[PRINTSTREAM] printstream cout = new printstream();
+struct printstream {}
+
+printstream& operator<<(printstream& stream, u8* s) {
+    print(s);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, u8 c) {
+    print(c);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, i64 x) {
+    print(x);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, i32 x) {
+    print(x);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, u64 x) {
+    print(x);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, u32 x) {
+    print(x);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, u16 x) {
+    print(x);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, string& s) {
+    print(s);
+    return stream;
+}
+
+printstream& operator<<(printstream& stream, string s) {
+    print(s);
+    return stream;
+}
+
+template<T>
+printstream& operator<<(printstream& stream, T* p) {
+    print(p);
+    return stream;
+}
+

@@ -1,0 +1,396 @@
+#include <containers::vector>;
+#include <containers::deque>;
+#include <containers::string>;
+
+#include "globals.jank";
+#include "sched/process.jank";
+#include "utils/print.jank";
+#include "arch/gdt.jank";
+#include "sched/waitq.jank";
+#include "dev/vga.jank";
+
+// ===========================================================
+// Notes on kernel stacks, traps, and interrupts
+// ===========================================================
+
+// Each process has its own persistent kernel stack
+// - Allocated at process creation, freed at process exit
+// - Stack top pointer stored in PCB and loaded into TSS.rsp0 at context switch
+
+// Exceptions (faults/traps):
+// - CPU transitions CPL=3->0 and switches to current process kernel stack
+// - CPU pushes hardware trapframe (RIP, CS, RFLAGS, RSP, SS, error code)
+// - Handler runs on process kernel stack
+// - Handler either:
+//   (a) fixes the fault and returns via iretq using trapframe on stack
+//   (b) kills the process and never returns
+// - No trapframe is copied to PCB
+
+// Interrupts:
+// - If arriving in user mode: CPU switches to kernel stack (rsp0) and pushes frame
+// - If arriving in kernel mode: CPU pushes frame on *current* kernel stack (no switch)
+// - Interrupt handler may preempt exception/syscall handler
+// - Before moving to scheduler, handler must copy trapframe into process kstack
+
+//interrupts can preempt exceptions, exceptions will continue to function as their trapframes are 
+//stored on the kstack. 
+
+//also, make sure that interrupts are disabled while in the scheduler
+
+struct trapframe {
+    u64 rax;        // 0
+    u64 rbx;        // 8
+    u64 rcx;        // 16
+    u64 rdx;        // 24
+    u64 rsi;        // 32
+    u64 rdi;        // 40
+    u64 rbp;        // 48
+    u64 rsp;        // 56
+    u64 r8;         // 64
+    u64 r9;         // 72
+    u64 r10;        // 80
+    u64 r11;        // 88
+    u64 r12;        // 96
+    u64 r13;        // 104
+    u64 r14;        // 112
+    u64 r15;        // 120
+    u64 rip;        // 128
+    u64 rflags;     // 136
+    u64 pt;         // 144
+    u64 cs;         // 152
+    u64 ss;         // 160
+}
+
+export void print_trapframe(trapframe* tf) {
+    cout << "%rax   : " << $void* tf->rax << "\n";
+    cout << "%rbx   : " << $void* tf->rbx << "\n";
+    cout << "%rcx   : " << $void* tf->rcx << "\n";
+    cout << "%rdx   : " << $void* tf->rdx << "\n";
+    cout << "%rsi   : " << $void* tf->rsi << "\n";
+    cout << "%rdi   : " << $void* tf->rdi << "\n";
+    cout << "%rbp   : " << $void* tf->rbp << "\n";
+    cout << "%rsp   : " << $void* tf->rsp << "\n";
+    cout << "%r8    : " << $void* tf->r8 << "\n";
+    cout << "%r9    : " << $void* tf->r9 << "\n";
+    cout << "%r10   : " << $void* tf->r10 << "\n";
+    cout << "%r11   : " << $void* tf->r11 << "\n";
+    cout << "%r12   : " << $void* tf->r12 << "\n";
+    cout << "%r13   : " << $void* tf->r13 << "\n";
+    cout << "%r14   : " << $void* tf->r14 << "\n";
+    cout << "%r15   : " << $void* tf->r15 << "\n";
+    cout << "%rip   : " << $void* tf->rip << "\n";
+    cout << "rflags : " << $void* tf->rflags << "\n";
+    cout << "pt     : " << $void* tf->pt << "\n";
+    cout << "cs     : " << $void* tf->cs << "\n";
+    cout << "ss     : " << $void* tf->ss << "\n";
+}
+
+//we shouldn't store processes anywhere else. 
+vector<process*> all_processes;
+
+deque<pid_t> process_queue; 
+pid_t current_process = $pid_t 0;
+
+//on success, returns a pointer to a process
+//on failure, returns nullptr
+process* find_process(pid_t pid) {
+    assert(pid != $pid_t 0, "find_process() : zero pid");
+    u64 ind = all_processes.size();
+    for(u64 i = 0x0; i < all_processes.size(); i++){
+        if(all_processes[i]->pid != pid) continue;
+        if(ind != all_processes.size()) panic("find_process() : found two processes with same pid");
+        ind = i;
+    }
+    if(ind == all_processes.size()) return $process* nullptr;
+    return all_processes[ind];
+}
+
+//should only be able to erase zombie processes
+//just removes process from scheduler
+//if it can't find the process, it panics
+void erase_process(pid_t pid) {
+    assert(pid != $pid_t 0, "erase_process() : zero pid");
+
+    //remove from all_processes
+    u64 ind = all_processes.size();
+    for(u64 i = 0x0; i < all_processes.size(); i++){
+        if(all_processes[i]->pid != pid) continue;
+        if(ind != all_processes.size()) panic("erase_process() : found two processes with same pid");
+        ind = i;
+    }
+    if(ind == all_processes.size()) panic("erase_process() : could not find process");
+    all_processes.erase(ind);
+}
+
+export process* get_cur_proc() {
+    assert(current_process != $pid_t 0, "get_cur_proc() : current_process is 0??");
+    process* proc = find_process(get_cur_pid());
+    assert(proc != nullptr, "get_cur_proc() : failed to find current process");
+    return proc;
+}
+
+export pid_t get_cur_pid() {
+    assert(current_process != $pid_t 0, "get_cur_pid() : current_process is 0??");
+    return current_process;
+}
+
+//should panic if there's no more processes to choose from
+process* schedule_next_process() {
+    //go until you see PROCESS_READY
+    //should probably add a check to see if there's actually some process that's READY in the queue
+    while(1) {
+        assert(process_queue.size() != 0x0, "schedule_next_process() : no more processes!!");
+        pid_t pid = process_queue.front();
+        process_queue.push_back(process_queue.pop_front());
+
+        process* proc = find_process(pid);
+        if(proc == nullptr) {   
+            //process that's been erased already
+            process_queue.pop_back();
+            continue;
+        }   
+
+        if(proc->status == PROCESS_READY) {
+            return proc;
+        }
+        else if(proc->status == PROCESS_ZOMBIE) {
+            //remove zombies from queue
+            process_queue.pop_back();
+        }
+    }
+
+    panic("schedule_next_process() : you shouldn\'t be here D:");
+    return $process* nullptr;
+}
+
+//saves the provided trapframe into current process's kstack, then calls the actual scheduler
+//note that this doesn't actually delete the provided trapframe
+void scheduler(trapframe* tf) {
+    process* proc = get_cur_proc();
+
+    //update status
+    if(proc->status == PROCESS_RUNNING) proc->status = PROCESS_READY;
+    else if(proc->status == PROCESS_BLOCKED) proc->status = PROCESS_BLOCKED;
+    else {
+        cout << "Unrecognized status : " << proc->status << "\n";
+        panic("scheduler() : unrecognized runtime status");
+    }
+
+    //save trapframe
+    process_set_trapframe(proc, tf);
+
+    //go to scheduler
+    scheduler();
+}   
+
+//before jumping here, should make it so that %rsp points to a stack that we can safely
+//  put garbage on. you can use the kernel stack for this
+//this expects kernel pagetables to be active as we'll want to access kernel heap structures
+//this should choose a process to run then jump to that process
+//this should not have to cleanup, the saved execution context should make it so that 
+//  any stuff leftover is treated as trash memory. 
+void scheduler() {
+    //look for next process to run
+    process* proc = schedule_next_process();
+    assert(proc->status == PROCESS_READY, "scheduler() : should only schedule ready processes");
+    current_process = proc->pid;
+    u64 proc_trapframe_off = proc->kstack_bottom + KSTACK_TRAPFRAME; 
+
+    //set process state to RUNNING
+    proc->status = PROCESS_RUNNING;
+
+    trapframe* tf = $trapframe* proc_trapframe_off;
+
+    // cout << "SCHEDULING PROCESS : " << proc->pid << " " << pt_get_current() << " " << proc->pt << " " << ($void* (proc->kstack_bottom + KSTACK_TOP)) << " " << process_queue.size() << "\n";
+    // print_trapframe(tf);
+    // if(!pt_is_vaddr_mapped(proc->pt, $void* (proc->kstack_bottom + PAGE_SIZE))) {
+    //     panic("ahhhh");
+    // }
+
+    //so syscalls know where this is
+    GSData* gs_data = $GSData* GSDATA_PAGE;
+    gs_data->cur_proc_kstack_top = proc->kstack_bottom + KSTACK_TOP;
+
+    //so interrupts from user->kernel mode go to process specific stack
+    tss_set_rsp0(proc->kstack_bottom + KSTACK_TOP);
+
+    //return to process
+    iret_to_process(tf);
+}
+
+//assumes the trapframe given corresponds to the current process
+void iret_to_process(trapframe* tf) {
+    //use common stack that every process should have mapped
+    asm!("movq {BOOTBOOT_STACK_TOP}, %rsp");
+
+    //need to do different stuff if we're returning to user or kernel mode
+    if(tf->cs == 0x23) {
+        //returning to user mode
+        //swap to user GS
+        asm!("swapgs");             
+
+        //load trapframe
+        asm!("movq {tf}, %rax");    //%rax now holds trapframe base
+
+        //iretq information
+        asm!("pushq 160(%rax)");    // SS
+        asm!("pushq 56(%rax)");     // %rsp
+        asm!("pushq 136(%rax)");    // rflags
+        asm!("pushq 152(%rax)");    // CS
+        asm!("pushq 128(%rax)");    // %rip
+
+        //push registers
+        asm!("pushq 0(%rax)");      // %rax
+        asm!("pushq 8(%rax)");      // %rbx
+        asm!("pushq 16(%rax)");     // %rcx
+        asm!("pushq 24(%rax)");     // %rdx
+        asm!("pushq 32(%rax)");     // %rsi
+        asm!("pushq 40(%rax)");     // %rdi
+        asm!("pushq 48(%rax)");     // %rbp
+                                    // skip %rsp
+        asm!("pushq 64(%rax)");     // %r8
+        asm!("pushq 72(%rax)");     // %r9
+        asm!("pushq 80(%rax)");     // %r10
+        asm!("pushq 88(%rax)");     // %r11
+        asm!("pushq 96(%rax)");     // %r12
+        asm!("pushq 104(%rax)");    // %r13
+        asm!("pushq 112(%rax)");    // %r14
+        asm!("pushq 120(%rax)");    // %r15
+        asm!("pushq 144(%rax)");    // %cr3
+
+        //pop registers
+        asm!("popq %rax");
+        asm!("movq %rax, %cr3");
+
+        asm!("popq %r15");
+        asm!("popq %r14");
+        asm!("popq %r13");
+        asm!("popq %r12");
+        asm!("popq %r11");
+        asm!("popq %r10");
+        asm!("popq %r9");
+        asm!("popq %r8");
+                                    // skip %rsp
+        asm!("popq %rbp");
+        asm!("popq %rdi");
+        asm!("popq %rsi");
+        asm!("popq %rdx");
+        asm!("popq %rcx");
+        asm!("popq %rbx");
+        asm!("popq %rax");
+
+        asm!("iretq");
+    }
+    else if(tf->cs == 0x08) {
+        //returning to kernel mode          
+        //load trapframe
+        asm!("movq {tf}, %rax");   //%rax now holds trapframe base
+
+        //swap to destination stack
+        asm!("movq 56(%rax), %rsp");
+
+        //iretq information
+        asm!("pushq 136(%rax)");    // rflags
+        asm!("pushq 152(%rax)");    // CS
+        asm!("pushq 128(%rax)");    // %rip
+
+        //push registers
+        asm!("pushq 0(%rax)");      // %rax
+        asm!("pushq 8(%rax)");      // %rbx
+        asm!("pushq 16(%rax)");     // %rcx
+        asm!("pushq 24(%rax)");     // %rdx
+        asm!("pushq 32(%rax)");     // %rsi
+        asm!("pushq 40(%rax)");     // %rdi
+        asm!("pushq 48(%rax)");     // %rbp
+                                    // skip %rsp
+        asm!("pushq 64(%rax)");     // %r8
+        asm!("pushq 72(%rax)");     // %r9
+        asm!("pushq 80(%rax)");     // %r10
+        asm!("pushq 88(%rax)");     // %r11
+        asm!("pushq 96(%rax)");     // %r12
+        asm!("pushq 104(%rax)");    // %r13
+        asm!("pushq 112(%rax)");    // %r14
+        asm!("pushq 120(%rax)");    // %r15
+        asm!("pushq 144(%rax)");    // %cr3
+
+        //pop registers
+        asm!("popq %rax");
+        asm!("movq %rax, %cr3");
+
+        asm!("popq %r15");
+        asm!("popq %r14");
+        asm!("popq %r13");
+        asm!("popq %r12");
+        asm!("popq %r11");
+        asm!("popq %r10");
+        asm!("popq %r9");
+        asm!("popq %r8");
+                                    // skip %rsp
+        asm!("popq %rbp");
+        asm!("popq %rdi");
+        asm!("popq %rsi");
+        asm!("popq %rdx");
+        asm!("popq %rcx");
+        asm!("popq %rbx");
+        asm!("popq %rax");
+
+        asm!("iretq");
+    }
+    else {
+        print_trapframe(tf);
+        panic("iret_to_process() : invalid CS");
+    }
+}
+
+//ends the current process's time slice, goes to the scheduler
+void yield() {
+    //just invoke the timer interrupt handler
+    asm!("int $0x20");
+}
+
+//transitions the process from a runnable state to the BLOCKED state and yields to the scheduler
+//panics if the process isn't initially runnable
+void wait_on(process* proc, waitq* q) {
+    assert(proc->status == PROCESS_READY || proc->status == PROCESS_RUNNING,  "wait_on() : process must be runnable to wait");
+    waitq_add_proc(q, proc);
+    proc->status = PROCESS_BLOCKED;
+    yield();
+}
+
+//transitions the current process from a runnable state to the BLOCKED state and yields to the scheduler
+//panics if the process isn't initially runnable
+void wait_on(waitq* q) {
+    process* proc = get_cur_proc();
+    assert(proc->status == PROCESS_READY || proc->status == PROCESS_RUNNING,  "wait_on() : process must be runnable to wait");
+    waitq_add_proc(q, proc);
+    proc->status = PROCESS_BLOCKED;
+    yield();
+}
+
+//transitions the process from the BLOCKED state to the READY state
+//panics if the process isn't initially in the BLOCKED state
+void wake(process* proc) {
+    assert(proc->status == PROCESS_BLOCKED, "wake() : process should be blocked");
+    proc->status = PROCESS_READY;
+}
+
+[__GLOBAL_FIRST__] i32 SCHEDULER_STARTED = 0;
+
+//once we call this, the initial kernel startup phase has finished
+//this function should never return. 
+void init_scheduler() {
+    cout << "start init scheduler\n";   
+
+    //initialize init process
+    create_process(new string("/bin/sys/init"));
+
+    //get ready for scheduler
+    disable_vga_print();
+    SCHEDULER_STARTED = 1;
+
+    //point %rsp to top of kernel stack
+    asm!("mov BOOTBOOT_STACK_TOP(%rip), %rsp");
+
+    //startup the scheduler
+    scheduler();
+}
