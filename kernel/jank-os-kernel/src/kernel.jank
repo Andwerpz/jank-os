@@ -18,6 +18,7 @@
 #include "arch/pit.jank";
 #include "dev/kb.jank";
 #include "arch/acpi.jank";
+#include "dev/pci.jank";
 #include "dev/ps2.jank";
 #include "fs/file.jank";
 #include "dev/tty.jank";
@@ -32,6 +33,10 @@
 #include "dev/networking/protocols/tcp.jank";
 #include "sched/scheduler.jank";
 #include "fs/pipe.jank";
+
+#include "dev/networking/nic/e1000.jank";
+#include "dev/networking/nic/rtl_8111_8168.jank";
+#include "dev/usb/xhci.jank";
 
 #include "block/mbr.jank";
 #include "arch/portio.jank";
@@ -255,7 +260,51 @@ i32 main() {
     init_vfs();
     init_ext2();
 
+    // go through PCI devices
+    for(u64 i = 0x0; i < PCI_DEVICES.size(); i++) {
+        PCIDevice& dev = PCI_DEVICES[i];
+        PCIHeader0* header = dev.header;
+        u16 vendor_id = header->vendor_id;
+        u16 device_id = header->device_id;
+        u8 class = header->class_code;
+        u8 subclass = header->subclass;
+        u8 progif = header->prog_if;
+
+        if (vendor_id == INTEL_VEND && device_id == E1000_DEV) {
+            // found intel e1000 nic
+            e1000_init(@dev);
+        }
+        if(vendor_id == REALTEK_VEND && device_id == RTL8168_DEV) {
+            // found realtek ethernet
+            rtl8111_init(@dev);
+        }
+        if(class == $u8 0x0C && subclass == $u8 0x03 && progif == $u8 0x30) {
+            if(progif == $u8 0x30) {
+                // found xHCI controller
+                init_xhci(@dev);
+            }
+            else if(progif == $u8 0x20) {
+                panic("found EHCI controller");
+            }
+            else if(progif == $u8 0x10) {
+                panic("found OHCI controller");
+            }
+            else if(progif == $u8 0x00) {
+                panic("found UHCI controller");
+            }
+        }
+    }
+
     blockdev_mount_ext2();
+
+    if(net_interfaces.size() != $u64 0) {
+        // should be after init acpi.
+        init_port_tables();
+        init_udp_ops();
+        init_tcp_ops();
+    }
+
+    init_scheduler();
 
     // cout << "PRINTING PAGETABLES :\n";
     // pagetable_t kernel_pt = pt_get_current();
@@ -272,15 +321,6 @@ i32 main() {
     // kernel_shell();
 
     //tests();    
-
-    if(net_interfaces.size() != $u64 0) {
-        // should be after init acpi.
-        init_port_tables();
-        init_udp_ops();
-        init_tcp_ops();
-    }
-
-    init_scheduler();
 
     //shouldn't get here
     panic("init scheduler failed");

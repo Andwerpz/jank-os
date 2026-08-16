@@ -6,6 +6,7 @@
 #include "utils/print.jank";
 #include "dev/networking/net_interface.jank";
 #include "dev/networking/protocols/ethernet.jank";
+#include "dev/pci.jank";
 #include "arch/acpi.jank";
 
 [__GLOBAL_FIRST__] u16 ARP_HW_TYPE_ETHERNET     = $u16 0x0001;

@@ -5,7 +5,7 @@
 #include "utils/print.jank";
 #include "sched/scheduler.jank";
 #include "memory/pma.jank";
-#include "arch/acpi.jank";
+#include "dev/pci.jank";
 #include "arch/pagetable.jank";
 #include "arch/idt.jank";
 #include "dev/networking/net_interface.jank";
@@ -86,8 +86,9 @@ struct RTL8111_TDESC {
     u32 addr_hi;
 }
 
-void rtl8111_init(u64 addr) {
+void rtl8111_init(PCIDevice* pci_dev) {
     println("rtl8111_init() : Beginning NIC initialization");
+    u64 addr = $u64 pci_dev->header;
 
     rtl8111 = $RTL8111* malloc(sizeof(RTL8111));
     rtl8111->mmio_base = 0x0;

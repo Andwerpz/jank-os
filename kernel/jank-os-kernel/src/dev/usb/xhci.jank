@@ -3,7 +3,7 @@
 #include "utils/print.jank";
 #include "dev/usb/usb.jank";
 #include "globals.jank";
-#include "arch/acpi.jank";
+#include "dev/pci.jank";
 #include "arch/idt.jank";
 #include "arch/pagetable.jank";
 #include "arch/cache.jank";
@@ -1644,10 +1644,10 @@ void xhci_interrupt_handler(void* data) {
     free($void* trb, sizeof(xHCI_TRB));
 }
 
-void init_xhci(u64 addr) {
+void init_xhci(PCIDevice* pci_dev) {
     assert(!XHCI_DID_INIT, "init_xhci() : double init");
     println("start init xhci");
-    PCIHeader0* pci_hdr = $PCIHeader0* addr;
+    PCIHeader0* pci_hdr = pci_dev->header;
 
     assert(sizeof(xHCI_TRB) == 0x10, "init_xhci() : sizeof(TRB) should be 16");
 

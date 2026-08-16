@@ -4,7 +4,7 @@
 #include "utils/print.jank";
 #include "utils/endian.jank";
 #include "dev/networking/net_interface.jank";
-#include "arch/acpi.jank";
+#include "dev/pci.jank";
 #include "globals.jank";
 #include "arch/pagetable.jank";
 #include "arch/pic.jank";
@@ -138,8 +138,9 @@ struct E1000_TDESC {
 [__GLOBAL_FIRST__] u8 E1000_TDESC_CMD_EOP = $u8 0x1;          // End Of Packet, When set, indicates the last descriptor making up the packet. One or many descriptors can be used to form a packet.
 [__GLOBAL_FIRST__] u8 E1000_TDESC_CMD_IFCS = $u8 0x2;         // Insert FCS, Controls the insertion of the FCS/CRC field in normal Ethernet packets. IFCS is valid only when EOP is set.
 
-void e1000_init(u64 addr) {
+void e1000_init(PCIDevice* pci_dev) {
     if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_init() : Beginning NIC initialization");
+    u64 addr = $u64 pci_dev->header;
 
     e1000 = $E1000* malloc(sizeof(E1000));
     e1000->eeprom_exists = $u8 0;
