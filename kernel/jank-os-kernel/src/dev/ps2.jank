@@ -1,6 +1,7 @@
 #include "arch/portio.jank";
 #include "utils/print.jank";
 #include "dev/kb.jank";
+#include "arch/idt.jank";
 
 // PS/2, from the IBM Personal System / 2 series of personal computers
 
@@ -128,6 +129,21 @@ void ps2_write_data_expect_ack(u8 c) {
 
         println("ps2_write_expect_ack() : unexpected response : ", $void* $u64 r);
         panic("ps2_write_expect_ack() : unexpected response");
+    }
+}
+
+[__GLOBAL_FIRST__] extern u8 ps2_interrupt_stub;
+void ps2_interrupt_stub() {
+    asm!("ps2_interrupt_stub:");
+    asm!("pushq $0");           // doesn't push error code
+    asm!("pushq {INTVEC_PS2}");
+    asm!("jmp interrupt_handler_entry");
+}
+
+void ps2_interrupt_handler(void* data) {
+    u8 c;
+    while(!ps2_poll_data(c)) {
+        ps2_accept_char(c);
     }
 }
 
@@ -312,6 +328,14 @@ void init_ps2() {
 
     PS2_MAPSET2_EXT[0x4A] = KEYCODE_KP_DIVIDE;
     PS2_MAPSET2_EXT[0x5A] = KEYCODE_KP_ENTER;
+
+    // register IRQ handler
+    irq_register(
+        INTVEC_PS2,
+        $u64 @ps2_interrupt_stub,
+        #<ps2_interrupt_handler(void*)>,
+        nullptr
+    );
 
     println("done init ps2");
 }

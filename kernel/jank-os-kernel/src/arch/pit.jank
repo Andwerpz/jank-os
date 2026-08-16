@@ -1,4 +1,11 @@
 #include "arch/portio.jank";
+#include "arch/idt.jank";
+
+// only needed for interrupt handler
+// TODO make some sort of interface to register stuff to run during PIT interrupt handler
+#include "dev/vga.jank";
+#include "dev/networking/protocols/arp.jank";
+#include "dev/networking/protocols/dhcp.jank";
 
 // https://wiki.osdev.org/Programmable_Interval_Timer
 // PIT (Programmable Interval Timer)
@@ -9,13 +16,54 @@
 [__GLOBAL_FIRST__] u16 PIT_CHANNEL0         = $u16 0x0040;
 [__GLOBAL_FIRST__] u16 PIT_COMMAND          = $u16 0x0043;
 
+[__GLOBAL_FIRST__] extern u8 pit_interrupt_stub;
+void pit_interrupt_stub() {
+    asm!("pit_interrupt_stub:");
+    asm!("pushq $0");           // doesn't push error code
+    asm!("pushq {INTVEC_PIT}");    
+    asm!("jmp interrupt_handler_entry");
+}
+
+//flush VGA periodically
+//flush arp periodically (should move later)
+[__GLOBAL_FIRST__] u64 PIT_VGA_COUNTER = 0x0;
+[__GLOBAL_FIRST__] u64 PIT_ARP_COUNTER = 0x0;
+[__GLOBAL_FIRST__] u64 PIT_DHCP_COUNTER = 0x0;
+void pit_interrupt_handler(void* data) {
+    PIT_VGA_COUNTER++;
+    if(PIT_VGA_COUNTER >= 0x3) {
+        PIT_VGA_COUNTER = 0x0;
+        vga_flush();
+    }
+
+    PIT_ARP_COUNTER++;
+    if(PIT_ARP_COUNTER >= 0x32) {
+        PIT_ARP_COUNTER = 0x0;
+        arp_check_timeouts();
+    }
+
+    PIT_DHCP_COUNTER++;
+    if(PIT_DHCP_COUNTER >= 0xC8) {
+        PIT_DHCP_COUNTER = 0x0;
+        init_dhcp();
+    }
+}
+
 //setup PIT
 void init_pit() {
     u64 divisor = $u64 (1193182 / 100); // 100 Hz
 
-    //channel 0, access mode: lobyte/hibyte, mode 3 (square wave)
+    // channel 0, access mode: lobyte/hibyte, mode 3 (square wave)
     outb(PIT_COMMAND, $u8 0b00110110);
 
     outb(PIT_CHANNEL0, $u8 (divisor & 0xff));           //low byte
     outb(PIT_CHANNEL0, $u8 ((divisor >> 0x8) & 0xff));  //high byte
+
+    // add pit IRQ handler
+    irq_register(
+        INTVEC_PIT,
+        $u64 @pit_interrupt_stub,
+        #<pit_interrupt_handler(void*)>,
+        nullptr
+    );
 }

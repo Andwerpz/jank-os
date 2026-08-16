@@ -1,15 +1,15 @@
 #include <containers::vector>;
 
-#include "utils/print.jank";
-#include "dev/networking/net_interface.jank";
 #include "debug.jank";
-#include "sched/scheduler.jank";
-#include "dev/networking/protocols/ethernet.jank";
 #include "globals.jank";
+#include "utils/print.jank";
+#include "sched/scheduler.jank";
 #include "memory/pma.jank";
 #include "arch/acpi.jank";
 #include "arch/pagetable.jank";
 #include "arch/idt.jank";
+#include "dev/networking/net_interface.jank";
+#include "dev/networking/protocols/ethernet.jank";
 
 [__GLOBAL_FIRST__] u16 REALTEK_VEND = $u16 0x10EC;
 [__GLOBAL_FIRST__] u16 RTL8168_DEV = $u16 0x8168;
@@ -120,6 +120,14 @@ void rtl8111_init(u64 addr) {
 
     net_interfaces.push_back(nic);
     CURRENT_INTERFACE = nic;
+
+    // register IRQ handler
+    irq_register(
+        INTVEC_RTL8111,
+        $u64 @rtl8111_interrupt_stub,
+        #<rtl8111_interrupt_handler(void*)>,
+        nullptr
+    );
 }
 
 void rtl8111_enable_rx_tx() {
@@ -141,7 +149,15 @@ void rtl8111_enable_rx_tx() {
     if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_enable_rx_tx() : Finished enabling RX and TX");
 }
 
-void rtl8111_interrupt_handler(trapframe* tf) {
+[__GLOBAL_FIRST__] extern u8 rtl8111_interrupt_stub;
+void rtl8111_interrupt_stub() {
+    asm!("rtl8111_interrupt_stub:");
+    asm!("pushq $0");           // doesn't push error code
+    asm!("pushq {INTVEC_RTL8111}");    
+    asm!("jmp interrupt_handler_entry");
+}
+
+void rtl8111_interrupt_handler(void* data) {
     u16* isr = $u16* (rtl8111->mmio_base + RTL8111_MAC_ISR);
     u16 status = *isr;
 
@@ -166,8 +182,6 @@ void rtl8111_interrupt_handler(trapframe* tf) {
         if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_interrupt_handler() : Frame received");
         rtl8111_handle_receive();
     }
-
-    scheduler(tf);
 }
 
 void rtl8111_handle_receive() {
@@ -441,8 +455,8 @@ void rtl8111_pci_setup(u64 addr) {
     pci_hdr->command = command;
 
     // Enabling MSI-(X?)
-    assert(pci_enable_msix(pci_hdr, $u8 INTNO_RTL8111) != 0, "rtl8111_pci_setup() : Failed to disable MSI-X");
-    assert(pci_enable_msi(pci_hdr, $u8 INTNO_RTL8111) == 0, "rtl8111_pci_setup() : Failed to enable MSI");
+    assert(pci_enable_msix(pci_hdr, $u8 INTVEC_RTL8111) != 0, "rtl8111_pci_setup() : Failed to disable MSI-X");
+    assert(pci_enable_msi(pci_hdr, $u8 INTVEC_RTL8111) == 0, "rtl8111_pci_setup() : Failed to enable MSI");
 
     if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_pci_setup() : Finished PCI setup");
 }

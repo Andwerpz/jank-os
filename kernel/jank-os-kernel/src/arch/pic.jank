@@ -47,7 +47,6 @@
 [__GLOBAL_FIRST__] u8 ICW2_OFFSET_1     = $u8 0x20; // ICW2: Master PIC vector offset
 [__GLOBAL_FIRST__] u8 ICW2_OFFSET_2     = $u8 0x28; // ICW2: Slave PIC vector offset
 
-// for future li andrew, probably want to handle Spurious IRQs
 i32 init_pic() {
     println("start init pic");
 

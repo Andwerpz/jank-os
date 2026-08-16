@@ -25,7 +25,7 @@ struct E1000 {
     u8 eeprom_exists;
     u64 mmio_base;
     u8 irq;
-    u64 intno; 
+    u64 intvec; 
     u64 num_rdesc;
     E1000_RDESC* rdesc_ring;
     u16 curr_rdesc;   
@@ -145,7 +145,7 @@ void e1000_init(u64 addr) {
     e1000->eeprom_exists = $u8 0;
     e1000->mmio_base = 0x0;
     e1000->irq = $u8 0;
-    e1000->intno = 0x1000;
+    e1000->intvec = 0x1000;
     e1000->num_rdesc = $u64 32;
     e1000->curr_rdesc = $u16 0;
     e1000->num_tdesc = $u64 32;
@@ -256,8 +256,8 @@ void e1000_pci_setup(u64 addr) {
     IRQ_clear_mask(e1000->irq);
 
     // convert the irq to int vec
-    e1000->intno = IRQ_to_int_vec(e1000->irq);
-    INTNO_E1000 = e1000->intno;
+    e1000->intvec = IRQ_to_int_vec(e1000->irq);
+    INTVEC_E1000 = e1000->intvec;
 
     if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_pci_setup() : Finished PCI setup");
 }
@@ -331,7 +331,13 @@ void e1000_enable_interrupts() {
     if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_enable_interrupts() : Beginning enabling interrupts");
 
     // register the interrupt vector
-    idt_set_entry($u64 e1000->intno, $u64 @e1000_packet_receive_interrupt_entry_stub, $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE, $IDTEntry* IDT_PAGE);
+    INTVEC_E1000 = e1000->intvec;
+    irq_register(
+        INTVEC_E1000, 
+        $u64 @e1000_interrupt_stub,
+        #<e1000_interrupt_handler(void*)>,
+        nullptr
+    );
 
     // register the pic bit
     IRQ_clear_mask(e1000->irq);
@@ -543,7 +549,15 @@ void e1000_handle_receive() {
     }
 }
 
-void e1000_interrupt_handler(trapframe* tf) {
+[__GLOBAL_FIRST__] extern u8 e1000_interrupt_stub;
+void e1000_interrupt_stub() {
+    asm!("e1000_interrupt_stub:");
+    asm!("pushq $0");           // doesn't push error code
+    asm!("pushq {INTVEC_E1000}");    
+    asm!("jmp interrupt_handler_entry");
+}
+
+void e1000_interrupt_handler(void* data) {
     u32* icr_ptr = $u32* (e1000->mmio_base + $u64 E1000_REG_ICR);
     u32 status = *icr_ptr;
 
@@ -563,6 +577,4 @@ void e1000_interrupt_handler(trapframe* tf) {
         if(NETWORKING_ACCESS_LAYER_DEBUG) println("e1000_interrupt_handler() : Frame received");
         e1000_handle_receive();
     }
-
-    scheduler(tf);
 }

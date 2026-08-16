@@ -14,7 +14,20 @@
 //APIC is usually at a fixed physical address per the spec.
 [__GLOBAL_FIRST__] u64 APIC_BASE            = 0xFEE00000;
 [__GLOBAL_FIRST__] u64 APIC_REGISTER_EOI    = 0x00B0;       //write 0 to this register to do LAPIC EOI  
-[__GLOBAL_FIRST__] u64 APIC_REGISTER_SIVR   = 0x00F0;       //Spurious Interrupt Vector Register : 
+[__GLOBAL_FIRST__] u64 APIC_REGISTER_SIVR   = 0x00F0;       //Spurious Interrupt Vector Register 
+
+[__GLOBAL_FIRST__] extern u8 spurious_interrupt_stub;
+void spurious_interrupt_stub() {
+    asm!("spurious_interrupt_stub:");
+    asm!("pushq $0");           // doesn't push error code
+    asm!("pushq {INTVEC_SPURIOUS}");    
+    asm!("jmp interrupt_handler_entry");
+}
+
+void spurious_interrupt_handler(void* data) {
+    //maybe do some logging?
+    println("spurious_interrupt_handler() : spurious interrupt");
+}
 
 void init_apic() {
     println("start init apic");
@@ -26,8 +39,16 @@ void init_apic() {
     //enable APIC
     wrmsr(IA32_APIC_BASE_MSR, rdmsr(IA32_APIC_BASE_MSR) | IA32_APIC_BASE_MSR_ENABLE);
 
-    //set SIVR to start recieving interrupts
-    apic_write_reg(APIC_REGISTER_SIVR, $u32 0x100 | $u32 INTNO_SPURIOUS);
+    //tell SIVR what vector to send spurious interrupts to
+    apic_write_reg(APIC_REGISTER_SIVR, $u32 0x100 | $u32 INTVEC_SPURIOUS);
+
+    //register IRQ handler for spurious interrupts
+    irq_register(
+        INTVEC_SPURIOUS,
+        $u64 @spurious_interrupt_stub,
+        #<spurious_interrupt_handler(void*)>,
+        nullptr
+    );
 
     println("done init apic");
 }

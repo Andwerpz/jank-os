@@ -2,6 +2,8 @@
 #include "globals.jank";
 #include "arch/portio.jank";
 #include "arch/pagetable.jank";
+
+// TODO get rid of these dependencies
 #include "dev/networking/nic/e1000.jank";
 #include "dev/networking/nic/rtl_8111_8168.jank";
 #include "dev/usb/xhci.jank";
