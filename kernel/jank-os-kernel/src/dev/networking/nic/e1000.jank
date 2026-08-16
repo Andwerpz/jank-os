@@ -334,7 +334,6 @@ void e1000_enable_interrupts() {
     INTVEC_E1000 = e1000->intvec;
     irq_register(
         INTVEC_E1000, 
-        $u64 @e1000_interrupt_stub,
         #<e1000_interrupt_handler(void*)>,
         nullptr
     );
@@ -547,14 +546,6 @@ void e1000_handle_receive() {
         *rdt_ptr = $u32 e1000->curr_rdesc;
         e1000->curr_rdesc = (e1000->curr_rdesc + $u16 1) % $u16 e1000->num_rdesc;
     }
-}
-
-[__GLOBAL_FIRST__] extern u8 e1000_interrupt_stub;
-void e1000_interrupt_stub() {
-    asm!("e1000_interrupt_stub:");
-    asm!("pushq $0");           // doesn't push error code
-    asm!("pushq {INTVEC_E1000}");    
-    asm!("jmp interrupt_handler_entry");
 }
 
 void e1000_interrupt_handler(void* data) {

@@ -46,6 +46,7 @@ args = [
     "-nostdlib",
     "--oformat=binary",         # make ld produce a flat binary
     "-T", "./res/link.ld",
+    "./res/idt_stubs.o",        # TODO make this more integrated into the build system
     "-b", "binary", "./res/font.psf",
 ]
 

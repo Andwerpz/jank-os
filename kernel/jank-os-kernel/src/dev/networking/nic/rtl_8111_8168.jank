@@ -124,7 +124,6 @@ void rtl8111_init(u64 addr) {
     // register IRQ handler
     irq_register(
         INTVEC_RTL8111,
-        $u64 @rtl8111_interrupt_stub,
         #<rtl8111_interrupt_handler(void*)>,
         nullptr
     );
@@ -147,14 +146,6 @@ void rtl8111_enable_rx_tx() {
     *tcr |= $u32 (0b011 << $u64 24); // IDG set?
 
     if(NETWORKING_ACCESS_LAYER_DEBUG) println("rtl8111_enable_rx_tx() : Finished enabling RX and TX");
-}
-
-[__GLOBAL_FIRST__] extern u8 rtl8111_interrupt_stub;
-void rtl8111_interrupt_stub() {
-    asm!("rtl8111_interrupt_stub:");
-    asm!("pushq $0");           // doesn't push error code
-    asm!("pushq {INTVEC_RTL8111}");    
-    asm!("jmp interrupt_handler_entry");
 }
 
 void rtl8111_interrupt_handler(void* data) {

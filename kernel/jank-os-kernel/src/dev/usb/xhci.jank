@@ -1629,14 +1629,6 @@ void xhci_dump_transfer_ring(u32 slot, u32 endpoint) {
     xhci_dump_trb_ring(ring, ring_sz);
 }
 
-[__GLOBAL_FIRST__] extern u8 xhci_interrupt_stub;
-void xhci_interrupt_stub() {
-    asm!("xhci_interrupt_stub:");
-    asm!("pushq $0");           // doesn't push error code
-    asm!("pushq {INTVEC_XHCI}");    
-    asm!("jmp interrupt_handler_entry");
-}
-
 void xhci_interrupt_handler(void* data) {
     //clear interrupt bits
     xHCI_INTRS* intr = @(XHCI_INTERRUPTERS[XHCI_INTR0]);
@@ -2083,7 +2075,6 @@ void init_xhci(u64 addr) {
     //register IRQ handler
     irq_register(
         INTVEC_XHCI,
-        $u64 @xhci_interrupt_stub,
         #<xhci_interrupt_handler(void*)>,
         nullptr
     );

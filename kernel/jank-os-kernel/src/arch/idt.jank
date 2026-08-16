@@ -61,6 +61,9 @@ struct IRQHandler {
 u64 IRQ_HANDLER_AMT = $u64 0x100;   // 0x00 to 0xFF
 IRQHandler* IRQ_HANDLERS;
 
+// provided by idt_stubs.s
+extern u8 interrupt_stub_table;
+
 i32 init_idt() {
     println("start init idt");
     pagetable_t kernel_pt = pt_get_current();
@@ -83,21 +86,22 @@ i32 init_idt() {
     IDT_PTR->base = $u64 IDT;    
 
     //map CPU exceptions
-    idt_set_entry(INTVEC_GENERAL_PROTECTION,    $u64 @gp_fault_interrupt_stub,      $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_TRAP_GATE, IDT);
-    idt_set_entry(INTVEC_PAGE_FAULT,            $u64 @page_fault_interrupt_stub,    $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_TRAP_GATE, IDT);
+    idt_set_entry(INTVEC_GENERAL_PROTECTION,    $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_TRAP_GATE, IDT);
+    idt_set_entry(INTVEC_PAGE_FAULT,            $u16 0x08, $u8 0x0, IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_TRAP_GATE, IDT);
     idt_flush(IDT_PTR);
 
     println("done init idt");
     return 0;
 }
 
-void idt_set_entry(u64 vector, u64 handler_addr, u16 selector, u8 ist, u8 type_attr, IDTEntry* idt) {
-    idt[vector].offset_1     = $u16 (handler_addr & 0xffff);
+void idt_set_entry(u64 vector, u16 selector, u8 ist, u8 type_attr, IDTEntry* idt) {
+    u64 stub_addr = ($u64* @interrupt_stub_table)[vector];
+    idt[vector].offset_1     = $u16 (stub_addr & 0xffff);
     idt[vector].selector     = selector;
     idt[vector].ist          = ist & $u8 0x7;
     idt[vector].type_attr    = type_attr;
-    idt[vector].offset_2     = $u16 ((handler_addr >> $u64 16) & 0xffff);
-    idt[vector].offset_3     = $u32 ((handler_addr >> $u64 32) & 0xffffffff);
+    idt[vector].offset_2     = $u16 ((stub_addr >> $u64 16) & 0xffff);
+    idt[vector].offset_3     = $u32 ((stub_addr >> $u64 32) & 0xffffffff);
     idt[vector].zero         = $u32 0;
 }
 
@@ -106,13 +110,13 @@ void idt_flush(IDTPointer* ptr) {
     asm!("lidt (%rax)");
 }
 
-void irq_register(u64 vector, u64 stub_addr, u16 selector, u8 ist, u8 type_attr, fn<void(void*)> handler, void* data) {
+void irq_register(u64 vector, u16 selector, u8 ist, u8 type_attr, fn<void(void*)> handler, void* data) {
     // should not register an already registered IRQ
     assert(vector < IRQ_HANDLER_AMT);
     assert(!IRQ_HANDLERS[vector].present);
 
     // register in IDT
-    idt_set_entry(vector, stub_addr, selector, ist, type_attr, IDT);
+    idt_set_entry(vector, selector, ist, type_attr, IDT);
     idt_flush(IDT_PTR);
 
     // add handler
@@ -121,43 +125,15 @@ void irq_register(u64 vector, u64 stub_addr, u16 selector, u8 ist, u8 type_attr,
     IRQ_HANDLERS[vector].data = data;
 }
 
-void irq_register(u64 vector, u64 stub_addr, fn<void(void*)> handler, void* data) {
+void irq_register(u64 vector, fn<void(void*)> handler, void* data) {
     irq_register(
         vector, 
-        stub_addr,
         $u16 0x08,
         $u8 0x0,
         IST_ATTR_PRESENT | IST_ATTR_DPL_KERNEL | IST_ATTR_INTERRUPT_GATE,
         handler,
         data
     );
-}
-
-//interrupt stubs for CPU exceptions
-[__GLOBAL_FIRST__] extern u8 gp_fault_interrupt_stub;
-[__GLOBAL_FIRST__] extern u8 page_fault_interrupt_stub;
-void interrupt_stubs() {
-    //we need to make sure these things are pushed onto stack before jumping to context handler
-    // SS           : from user mode only
-    // %rsp         : from user mode only
-    // RFLAGS
-    // CS
-    // %rip
-    // error code   : if interrupt doesn't push this itself, this should be 0
-    // interrupt id 
-
-    //general protection fault
-    asm!("gp_fault_interrupt_stub:");
-    asm!("pushq {INTVEC_GENERAL_PROTECTION}");
-    asm!("jmp interrupt_handler_entry");
-
-    //page fault
-    asm!("page_fault_interrupt_stub:");
-    asm!("pushq {INTVEC_PAGE_FAULT}");
-    asm!("jmp interrupt_handler_entry");
-
-    //we should always go to handler
-    panic("interrupt_stubs() : should not be here");
 }
 
 //this should save context to current active process kernel trapframe

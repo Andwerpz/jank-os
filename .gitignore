@@ -1,6 +1,4 @@
 *.img
-*.o
-*.s
 *.out
 *.bin
 *.elf

@@ -19,4 +19,5 @@ Reduce number of circular dependencies in interfaces
   - idt
   - file 
   - tty
+  - acpi
 
